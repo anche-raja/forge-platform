@@ -1,0 +1,15 @@
+# Default: normalize line endings on commit, checkout as OS-native
+* text=auto
+
+# Shell scripts must always use LF — CRLF will break them on Linux/Mac
+*.sh text eol=lf
+
+# Terraform files: LF
+*.tf text eol=lf
+*.tfvars text eol=lf
+*.tfvars.example text eol=lf
+
+# Markdown and YAML: LF
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf

@@ -1,0 +1,13 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — never commit actual account IDs or emails.
+
+environment           = "dev"
+aws_region            = "us-east-1"
+aws_account_id        = "123456789012"
+app_name              = "forge"
+team_name             = "platform-engineering"
+alerts_email          = "your-team@corp.com"
+scope_package_prefix  = "com.corp"
+enable_sagemaker      = false
+target_java_version   = "21"
+target_spring_version = "6"

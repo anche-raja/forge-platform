@@ -1,0 +1,28 @@
+# Terraform
+forge-terraform/.terraform/
+forge-terraform/.terraform.lock.hcl
+forge-terraform/terraform.tfvars
+forge-terraform/terraform.tfstate
+forge-terraform/terraform.tfstate.backup
+forge-terraform/*.tfplan
+forge-terraform/override.tf
+forge-terraform/override.tf.json
+forge-terraform/**/*_override.tf
+forge-terraform/**/*_override.tf.json
+
+# Python (forge-mvp — not yet built)
+forge-mvp/.env
+forge-mvp/__pycache__/
+forge-mvp/**/__pycache__/
+forge-mvp/*.pyc
+forge-mvp/*.pyo
+forge-mvp/.venv/
+forge-mvp/venv/
+forge-mvp/.pytest_cache/
+forge-mvp/migrated/
+forge-mvp/migration-report.md
+forge-mvp/manual-review-queue.json
+
+# OS
+.DS_Store
+Thumbs.db
