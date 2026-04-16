@@ -78,7 +78,7 @@ resource "aws_dynamodb_table" "langgraph_checkpoints" {
 resource "aws_bedrock_guardrail" "forge" {
   name                      = "${var.app_name}-guardrail-${var.environment}"
   description               = "FORGE migration pipeline guardrail — blocks secrets and prompt injection in source code"
-  blocked_inputs_messaging  = "Content blocked by FORGE guardrail — contains sensitive information or prompt injection attempt"
+  blocked_input_messaging  = "Content blocked by FORGE guardrail — contains sensitive information or prompt injection attempt"
   blocked_outputs_messaging = "Output blocked by FORGE guardrail — response contained sensitive information"
 
   sensitive_information_policy_config {

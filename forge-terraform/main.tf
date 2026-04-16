@@ -13,6 +13,7 @@ module "observability" {
   environment  = var.environment
   app_name     = var.app_name
   alerts_email = var.alerts_email
+  aws_region   = var.aws_region
 }
 
 module "sqs" {
