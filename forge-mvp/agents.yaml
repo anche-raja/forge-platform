@@ -1,0 +1,39 @@
+# agents.yaml — FORGE MVP configuration
+# In production, generate this file via:
+#   ./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
+
+# ─── Models ───────────────────────────────────────────────────────────────────
+transform_model: "us.anthropic.claude-sonnet-4-5-20251001-v1:0"
+review_model: "us.amazon.nova-pro-v1:0"
+
+# ─── AWS ──────────────────────────────────────────────────────────────────────
+aws_region: "us-east-1"
+
+# ─── DynamoDB ─────────────────────────────────────────────────────────────────
+dynamodb_table: "forge-migration-state-dev"
+dynamodb_checkpoint_table: "forge-langgraph-checkpoints-dev"
+
+# ─── Bedrock Guardrails ───────────────────────────────────────────────────────
+guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"
+guardrail_version: "1"
+
+# ─── CloudWatch ───────────────────────────────────────────────────────────────
+cloudwatch_namespace: "FORGE/Migration"
+cloudwatch_log_group: "/forge/migration/dev"
+
+# ─── Optional (Phase 6+) ──────────────────────────────────────────────────────
+sqs_queue_url: ""
+knowledge_base_id: ""
+sagemaker_endpoint_name: ""
+
+# ─── Migration settings ───────────────────────────────────────────────────────
+source_java_version: "8"
+target_java_version: "21"
+pass_threshold: 80
+retry_threshold: 50
+max_retries: 2
+scope_package_prefix: "com.corp"
+complexity_block_threshold: 2000
+
+# ─── LangSmith ────────────────────────────────────────────────────────────────
+langsmith_project: "forge-migration"
