@@ -44,7 +44,7 @@ flowchart LR
     CLI -->|checkpoint| DDB2
     CLI -->|PutMetricData / logs| CW
     ALARMS -->|alert| SNS
-    SNS -->|email| USER[ancheraja.ai@gmail.com]
+    SNS -->|email| USER["ancheraja.ai@gmail.com"]
 
     style Phase6 stroke-dasharray: 5 5
 ```
@@ -53,7 +53,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    START([file_path]) --> PRE[guardrails_pre<br/>ApplyGuardrail INPUT]
+    S([file_path]) --> PRE[guardrails_pre<br/>ApplyGuardrail INPUT]
     PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Sonnet]
     PRE -->|BLOCKED| BLK[blocked]
     UPGRADE --> REV[java_reviewer<br/>Nova Pro]
@@ -65,7 +65,7 @@ flowchart TD
     WRITE --> UPD[update_state]
     MQ --> UPD
     BLK --> UPD
-    UPD --> END([DynamoDB + report])
+    UPD --> E([DynamoDB + report])
 ```
 
 ---
