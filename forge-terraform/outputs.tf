@@ -6,23 +6,23 @@ output "aws_region" {
 }
 
 output "dynamodb_state_table" {
-  description = "Migration state DynamoDB table name — agents.yaml: dynamodb_table"
-  value       = module.foundation.dynamodb_state_table_name
+  description = "Migration state DynamoDB table name — agents.yaml: dynamodb_table (null if foundation not managed here)"
+  value       = one(module.foundation[*].dynamodb_state_table_name)
 }
 
 output "dynamodb_checkpoint_table" {
-  description = "LangGraph checkpoint DynamoDB table name — agents.yaml: dynamodb_checkpoint_table"
-  value       = module.foundation.dynamodb_checkpoint_table_name
+  description = "LangGraph checkpoint DynamoDB table name — agents.yaml: dynamodb_checkpoint_table (null if foundation not managed here)"
+  value       = one(module.foundation[*].dynamodb_checkpoint_table_name)
 }
 
 output "guardrail_id" {
-  description = "Bedrock Guardrail ID — agents.yaml: guardrail_id"
-  value       = module.foundation.guardrail_id
+  description = "Bedrock Guardrail ID — agents.yaml: guardrail_id (null if foundation not managed here)"
+  value       = one(module.foundation[*].guardrail_id)
 }
 
 output "guardrail_version" {
-  description = "Bedrock Guardrail version — agents.yaml: guardrail_version"
-  value       = module.foundation.guardrail_version
+  description = "Bedrock Guardrail version — agents.yaml: guardrail_version (null if foundation not managed here)"
+  value       = one(module.foundation[*].guardrail_version)
 }
 
 output "cloudwatch_namespace" {
@@ -43,7 +43,7 @@ output "sqs_queue_url" {
 
 output "knowledge_base_id" {
   description = "Bedrock Knowledge Base ID — agents.yaml: knowledge_base_id (null if rag not deployed)"
-  value       = try(module.rag.knowledge_base_id, null)
+  value       = one(module.rag[*].knowledge_base_id)
 }
 
 output "sagemaker_endpoint_name" {
@@ -54,8 +54,8 @@ output "sagemaker_endpoint_name" {
 # ─── ENV FILE — paste these values into .env ──────────────────────────────────
 
 output "execution_role_arn" {
-  description = "FORGE execution IAM role ARN — .env: FORGE_EXECUTION_ROLE_ARN"
-  value       = module.foundation.execution_role_arn
+  description = "FORGE execution IAM role ARN — .env: FORGE_EXECUTION_ROLE_ARN (null if foundation not managed here)"
+  value       = one(module.foundation[*].execution_role_arn)
   sensitive   = true
 }
 
@@ -72,6 +72,6 @@ output "sqs_queue_arn" {
 }
 
 output "s3_knowledge_base_bucket" {
-  description = "Knowledge Base S3 bucket name — .env: FORGE_KB_BUCKET"
-  value       = try(module.rag.s3_bucket_name, null)
+  description = "Knowledge Base S3 bucket name — .env: FORGE_KB_BUCKET (null if rag not deployed)"
+  value       = one(module.rag[*].s3_bucket_name)
 }

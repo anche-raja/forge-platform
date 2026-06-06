@@ -6,23 +6,15 @@ from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
 from forge.guardrails.bedrock_guardrails import BedrockGuardrails
 from forge.state import ForgeState
-
-_SYSTEM = """You are a post-transformation quality checker for a Java migration pipeline.
-Given the transformed Java source code, verify:
-1. Zero javax.* imports remain (all must be jakarta.*)
-2. No deprecated patterns remain (Thread.stop, finalize, Calendar, SimpleDateFormat)
-3. Package naming follows enterprise convention matching the required scope prefix
-4. No security issues were introduced by the transformation
-
-Respond ONLY with valid JSON — no markdown, no explanation:
-{"verdict": "PASS"|"BLOCK", "findings": ["<finding>", ...], "reason": "<summary>"}
-
-Use BLOCK only if javax.* imports remain or clear security issues were introduced."""
+from forge.utils.jsonio import loads_lenient
+from forge.utils.prompts import load_prompt
 
 
 class GuardrailsPostAgent(BaseAgent):
     def __init__(self, config: ForgeConfig):
         super().__init__(config)
+        # System prompt lives in prompts/guardrails_post.md (override via FORGE_PROMPTS_DIR).
+        self.system_prompt = load_prompt("guardrails_post.md")
         self.guardrails = BedrockGuardrails(config)
         self.llm = ChatBedrockConverse(
             model=config.transform_model,
@@ -61,12 +53,12 @@ class GuardrailsPostAgent(BaseAgent):
             f"```java\n{all_content[:8000]}\n```"
         )
 
-        messages = [SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)]
+        messages = [SystemMessage(content=self.system_prompt), HumanMessage(content=prompt)]
         response = self.llm.invoke(messages)
         state["bedrock_calls"] = state.get("bedrock_calls", 0) + 1
 
         try:
-            result = json.loads(response.content)
+            result = loads_lenient(response.content)
         except (json.JSONDecodeError, AttributeError):
             result = {"verdict": "PASS", "findings": [], "reason": "parse error — continuing"}
 

@@ -44,7 +44,7 @@ cat <<EOF
 #   ./scripts/generate-agents-yaml.sh ${ENV} > ../forge-mvp/agents.yaml
 
 # ─── Models ───────────────────────────────────────────────────────────────────
-transform_model: "us.anthropic.claude-sonnet-4-5-20251001-v1:0"
+transform_model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 review_model: "us.amazon.nova-pro-v1:0"
 
 # ─── AWS ──────────────────────────────────────────────────────────────────────
@@ -79,6 +79,15 @@ retry_threshold: 50
 max_retries: 2
 scope_package_prefix: "com.corp"
 complexity_block_threshold: 2000
+
+# ─── RAG (prompt-stuffing; no OpenSearch) ───────────────────────────────────────
+rag_mode: "prompt_stuff"          # off | prompt_stuff | knowledge_base
+rag_docs_dir: ""                  # empty = default ../forge-terraform/docs
+rag_max_chars: 6000
+
+# ─── Cost / build ───────────────────────────────────────────────────────────────
+avg_cost_per_bedrock_call: 0.02
+build_tool: "none"                # maven | gradle | none (future compile gate)
 
 # ─── LangSmith observability ─────────────────────────────────────────────────
 langsmith_project: "forge-migration"

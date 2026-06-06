@@ -268,11 +268,26 @@ These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives
 
 - **No build/compile gate.** The pipeline never runs `javac` / Maven / Gradle on the output
   (no `subprocess` calls). All verification is LLM/text-based, so output can be written without
-  being compile-verified. *(Top of the next-cycle backlog.)*
+  being compile-verified. *(Top of the next-cycle backlog. `build_tool` config key reserved.)*
 - **Per-file, no project context.** Reviewer sees one file (truncated to 8,000 chars) — no
   classpath, no `pom.xml` resolution, no cross-file references.
-- **RAG not wired.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB.
 - **Single phase only.** `--phase java21` is the only implemented phase; the deck's Spring,
   Struts→MVC, Discovery, Risk-Scorer, Containerize, and Test-Gen agents are not built.
-- **No review portal.** `manual-review-queue.json` is written, but there is no `review_portal.py`.
-- **Placeholder guardrail.** `agents.yaml` ships `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"`.
+
+### Resolved (built after Phase 0)
+
+- **RAG wired (prompt-stuffing).** `rag_mode: prompt_stuff` selects relevant enterprise-standards
+  docs (`forge-terraform/docs/*.md`) by file type and injects them into the transform + review
+  prompts — no vector store, ~$0. `forge/rag/{corpus,retriever}.py`. `knowledge_base` mode is a
+  stubbed future branch (Bedrock KB). Avoids the ~$175/mo OpenSearch cost.
+- **Review portal built.** `review_portal.py` (Streamlit) lists MANUAL_REVIEW files from DynamoDB,
+  renders the transform diff, and supports Approve (write + DONE) / Reject (re-enqueue PENDING).
+- **SQS escalation wired.** `escalate_sqs` graph node sends a pointer to the manual-review queue
+  on every escalation (`forge/queue/sqs_client.py`); no-op when `sqs_queue_url` is empty.
+- **CloudWatch metrics emitted.** `forge/observability/metrics.py` publishes the metrics the
+  observability alarms/dashboard watch (`files_processed/passed/retried/manual/blocked`,
+  `bedrock_calls`, `estimated_cost_usd`, `review_score`) per file.
+- **Prompts externalized.** `java_reviewer`, `guardrails_pre`, `guardrails_post` now load from
+  `prompts/*.md` via the existing loader (was inline `_SYSTEM`).
+- **Guardrail resolved.** Real guardrail id is supplied via the generated `agents.yaml` /
+  `agents.local.yaml` (no more `REPLACE_WITH_GUARDRAIL_ID` placeholder in live config).

@@ -147,10 +147,19 @@ python migrate.py /path/to/java/project --phase java21 --output-dir ./migrated
 
 ## Status
 
-- ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`
-- ✅ **Phase 0 pipeline** — scaffolded end-to-end (~1.2k lines), not yet smoke-tested against live AWS
-- ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
-- ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
+- ✅ **Pipeline** — built and smoke-tested against live AWS (account `284244381060` / `us-east-1`),
+  end-to-end on the `cisco-device` sample app.
+- ✅ **Foundation** — DynamoDB tables + Bedrock Guardrail live in `284244381060` (created
+  out-of-band; `enable_foundation = false` so this Terraform state does not manage them).
+- ✅ **Observability** — deployed via Terraform (log group, SNS topic, 4 alarms, dashboard
+  `FORGE-Migration-dev`); the pipeline now **emits** the metrics the alarms watch.
+- ✅ **SQS manual-review queue** — deployed and Terraform-managed; pipeline escalates via the
+  `escalate_sqs` node. Streamlit **review portal** (`forge-mvp/review_portal.py`) built.
+- ✅ **RAG** — prompt-stuffing (`rag_mode: prompt_stuff`), ~$0. OpenSearch `rag` module gated off
+  (`enable_rag = false`) so a bare apply can't incur the ~$175/mo cost.
+- ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`.
+- ⏳ **Deferred** — SageMaker (`enable_sagemaker = false`); managed Bedrock KB RAG; the
+  compile/build gate (top of [forge-mvp/TODO.md](forge-mvp/TODO.md)).
 
 ## Cost profile
 

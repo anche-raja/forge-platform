@@ -187,6 +187,13 @@ try:
             })
             return {**config, "configurable": {**config["configurable"], "checkpoint_id": checkpoint_id}}
 
+        def put_writes(self, config, writes, task_id, task_path=""):
+            # LangGraph 1.x calls this to persist intermediate writes for pending
+            # tasks (mid-superstep crash recovery). This saver persists full
+            # checkpoints via put(); intermediate writes are a no-op, which is
+            # correct for straight-through single-file runs (no mid-node resume).
+            return
+
 except ImportError:
     # Fallback: LangGraph not installed — DynamoDBSaver unavailable
     class DynamoDBSaver:  # type: ignore[no-redef]
