@@ -5,46 +5,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
 from forge.state import ForgeState
-
-_SYSTEM = """You are a Java migration expert. Transform the provided Java source code by applying these rules in order:
-
-Rule 1 — Namespace migration (HIGHEST PRIORITY, zero tolerance):
-- javax.servlet.*     → jakarta.servlet.*
-- javax.persistence.* → jakarta.persistence.*
-- javax.validation.*  → jakarta.validation.*
-- javax.transaction.* → jakarta.transaction.*
-Every single javax.* import MUST become jakarta.*. Zero javax.* allowed in output.
-
-Rule 2 — Deprecated API replacement:
-- Thread.stop()                → throw new InterruptedException("Thread interrupted")
-- finalize() method            → add comment: // DEPRECATED: replace with Cleaner API
-- StringBuffer in loops        → StringBuilder
-- System.runFinalizersOnExit() → remove the call entirely
-
-Rule 3 — Date/Time modernisation:
-- new Date() for current time  → Instant.now()
-- Calendar usage               → LocalDateTime
-- SimpleDateFormat             → DateTimeFormatter
-- java.sql.Date                → java.time.LocalDate
-
-Rule 4 — Local variable inference (conservative):
-- Apply `var` only where the type is completely obvious from the right-hand side
-- Never apply `var` to parameters or fields
-
-Rule 5 — Flag but do not change:
-- sun.misc.Unsafe usage        → add comment: // MANUAL: review Unsafe usage
-- Illegal reflective access    → add comment: // MANUAL: review reflective access
-
-Respond ONLY with valid JSON — no markdown fences, no explanation:
-{
-  "files": {"<original_file_path>": "<full_transformed_content>"},
-  "manual_flags": [{"file": "<path>", "line": <n>, "reason": "<why>"}]
-}"""
+from forge.utils.prompts import load_prompt
 
 
 class JavaUpgradeAgent(BaseAgent):
     def __init__(self, config: ForgeConfig):
         super().__init__(config)
+        # System prompt lives in prompts/java_upgrade.md so it can be tuned
+        # without changing code. Override the dir with FORGE_PROMPTS_DIR.
+        self.system_prompt = load_prompt("java_upgrade.md")
         self.llm = ChatBedrockConverse(
             model=config.transform_model,
             region_name=config.aws_region,
@@ -72,7 +41,7 @@ class JavaUpgradeAgent(BaseAgent):
                 "Address all feedback points in this retry."
             )
 
-        messages = [SystemMessage(content=_SYSTEM), HumanMessage(content=user_content)]
+        messages = [SystemMessage(content=self.system_prompt), HumanMessage(content=user_content)]
         response = self.llm.invoke(messages)
         state["bedrock_calls"] = state.get("bedrock_calls", 0) + 1
 

@@ -21,7 +21,11 @@ The single transformation it performs (Java 8 → 21):
 - Conservative `var` inference
 - Flags `sun.misc.Unsafe` / reflective access for manual review (does not change them)
 
-Defined as a system prompt in [forge/agents/java_upgrade.py](forge/agents/java_upgrade.py).
+The transformation rules live in an **external prompt file**,
+[prompts/java_upgrade.md](prompts/java_upgrade.md), loaded at runtime by
+[forge/agents/java_upgrade.py](forge/agents/java_upgrade.py) via
+[forge/utils/prompts.py](forge/utils/prompts.py) — so prompts can be tuned without code changes.
+Override the prompt directory with the `FORGE_PROMPTS_DIR` environment variable.
 
 ---
 
@@ -120,6 +124,15 @@ it to its prompt ([java_upgrade.py:68](forge/agents/java_upgrade.py#L68)). Exhau
 > **Cross-model validation:** the transform is written by Claude Sonnet 4.5 and graded by Amazon
 > Nova Pro — two different model families. The two guardrail nodes also use Sonnet 4.5 as a
 > second-pass reasoning check *in addition to* the deterministic Bedrock Guardrails policy.
+
+> ⚠️ **No build / compile verification.** Every check in this pipeline is **LLM/text-based**, not
+> compiler-based. The pipeline never runs `javac`, Maven, or Gradle against the migrated output —
+> there are no `subprocess` calls anywhere. `java_reviewer`'s "syntactically and logically valid"
+> check is the *model's opinion* of one file (truncated to 8,000 chars, no classpath, no `pom.xml`
+> resolution, no cross-file context), not a real compile. **A file can score PASS (≥80) and be
+> written to `./migrated/` even if it would not actually compile** — e.g. a missing `jakarta`
+> dependency, a broken cross-file reference, or a malformed edit the model didn't catch. See
+> §11 Known gaps.
 
 ---
 
@@ -220,6 +233,8 @@ Flags: `--phase java21` (only phase implemented), `--dry-run`, `--resume`, `--fi
 forge-mvp/
   migrate.py                       # CLI entry point
   agents.yaml                      # single config file
+  prompts/
+    java_upgrade.md                # externalised agent system prompt (editable, no code change)
   forge/
     config.py                      # YAML loader
     state.py                       # ForgeState / FileStatus / state machine
@@ -237,8 +252,27 @@ forge-mvp/
     state_store/
       dynamodb.py                  # state manager + LangGraph checkpointer
     utils/
+      prompts.py                   # external prompt loader (FORGE_PROMPTS_DIR)
       file_scanner.py  file_writer.py  report.py
   infrastructure/
     create_dynamodb.py             # dev table creation (non-Terraform)
   tests/                           # test_graph, test_guardrails, test_java_upgrade
 ```
+
+---
+
+## 11. Known gaps (Phase 0)
+
+These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives in
+[TODO.md](TODO.md).
+
+- **No build/compile gate.** The pipeline never runs `javac` / Maven / Gradle on the output
+  (no `subprocess` calls). All verification is LLM/text-based, so output can be written without
+  being compile-verified. *(Top of the next-cycle backlog.)*
+- **Per-file, no project context.** Reviewer sees one file (truncated to 8,000 chars) — no
+  classpath, no `pom.xml` resolution, no cross-file references.
+- **RAG not wired.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB.
+- **Single phase only.** `--phase java21` is the only implemented phase; the deck's Spring,
+  Struts→MVC, Discovery, Risk-Scorer, Containerize, and Test-Gen agents are not built.
+- **No review portal.** `manual-review-queue.json` is written, but there is no `review_portal.py`.
+- **Placeholder guardrail.** `agents.yaml` ships `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"`.
