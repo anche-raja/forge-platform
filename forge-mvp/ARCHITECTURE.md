@@ -40,7 +40,8 @@ Override the prompt directory with the `FORGE_PROMPTS_DIR` environment variable.
 | LLM client | **LangChain** `langchain-aws` → `ChatBedrockConverse` |
 | Transform model | **Claude Sonnet 4.5** (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`) on AWS Bedrock |
 | Review model | **Amazon Nova Pro** (`us.amazon.nova-pro-v1:0`) on AWS Bedrock — *different model family, deliberate cross-validation* |
-| Safety | **AWS Bedrock Guardrails** — standalone `ApplyGuardrail` API ([forge/guardrails/bedrock_guardrails.py](forge/guardrails/bedrock_guardrails.py)) |
+| Safety (Gate 0) | **Local secret scan** — regex + entropy, no network, runs before any model call ([forge/guardrails/secret_scan.py](forge/guardrails/secret_scan.py)) |
+| Safety (Gate 1) | **AWS Bedrock Guardrails** — standalone `ApplyGuardrail` API ([forge/guardrails/bedrock_guardrails.py](forge/guardrails/bedrock_guardrails.py)) |
 | RAG | **Prompt-stuffing** — enterprise-standards docs selected by file type, injected into prompts ([forge/rag/](forge/rag/)); no vector store. `knowledge_base` mode stubbed for a future Bedrock KB |
 | Manual-review queue | **AWS SQS** — `escalate_sqs` node sends a pointer on escalation ([forge/queue/sqs_client.py](forge/queue/sqs_client.py)) |
 | Metrics | **AWS CloudWatch** — per-file `put_metric_data` feeding the alarms/dashboard ([forge/observability/metrics.py](forge/observability/metrics.py)) |
@@ -114,7 +115,7 @@ Source of truth: [forge/graph.py](forge/graph.py). Routing functions: `route_pre
 
 | Node | Model / service | Role | Outcome |
 |---|---|---|---|
-| `guardrails_pre` | Bedrock Guardrails (INPUT) + **Sonnet 4.5** | Secrets, package-scope, PII, complexity (LOC) pre-flight | `BLOCK` → `blocked`; else `TRANSFORMING` |
+| `guardrails_pre` | **local secret scan (Gate 0)** → Bedrock Guardrails (INPUT) → **Sonnet 4.5** | Gate 0 scans for secrets/keys deterministically *before any model call*; Bedrock screens PII/content/prompt-injection; Sonnet judges package-scope + complexity (LOC). **Sonnet no longer does secret detection.** | `BLOCK` → `blocked`; else `TRANSFORMING` |
 | `java_upgrade` | **Sonnet 4.5** | Transform Java per 5 rules; prepends RAG standards context; injects prior review feedback on retry | `transform_output` (JSON: files + manual_flags) |
 | `java_reviewer` | **Nova Pro** | Score 0–100 across 5 weighted checks (also grounded with RAG context); emit verdict + feedback | `PASS≥80` / `RETRY 50–79` / `MANUAL<50` |
 | `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Sonnet 4.5** | Verify zero `javax.*` left, no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
@@ -127,6 +128,15 @@ Source of truth: [forge/graph.py](forge/graph.py). Routing functions: `route_pre
 > RAG context comes from `retrieve_context()` ([forge/rag/retriever.py](forge/rag/retriever.py))
 > when `rag_mode: prompt_stuff`; per-file CloudWatch metrics are emitted from `migrate.py`
 > ([forge/observability/metrics.py](forge/observability/metrics.py)) on non-dry-run runs.
+
+> **Why Gate 0 exists (secret-handling order).** Secret detection must be
+> *deterministic and run before any model call* — an LLM can't be the thing that
+> stops secrets from reaching the LLM (to "detect" a secret it would first have to
+> receive it). So [forge/guardrails/secret_scan.py](forge/guardrails/secret_scan.py)
+> (regex + entropy, no network) runs first and fail-closed; only files that pass it
+> are ever sent to Bedrock/Sonnet. Bedrock Guardrails (non-generative policy) is the
+> second deterministic layer; the Sonnet step is reserved for judgment that isn't
+> sensitive-in-itself (scope, complexity, code quality).
 
 ### Retry + feedback loop
 `route_reviewer` ([graph.py:71](forge/graph.py#L71)): a `RETRY` verdict (score 50–79) with
@@ -200,6 +210,7 @@ Single file [agents.yaml](agents.yaml), loaded by `ForgeConfig`. Key knobs:
 | `max_retries` | `2` | Retry cap before MANUAL |
 | `scope_package_prefix` | `com.corp` | Files outside scope are flagged |
 | `complexity_block_threshold` | `2000` | LOC ceiling for auto-transform |
+| `secret_scan_enabled` | `true` | Gate 0 local secret scan before any model call (fail-closed) |
 | `guardrail_id` / `guardrail_version` | *(from TF / local)* | Bedrock Guardrail to apply |
 | `rag_mode` | `prompt_stuff` | `off` \| `prompt_stuff` \| `knowledge_base` (stub) |
 | `rag_docs_dir` / `rag_max_chars` | `""` / `6000` | Standards corpus dir (defaults to `forge-terraform/docs`) and injected-context cap |
@@ -285,6 +296,7 @@ forge-mvp/
       metrics.py                   # MetricsEmitter — CloudWatch put_metric_data
     guardrails/
       bedrock_guardrails.py        # ApplyGuardrail wrapper
+      secret_scan.py               # Gate 0 — local regex+entropy secret scan (pre-model)
     state_store/
       dynamodb.py                  # state manager + LangGraph checkpointer
     utils/

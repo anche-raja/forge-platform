@@ -79,6 +79,7 @@ retry_threshold: 50
 max_retries: 2
 scope_package_prefix: "com.corp"
 complexity_block_threshold: 2000
+secret_scan_enabled: true         # Gate 0: deterministic local secret scan before any model call
 
 # ─── RAG (prompt-stuffing; no OpenSearch) ───────────────────────────────────────
 rag_mode: "prompt_stuff"          # off | prompt_stuff | knowledge_base

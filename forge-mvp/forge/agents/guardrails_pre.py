@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
 from forge.guardrails.bedrock_guardrails import BedrockGuardrails
+from forge.guardrails.secret_scan import scan_secrets
 from forge.state import ForgeState
 from forge.utils.jsonio import loads_lenient
 from forge.utils.prompts import load_prompt
@@ -32,6 +33,21 @@ class GuardrailsPreAgent(BaseAgent):
             file_status["status"] = "BLOCKED"
             file_status["error"] = f"Cannot read file: {e}"
             return {**state, "current_file": file_status}
+
+        # Gate 0: deterministic local secret scan — runs BEFORE any Bedrock/LLM
+        # call so secrets are never sent to a model. Fail-closed (blocks on hit).
+        if self.config.get("secret_scan_enabled", True):
+            secrets = scan_secrets(source_code)
+            if secrets:
+                file_status["status"] = "BLOCKED"
+                file_status["guardrail_findings"] = list(file_status.get("guardrail_findings", [])) + [
+                    f"secret:{s['type']}@L{s['line']} ({s['match']})" for s in secrets
+                ]
+                file_status["error"] = (
+                    f"Local secret scan blocked {len(secrets)} potential secret(s) "
+                    "before any model call"
+                )
+                return {**state, "current_file": file_status}
 
         # Step 1: Bedrock Guardrails (INPUT)
         gr_result = self.guardrails.evaluate(source_code, "INPUT")

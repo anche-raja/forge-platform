@@ -59,9 +59,11 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    S([file_path]) --> PRE[guardrails_pre<br/>ApplyGuardrail INPUT]
+    S([file_path]) --> G0{{Gate 0<br/>local secret scan<br/>no model call}}
+    G0 -->|secret found| BLK[blocked]
+    G0 -->|clean| PRE[guardrails_pre<br/>ApplyGuardrail INPUT<br/>+ Sonnet scope/complexity]
     PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Sonnet<br/>+ RAG standards context]
-    PRE -->|BLOCKED| BLK[blocked]
+    PRE -->|BLOCKED| BLK
     UPGRADE --> REV[java_reviewer<br/>Nova Pro + RAG context]
     REV -->|score ≥ 80| POST[guardrails_post<br/>ApplyGuardrail OUTPUT]
     REV -->|50 ≤ score < 80<br/>retry < 2| UPGRADE
