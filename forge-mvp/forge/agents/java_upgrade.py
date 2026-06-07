@@ -4,8 +4,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
+from forge.rag.retriever import retrieve_context
 from forge.state import ForgeState
 from forge.utils.prompts import load_prompt
+from forge.utils.jsonio import loads_lenient
 
 
 class JavaUpgradeAgent(BaseAgent):
@@ -34,6 +36,11 @@ class JavaUpgradeAgent(BaseAgent):
 
         user_content = f"Transform this Java file:\nFile path: {file_path}\n\n```java\n{source_code}\n```"
 
+        # Prepend enterprise-standards context (stable prefix → helps prompt caching).
+        ctx = retrieve_context(state, self.config, role="transform")
+        if ctx:
+            user_content = f"{ctx}\n\n---\n\n{user_content}"
+
         if retry_count > 0:
             feedback = file_status.get("review_feedback", "")
             user_content += (
@@ -46,7 +53,7 @@ class JavaUpgradeAgent(BaseAgent):
         state["bedrock_calls"] = state.get("bedrock_calls", 0) + 1
 
         try:
-            result = json.loads(response.content)
+            result = loads_lenient(response.content)
         except (json.JSONDecodeError, AttributeError):
             file_status["status"] = "MANUAL_REVIEW"
             file_status["error"] = "Failed to parse transform output as JSON"

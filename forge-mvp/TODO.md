@@ -24,8 +24,11 @@ Actionable backlog for the next development cycle. Context for each item lives i
 - [ ] **Give the reviewer project context.** Today it sees one file truncated to 8,000 chars
       ([java_reviewer.py](forge/review/java_reviewer.py)) — no classpath, no `pom.xml`, no cross-file
       refs. Consider feeding dependency/`pom.xml` context, and handle files >8,000 chars (chunk or raise).
-- [ ] **Wire RAG.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB. Hook the
-      transform/review agents to the KB so enterprise standards actually ground the output.
+- [x] **Wire RAG.** Done as **prompt-stuffing** (`rag_mode: prompt_stuff`): the transform + review
+      agents inject relevant enterprise-standards docs selected by file type
+      ([forge/rag/corpus.py](forge/rag/corpus.py), [retriever.py](forge/rag/retriever.py)). The
+      Bedrock KB path (`rag_mode: knowledge_base`) is a stubbed future branch — avoids ~$175/mo
+      OpenSearch. Reviewer-context (above) would further improve grounding.
 
 ## P2 — Cost & config hardening
 
@@ -34,12 +37,11 @@ Actionable backlog for the next development cycle. Context for each item lives i
 - [ ] **Cheaper guardrail checks.** `guardrails_pre` / `guardrails_post` use Sonnet 4.5 for their LLM
       pass (~$0.017/file). Switching those two to Haiku 4.5 cuts per-file cost ~25% with little quality
       loss on a yes/no safety check.
-- [ ] **Resolve the placeholder guardrail.** `agents.yaml` ships
-      `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"` — the first node fails without a real ID. Document
-      creating the Guardrail (Terraform `foundation` module) and generating `agents.yaml` from outputs.
-- [ ] **Externalize the remaining prompts** the same way as `java_upgrade.md` — `java_reviewer`,
-      `guardrails_pre`, `guardrails_post` still have inline `_SYSTEM` strings. Loader already exists
-      ([forge/utils/prompts.py](forge/utils/prompts.py)); each is a ~3-line change.
+- [x] **Resolve the placeholder guardrail.** Live config (`agents.local.yaml` / generated
+      `agents.yaml`) carries a real guardrail id; the `REPLACE_WITH_GUARDRAIL_ID` placeholder only
+      remains in the committed template `agents.yaml`.
+- [x] **Externalize the remaining prompts.** `java_reviewer`, `guardrails_pre`, `guardrails_post`
+      now load from `prompts/*.md` via [forge/utils/prompts.py](forge/utils/prompts.py).
 
 ## P3 — Roadmap (beyond Phase 0, from the deck)
 
@@ -47,5 +49,6 @@ Actionable backlog for the next development cycle. Context for each item lives i
       Containerize, Test-Gen) — currently only `java21` exists.
 - [ ] **Test-Gen agent** + run generated JUnit 5 tests as a second verification gate (complements the
       compile gate above).
-- [ ] **Review portal** (`review_portal.py`) over `manual-review-queue.json` for human approve/reject.
-- [ ] Fix the stale line in [../CLAUDE.md](../CLAUDE.md): it says `forge-mvp/` is "not yet built" — it is.
+- [x] **Review portal** — [review_portal.py](review_portal.py) (Streamlit): lists MANUAL_REVIEW
+      files from DynamoDB, renders the transform diff, Approve (write + DONE) / Reject (re-enqueue).
+- [x] Fix the stale line in [../CLAUDE.md](../CLAUDE.md) — done; it no longer says "not yet built".

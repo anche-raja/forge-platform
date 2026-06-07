@@ -9,7 +9,10 @@ FORGE is an AI-powered Java migration pipeline. It uses LangGraph + AWS Bedrock 
 The repo currently contains:
 - `forge-terraform/` — all AWS infrastructure as Terraform modules
 - `prompts/` — full specifications for each build phase
-- `forge-mvp/` — Python pipeline (not yet built; spec is in `prompts/FORGE-Phase0-MVP.md`)
+- `forge-mvp/` — Python pipeline (built and run against AWS). Beyond the Phase-0 core it now
+  has: prompt-stuffing RAG (`forge/rag/`), SQS manual-review escalation (`forge/queue/`),
+  CloudWatch metric emission (`forge/observability/`), externalized prompts (`prompts/*.md`),
+  and a Streamlit review portal (`review_portal.py`).
 
 ## Terraform — forge-terraform/
 
@@ -58,6 +61,19 @@ terraform apply -target=module.sagemaker
 | `rag` | S3 bucket, OpenSearch Serverless, Bedrock Knowledge Base | Phase 6 |
 | `sagemaker` | TGI endpoint, SSM parameter | Future only |
 
+### Module gates (added for the cheap-buildout deployment)
+
+`main.tf` now gates three things so the same config works whether or not foundation/RAG are
+managed here:
+- `enable_foundation` (default `true`) — set `false` when the DynamoDB tables + Guardrail already
+  exist out-of-band (as in account `284244381060`); foundation outputs become `null`.
+- `enable_rag` (default `false`) — OpenSearch/Bedrock-KB RAG is off by default so a bare
+  `terraform apply` can never incur the ~$175/mo cost. FORGE uses prompt-stuffing RAG instead.
+- `sqs_access_principal_arn` — when foundation isn't managed here, this principal (e.g. the dev
+  user) is granted send/receive on the manual-review queue instead of the foundation exec role.
+
+References to the gated modules use `one(module.foundation[*].X)` / `one(module.rag[*].X)`.
+
 ### Architecture decisions baked into the Terraform
 
 **Two providers in the `rag` module.** The `awscc` provider is required for `awscc_opensearchserverless_collection` — the standard `aws` provider does not support it. The root `main.tf` passes both providers explicitly to the `rag` module via `providers = { aws = aws, awscc = awscc }`. Any future change to the rag module that adds awscc resources must keep this in place.
@@ -77,7 +93,7 @@ terraform apply -target=module.sagemaker
 - Adding `rag` module: +~$175/mo (OpenSearch Serverless minimum, always-on)
 - Adding `sagemaker`: +~$1,093/mo for ml.g5.2xlarge always-on — stop endpoint when not in use
 
-## FORGE pipeline — forge-mvp/ (not yet built)
+## FORGE pipeline — forge-mvp/ (built)
 
 Full spec in `prompts/FORGE-Phase0-MVP.md`. Key design points:
 

@@ -10,8 +10,9 @@ forge-terraform/override.tf.json
 forge-terraform/**/*_override.tf
 forge-terraform/**/*_override.tf.json
 
-# Python (forge-mvp — not yet built)
+# Python (forge-mvp)
 forge-mvp/.env
+forge-mvp/agents.local.yaml
 forge-mvp/__pycache__/
 forge-mvp/**/__pycache__/
 forge-mvp/*.pyc
@@ -20,6 +21,7 @@ forge-mvp/.venv/
 forge-mvp/venv/
 forge-mvp/.pytest_cache/
 forge-mvp/migrated/
+forge-mvp/migrated-*/
 forge-mvp/migration-report.md
 forge-mvp/manual-review-queue.json
 
@@ -27,3 +29,6 @@ forge-mvp/manual-review-queue.json
 .DS_Store
 Thumbs.db
 github-pat
+
+# Office temp lock files
+~$*

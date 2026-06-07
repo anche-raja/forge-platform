@@ -4,6 +4,7 @@ from forge.agents.guardrails_pre import GuardrailsPreAgent
 from forge.agents.guardrails_post import GuardrailsPostAgent
 from forge.agents.java_upgrade import JavaUpgradeAgent
 from forge.config import ForgeConfig
+from forge.queue.sqs_client import SqsEscalator
 from forge.review.java_reviewer import JavaReviewer
 from forge.state import ForgeState
 from forge.state_store.dynamodb import DynamoDBSaver
@@ -15,6 +16,7 @@ def build_graph(config: ForgeConfig):
     upgrade_agent = JavaUpgradeAgent(config)
     reviewer = JavaReviewer(config)
     post_agent = GuardrailsPostAgent(config)
+    escalator = SqsEscalator(config)
 
     # ─── Node functions ───────────────────────────────────────────────────────
 
@@ -40,6 +42,11 @@ def build_graph(config: ForgeConfig):
         file_status = dict(state["current_file"])
         file_status["status"] = "MANUAL_REVIEW"
         return {**state, "current_file": file_status}
+
+    def escalate_sqs(state: ForgeState) -> ForgeState:
+        # Pass-through: send the manual-review pointer to SQS (no-op if unconfigured).
+        escalator.send(dict(state["current_file"]))
+        return state
 
     def blocked(state: ForgeState) -> ForgeState:
         file_status = dict(state["current_file"])
@@ -103,6 +110,7 @@ def build_graph(config: ForgeConfig):
     graph.add_node("guardrails_post", guardrails_post)
     graph.add_node("write_file", write_file)
     graph.add_node("manual_queue", manual_queue)
+    graph.add_node("escalate_sqs", escalate_sqs)
     graph.add_node("blocked", blocked)
     graph.add_node("update_state", update_state)
 
@@ -123,7 +131,8 @@ def build_graph(config: ForgeConfig):
         "manual_queue": "manual_queue",
     })
     graph.add_edge("write_file", "update_state")
-    graph.add_edge("manual_queue", "update_state")
+    graph.add_edge("manual_queue", "escalate_sqs")
+    graph.add_edge("escalate_sqs", "update_state")
     graph.add_edge("blocked", "update_state")
     graph.add_edge("update_state", END)
 

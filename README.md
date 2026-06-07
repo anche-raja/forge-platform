@@ -24,15 +24,19 @@ flowchart LR
             DDB2[("DynamoDB<br/>forge-langgraph-checkpoints-dev")]
         end
 
-        subgraph Obs["Observability"]
-            CW["CloudWatch<br/>logs + dashboard"]
+        subgraph Obs["Observability (deployed)"]
+            CW["CloudWatch<br/>metrics + dashboard"]
             SNS["SNS topic<br/>forge-alerts-dev"]
             ALARMS["4 alarms<br/>retry / manual /<br/>stalled / cost"]
         end
 
-        subgraph Phase6["Phase 6+ (not deployed)"]
-            SQS["SQS<br/>manual-review"]
-            KB["Bedrock KB<br/>+ OpenSearch"]
+        subgraph Review["Manual review (deployed)"]
+            SQS["SQS<br/>manual-review + DLQ"]
+            PORTAL["Streamlit<br/>review portal"]
+        end
+
+        subgraph Deferred["Deferred (not deployed)"]
+            KB["Bedrock KB + OpenSearch<br/>(RAG uses prompt-stuffing instead)"]
             SM["SageMaker<br/>TGI endpoint"]
         end
     end
@@ -42,28 +46,33 @@ flowchart LR
     CLI -->|ApplyGuardrail| GR
     CLI -->|PutItem / GetItem| DDB1
     CLI -->|checkpoint| DDB2
-    CLI -->|PutMetricData / logs| CW
+    CLI -->|PutMetricData| CW
+    CLI -->|SendMessage on escalation| SQS
+    PORTAL -->|read / approve / reject| DDB1
     ALARMS -->|alert| SNS
     SNS -->|email| USER["ancheraja.ai@gmail.com"]
 
-    style Phase6 stroke-dasharray: 5 5
+    style Deferred stroke-dasharray: 5 5
 ```
 
 ### Pipeline flow (LangGraph)
 
 ```mermaid
 flowchart TD
-    S([file_path]) --> PRE[guardrails_pre<br/>ApplyGuardrail INPUT]
-    PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Sonnet]
-    PRE -->|BLOCKED| BLK[blocked]
-    UPGRADE --> REV[java_reviewer<br/>Nova Pro]
+    S([file_path]) --> G0{{Gate 0<br/>local secret scan<br/>no model call}}
+    G0 -->|secret found| BLK[blocked]
+    G0 -->|clean| PRE[guardrails_pre<br/>ApplyGuardrail INPUT<br/>+ Sonnet scope/complexity]
+    PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Sonnet<br/>+ RAG standards context]
+    PRE -->|BLOCKED| BLK
+    UPGRADE --> REV[java_reviewer<br/>Nova Pro + RAG context]
     REV -->|score ≥ 80| POST[guardrails_post<br/>ApplyGuardrail OUTPUT]
     REV -->|50 ≤ score < 80<br/>retry < 2| UPGRADE
     REV -->|score < 50<br/>or retries exhausted| MQ[manual_queue]
     POST -->|PASS| WRITE[write_file]
     POST -->|BLOCKED| MQ
-    WRITE --> UPD[update_state]
-    MQ --> UPD
+    WRITE --> UPD[update_state<br/>+ CloudWatch metrics]
+    MQ --> SQSN[escalate_sqs<br/>SQS pointer]
+    SQSN --> UPD
     BLK --> UPD
     UPD --> E([DynamoDB + report])
 ```
@@ -76,26 +85,32 @@ flowchart TD
 forge-platform/
 ├── forge-terraform/       AWS infra as Terraform modules
 │   ├── modules/
-│   │   ├── foundation/    DynamoDB, Bedrock Guardrail, IAM
-│   │   ├── observability/ CloudWatch logs/dashboard/alarms, SNS
-│   │   ├── sqs/           Phase 6 — manual review queue
-│   │   ├── rag/           Phase 6 — OpenSearch + Bedrock KB
-│   │   └── sagemaker/     Future — TGI endpoint
+│   │   ├── foundation/    DynamoDB, Bedrock Guardrail, IAM (enable_foundation)
+│   │   ├── observability/ CloudWatch metrics/dashboard/alarms, SNS — deployed
+│   │   ├── sqs/           manual review queue + DLQ — deployed
+│   │   ├── rag/           OpenSearch + Bedrock KB — deferred (enable_rag, off)
+│   │   └── sagemaker/     Future — TGI endpoint (enable_sagemaker, off)
+│   ├── docs/             RAG enterprise-standards corpus (prompt-stuffing source)
 │   └── scripts/
 │       ├── bootstrap-state.sh         Creates TF state bucket
 │       └── generate-agents-yaml.sh    Generates MVP config
 │
 ├── forge-mvp/             Python pipeline (LangGraph + Bedrock)
-│   ├── migrate.py         CLI entrypoint
+│   ├── migrate.py         CLI entrypoint (+ CloudWatch metrics)
+│   ├── review_portal.py   Streamlit human review portal
 │   ├── agents.yaml        Resource IDs, model IDs, thresholds
+│   ├── prompts/           Externalised agent prompts (*.md)
 │   ├── forge/
-│   │   ├── graph.py       LangGraph wiring
+│   │   ├── graph.py       LangGraph wiring (incl. escalate_sqs)
 │   │   ├── state.py       TypedDict state + FileStatus
-│   │   ├── agents/        guardrails_pre/post, java_upgrade
-│   │   ├── review/        java_reviewer
+│   │   ├── agents/        guardrails_pre/post, java_upgrade (+ RAG)
+│   │   ├── review/        java_reviewer (+ RAG)
+│   │   ├── rag/           prompt-stuffing RAG (corpus + retriever)
+│   │   ├── queue/         SQS escalator
+│   │   ├── observability/ CloudWatch metrics emitter
 │   │   ├── guardrails/    Bedrock ApplyGuardrail wrapper
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
-│   │   └── utils/         file scanner, writer, report
+│   │   └── utils/         prompts loader, scanner, writer, report
 │   └── tests/
 │
 └── prompts/               Phase specifications
@@ -147,10 +162,19 @@ python migrate.py /path/to/java/project --phase java21 --output-dir ./migrated
 
 ## Status
 
-- ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`
-- ✅ **Phase 0 pipeline** — scaffolded end-to-end (~1.2k lines), not yet smoke-tested against live AWS
-- ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
-- ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
+- ✅ **Pipeline** — built and smoke-tested against live AWS (account `284244381060` / `us-east-1`),
+  end-to-end on the `cisco-device` sample app.
+- ✅ **Foundation** — DynamoDB tables + Bedrock Guardrail live in `284244381060` (created
+  out-of-band; `enable_foundation = false` so this Terraform state does not manage them).
+- ✅ **Observability** — deployed via Terraform (log group, SNS topic, 4 alarms, dashboard
+  `FORGE-Migration-dev`); the pipeline now **emits** the metrics the alarms watch.
+- ✅ **SQS manual-review queue** — deployed and Terraform-managed; pipeline escalates via the
+  `escalate_sqs` node. Streamlit **review portal** (`forge-mvp/review_portal.py`) built.
+- ✅ **RAG** — prompt-stuffing (`rag_mode: prompt_stuff`), ~$0. OpenSearch `rag` module gated off
+  (`enable_rag = false`) so a bare apply can't incur the ~$175/mo cost.
+- ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`.
+- ⏳ **Deferred** — SageMaker (`enable_sagemaker = false`); managed Bedrock KB RAG; the
+  compile/build gate (top of [forge-mvp/TODO.md](forge-mvp/TODO.md)).
 
 ## Cost profile
 

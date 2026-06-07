@@ -33,7 +33,7 @@ def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, sour
     }
 
 
-def run_file(app, config, state_manager, file_path: str, index: int, total: int, phase: str, dry_run: bool, source_dir: str, output_dir: str) -> dict:
+def run_file(app, config, state_manager, file_path: str, index: int, total: int, phase: str, dry_run: bool, source_dir: str, output_dir: str, metrics=None) -> dict:
     from forge.state import make_file_status
 
     initial = _build_initial_state(config, file_path, phase, dry_run, source_dir, output_dir)
@@ -45,10 +45,14 @@ def run_file(app, config, state_manager, file_path: str, index: int, total: int,
     score = fs.get("review_score")
     score_str = f", score: {score}" if score is not None else ""
 
-    print(f"[{index}/{total}] {Path(file_path).name} → {status}{score_str}")
+    print(f"[{index}/{total}] {Path(file_path).name} -> {status}{score_str}")
 
     if not dry_run:
         state_manager.put_file_status(fs)
+        if metrics is not None:
+            from forge.observability.metrics import metrics_for_file
+            avg_cost = config.get("avg_cost_per_bedrock_call", 0.0)
+            metrics.put_batch(metrics_for_file(fs, final.get("bedrock_calls", 0), avg_cost))
 
     return final
 
@@ -73,6 +77,9 @@ def main():
     config = ForgeConfig(args.config)
     app = build_graph(config)
     state_manager = DynamoDBStateManager(config)
+
+    from forge.observability.metrics import MetricsEmitter
+    metrics = MetricsEmitter(config, enabled=not args.dry_run)
 
     source_dir = str(Path(args.source_dir).resolve())
 
@@ -109,6 +116,7 @@ def main():
             dry_run=args.dry_run,
             source_dir=source_dir,
             output_dir=args.output_dir,
+            metrics=metrics,
         )
         all_statuses.append(final["current_file"])
         total_bedrock_calls += final.get("bedrock_calls", 0)
