@@ -1,19 +1,21 @@
-import json
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
+from forge.phases import get_phase
 from forge.state import ForgeState
-from forge.utils.prompts import load_prompt
+from forge.utils.cost import accrue
+from forge.utils.llm_json import extract_json
+from forge.utils.telemetry import get_logger
+
+_log = get_logger(__name__)
+
 
 
 class JavaUpgradeAgent(BaseAgent):
     def __init__(self, config: ForgeConfig):
         super().__init__(config)
-        # System prompt lives in prompts/java_upgrade.md so it can be tuned
-        # without changing code. Override the dir with FORGE_PROMPTS_DIR.
-        self.system_prompt = load_prompt("java_upgrade.md")
         self.llm = ChatBedrockConverse(
             model=config.transform_model,
             region_name=config.aws_region,
@@ -32,7 +34,8 @@ class JavaUpgradeAgent(BaseAgent):
             file_status["error"] = f"Cannot read file: {e}"
             return {**state, "current_file": file_status}
 
-        user_content = f"Transform this Java file:\nFile path: {file_path}\n\n```java\n{source_code}\n```"
+        spec = get_phase(state.get("phase") or file_status.get("phase") or "java21")
+        user_content = f"Transform this file:\nFile path: {file_path}\n\n```\n{source_code}\n```"
 
         if retry_count > 0:
             feedback = file_status.get("review_feedback", "")
@@ -41,19 +44,25 @@ class JavaUpgradeAgent(BaseAgent):
                 "Address all feedback points in this retry."
             )
 
-        messages = [SystemMessage(content=self.system_prompt), HumanMessage(content=user_content)]
+        messages = [SystemMessage(content=spec.transform_prompt), HumanMessage(content=user_content)]
         response = self.llm.invoke(messages)
-        state["bedrock_calls"] = state.get("bedrock_calls", 0) + 1
+        bedrock_calls = state.get("bedrock_calls", 0) + 1
+        cost = accrue(state, response, self.config.transform_model, self.config.get("model_pricing", {}))
 
         try:
-            result = json.loads(response.content)
-        except (json.JSONDecodeError, AttributeError):
+            result = extract_json(response.content)
+        except Exception as e:
+            _log.warning("Transform output for %s was not valid JSON: %s", file_path, e)
             file_status["status"] = "MANUAL_REVIEW"
-            file_status["error"] = "Failed to parse transform output as JSON"
-            return {**state, "current_file": file_status}
+            file_status["error"] = f"Failed to parse transform output as JSON: {e}"
+            return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
 
         file_status["transform_output"] = result
+        # struts-spring6 reports XML configs it replaced with Java @Configuration.
+        deleted = result.get("deleted_files") or []
+        if isinstance(deleted, list) and deleted:
+            file_status["deleted_files"] = [str(d) for d in deleted]
         file_status["transform_model"] = self.config.transform_model
         file_status["status"] = "REVIEWING"
 
-        return {**state, "current_file": file_status}
+        return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}

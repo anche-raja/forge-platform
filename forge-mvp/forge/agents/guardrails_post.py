@@ -1,4 +1,3 @@
-import json
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -6,18 +5,28 @@ from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
 from forge.guardrails.bedrock_guardrails import BedrockGuardrails
 from forge.state import ForgeState
+from forge.utils.cost import accrue
+from forge.utils.java_checks import find_unmigrated_javax_imports
+from forge.utils.llm_json import extract_json
+from forge.utils.telemetry import get_logger
 
+_log = get_logger(__name__)
+
+# Package scope is deliberately NOT part of this prompt. Scope is a pre-flight
+# concern (guardrails_pre), and treating it as a post-transform blocker caused
+# every out-of-scope file to be escalated to manual review even after a passing
+# review score.
 _SYSTEM = """You are a post-transformation quality checker for a Java migration pipeline.
 Given the transformed Java source code, verify:
-1. Zero javax.* imports remain (all must be jakarta.*)
-2. No deprecated patterns remain (Thread.stop, finalize, Calendar, SimpleDateFormat)
-3. Package naming follows enterprise convention matching the required scope prefix
-4. No security issues were introduced by the transformation
+1. No deprecated patterns remain (Thread.stop, finalize, Calendar, SimpleDateFormat)
+2. No security issues were introduced by the transformation
+3. Original business logic, error handling, and null checks were preserved
 
 Respond ONLY with valid JSON — no markdown, no explanation:
 {"verdict": "PASS"|"BLOCK", "findings": ["<finding>", ...], "reason": "<summary>"}
 
-Use BLOCK only if javax.* imports remain or clear security issues were introduced."""
+Use BLOCK only for a clear security regression or destroyed business logic.
+Style, naming, and package-convention concerns are findings, never BLOCK."""
 
 
 class GuardrailsPostAgent(BaseAgent):
@@ -51,23 +60,33 @@ class GuardrailsPostAgent(BaseAgent):
             file_status["guardrail_findings"] = list(file_status.get("guardrail_findings", [])) + gr_result["findings"]
 
         if gr_result["intervened"]:
+            _log.info("Guardrail intervened on output for %s", file_status["file_path"])
             file_status["status"] = "MANUAL_REVIEW"
             return {**state, "current_file": file_status}
 
-        # Step 2: Claude Sonnet post-transform quality check
-        scope_prefix = self.config.get("scope_package_prefix", "")
-        prompt = (
-            f"scope_package_prefix: {scope_prefix}\n\n"
-            f"```java\n{all_content[:8000]}\n```"
-        )
+        # Step 2: Deterministic Rule 1 enforcement. "Zero javax.* in output" is a
+        # mechanical invariant — check it in code rather than asking the model.
+        leftover = find_unmigrated_javax_imports(all_content)
+        if leftover:
+            finding = f"Unmigrated javax.* imports remain: {', '.join(sorted(set(leftover)))}"
+            _log.info("%s — %s", file_status["file_path"], finding)
+            file_status["guardrail_findings"] = list(file_status.get("guardrail_findings", [])) + [finding]
+            file_status["status"] = "MANUAL_REVIEW"
+            file_status["error"] = finding
+            return {**state, "current_file": file_status}
 
-        messages = [SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)]
+        # Step 3: Qualitative check — regressions and introduced security issues.
+        messages = [
+            SystemMessage(content=_SYSTEM),
+            HumanMessage(content=f"```java\n{all_content}\n```"),
+        ]
         response = self.llm.invoke(messages)
-        state["bedrock_calls"] = state.get("bedrock_calls", 0) + 1
+        bedrock_calls = state.get("bedrock_calls", 0) + 1
+        cost = accrue(state, response, self.config.transform_model, self.config.get("model_pricing", {}))
 
         try:
-            result = json.loads(response.content)
-        except (json.JSONDecodeError, AttributeError):
+            result = extract_json(response.content)
+        except Exception:
             result = {"verdict": "PASS", "findings": [], "reason": "parse error — continuing"}
 
         verdict = result.get("verdict", "PASS")
@@ -78,6 +97,6 @@ class GuardrailsPostAgent(BaseAgent):
         if verdict == "BLOCK":
             file_status["status"] = "MANUAL_REVIEW"
             file_status["error"] = result.get("reason", "Blocked by post-transform check")
-        # status stays as-is (REVIEWING → will be set by router)
+        # status otherwise stays as-is (REVIEWING → set to DONE by write_file)
 
-        return {**state, "current_file": file_status}
+        return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}

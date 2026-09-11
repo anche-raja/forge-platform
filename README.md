@@ -62,7 +62,10 @@ flowchart TD
     REV -->|score < 50<br/>or retries exhausted| MQ[manual_queue]
     POST -->|PASS| WRITE[write_file]
     POST -->|BLOCKED| MQ
-    WRITE --> UPD[update_state]
+    WRITE --> VB[verify_build<br/>javac / mvn]
+    VB -->|PASS or SKIPPED| UPD[update_state]
+    VB -->|FAIL, retries left| UPGRADE
+    VB -->|FAIL, exhausted| MQ
     MQ --> UPD
     BLK --> UPD
     UPD --> E([DynamoDB + report])
@@ -87,16 +90,19 @@ forge-platform/
 │
 ├── forge-mvp/             Python pipeline (LangGraph + Bedrock)
 │   ├── migrate.py         CLI entrypoint
-│   ├── agents.yaml        Resource IDs, model IDs, thresholds
+│   ├── agents.yaml        Resource IDs, model IDs, thresholds, pricing
 │   ├── forge/
 │   │   ├── graph.py       LangGraph wiring
 │   │   ├── state.py       TypedDict state + FileStatus
+│   │   ├── phases.py      Phase registry — transform prompt + reviewer rubric
 │   │   ├── agents/        guardrails_pre/post, java_upgrade
 │   │   ├── review/        java_reviewer
 │   │   ├── guardrails/    Bedrock ApplyGuardrail wrapper
+│   │   ├── verify/        build_verifier — javac / mvn compile gate
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
-│   │   └── utils/         file scanner, writer, report
-│   └── tests/
+│   │   └── utils/         scanner, writer, report, java_checks,
+│   │                      telemetry (CloudWatch), cost (token pricing)
+│   └── tests/             66 tests, fully mocked
 │
 └── prompts/               Phase specifications
     ├── FORGE-Infra-Terraform.md
@@ -136,19 +142,53 @@ terraform apply -target=module.observability
 cd forge-mvp
 pip install -r requirements.txt
 
-# Dry run against a single file (no writes, no DynamoDB updates)
+# Run the test suite first — fully mocked, needs no AWS credentials
+pytest
+
+# Dry run against a single file (no writes, no DynamoDB updates, no metrics)
 python migrate.py /path/to/java/project --phase java21 --dry-run --file /path/to/Foo.java
 
 # Full run
 python migrate.py /path/to/java/project --phase java21 --output-dir ./migrated
+
+# Struts 1/2 + Spring 4 + Jackson 1.x codebase (also picks up struts-config.xml)
+python migrate.py /path/to/legacy/app --phase struts-spring6 --output-dir ./migrated
 ```
+
+### Migration phases
+
+| Phase | Scope | Files scanned |
+|---|---|---|
+| `java21` | Java 8 → 21, `javax.*` → `jakarta.*`, deprecated + date/time APIs | `.java` |
+| `struts-spring6` | Struts 1/2 → Spring MVC 6, Spring 4 → 6, Jackson 1 → 2, Java 8 → 21 | `.java`, `struts-config.xml`, `struts.xml`, `validation.xml`, Tiles configs |
+
+Phases are defined in [forge-mvp/forge/phases.py](forge-mvp/forge/phases.py) — each pairs a transform
+prompt with the reviewer rubric that grades it. Add a phase by adding one registry entry.
+
+### Optional: build verification
+
+A file can score 95 and still not compile. Enable the compile gate in `agents.yaml`:
+
+```yaml
+build_verification:
+  enabled: true
+  mode: "javac"        # javac | maven | command
+  classpath: "libs/*"  # javac needs the project's deps to resolve imports
+  timeout_seconds: 300
+```
+
+A failed compile feeds the compiler errors back to the transform agent as review feedback and
+consumes one retry. A missing toolchain is reported as SKIPPED rather than failing the file.
 
 ---
 
 ## Status
 
 - ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`
-- ✅ **Phase 0 pipeline** — scaffolded end-to-end (~1.2k lines), not yet smoke-tested against live AWS
+- ✅ **Phase 0 pipeline** — complete, 66 tests passing (`cd forge-mvp && pytest`, no AWS required)
+- ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
+- ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
+- ✅ **Phases** — `java21` and `struts-spring6`, defined in `forge-mvp/forge/phases.py`
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
 - ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
 

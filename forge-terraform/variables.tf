@@ -37,11 +37,6 @@ variable "alerts_email" {
   type        = string
 }
 
-variable "scope_package_prefix" {
-  description = "Java package prefix used for scope validation in FORGE agents (e.g. com.corp)"
-  type        = string
-}
-
 variable "enable_sagemaker" {
   description = "Set to true to deploy the SageMaker internal LLM endpoint. Only enable when a trained model artifact is ready in S3."
   type        = bool

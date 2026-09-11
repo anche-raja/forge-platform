@@ -1,43 +1,16 @@
-import json
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.config import ForgeConfig
+from forge.phases import get_phase
 from forge.review.base_reviewer import BaseReviewer
 from forge.state import ForgeState
+from forge.utils.cost import accrue
+from forge.utils.llm_json import extract_json
+from forge.utils.telemetry import get_logger
 
-_SYSTEM = """You are a Java migration code reviewer. Score the transformed Java code on 5 checks (total 100 points).
+_log = get_logger(__name__)
 
-Check 1 — Namespace completeness (20 pts):
-Zero javax.* imports remain. All replaced with jakarta.*. Full 20 if clean, 0 if any javax.* found.
-
-Check 2 — Deprecated API removal (20 pts):
-No Thread.stop(), no finalize() bodies, no Calendar, no SimpleDateFormat. Partial credit allowed.
-
-Check 3 — Date/Time modernisation (25 pts):
-Instant.now() replaces new Date(), LocalDateTime replaces Calendar, DateTimeFormatter replaces SimpleDateFormat. Partial credit allowed.
-
-Check 4 — Safe var inference (20 pts):
-var used only where type is obvious from RHS. Never on parameters or fields. Partial credit allowed.
-
-Check 5 — No regressions (15 pts):
-Original structure preserved. Error handling intact. Null checks preserved. No logic changes.
-
-Scoring: PASS >= 80, RETRY 50-79, MANUAL < 50.
-
-Respond ONLY with valid JSON — no markdown, no explanation:
-{
-  "score": <0-100>,
-  "verdict": "PASS"|"RETRY"|"MANUAL",
-  "feedback": "<specific actionable issues for retry, or empty string if PASS>",
-  "checks": {
-    "namespace": <0-20>,
-    "deprecated": <0-20>,
-    "datetime": <0-25>,
-    "var_inference": <0-20>,
-    "no_regressions": <0-15>
-  }
-}"""
 
 
 class JavaReviewer(BaseReviewer):
@@ -63,20 +36,23 @@ class JavaReviewer(BaseReviewer):
             file_status["review_feedback"] = "No transformed content to review"
             return {**state, "current_file": file_status}
 
+        spec = get_phase(state.get("phase") or file_status.get("phase") or "java21")
         messages = [
-            SystemMessage(content=_SYSTEM),
-            HumanMessage(content=f"Review this transformed Java code:\n\n```java\n{all_content[:8000]}\n```"),
+            SystemMessage(content=spec.review_prompt),
+            HumanMessage(content=f"Review this transformed code:\n\n```\n{all_content}\n```"),
         ]
         response = self.llm.invoke(messages)
-        state["bedrock_calls"] = state.get("bedrock_calls", 0) + 1
+        bedrock_calls = state.get("bedrock_calls", 0) + 1
+        cost = accrue(state, response, self.config.review_model, self.config.get("model_pricing", {}))
 
         try:
-            result = json.loads(response.content)
-        except (json.JSONDecodeError, AttributeError):
+            result = extract_json(response.content)
+        except Exception as e:
             file_status["review_score"] = 0
             file_status["review_verdict"] = "MANUAL"
-            file_status["review_feedback"] = "Failed to parse reviewer response"
-            return {**state, "current_file": file_status}
+            file_status["review_feedback"] = f"Failed to parse reviewer response: {e}"
+            _log.warning("Reviewer response was not valid JSON: %s", e)
+            return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
 
         score = int(result.get("score", 0))
         pass_threshold = self.config.get("pass_threshold", 80)
@@ -93,5 +69,6 @@ class JavaReviewer(BaseReviewer):
         file_status["review_verdict"] = verdict
         file_status["review_feedback"] = result.get("feedback", "")
         file_status["review_model"] = self.config.review_model
+        _log.info("Review score %s (%s) for %s", score, verdict, file_status["file_path"])
 
-        return {**state, "current_file": file_status}
+        return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}

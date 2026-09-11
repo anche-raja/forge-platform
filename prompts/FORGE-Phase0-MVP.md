@@ -101,7 +101,9 @@ Wrap the standalone ApplyGuardrail API. Method: evaluate(text, source). source i
 ## Guardrails Pre Agent — forge/agents/guardrails_pre.py
 Two steps in sequence:
 Step 1 — Call Bedrock Guardrails (ApplyGuardrail, source=INPUT). If GUARDRAIL_INTERVENED: set status=BLOCKED, return state immediately.
-Step 2 — Call Claude Sonnet 4.5 with a short prompt. Ask it to check: secrets/credentials in code, file within scope (correct package prefix from agents.yaml), PII in comments/strings, file size vs complexity threshold. Return JSON verdict (PASS/WARN/BLOCK) and findings list. If BLOCK: set status=BLOCKED. If WARN: add to findings but continue.
+Step 2 — Call Claude Sonnet 4.5 with a short prompt. Ask it to check: secrets/credentials in code, PII in comments/strings, file size vs complexity threshold. Return JSON verdict (PASS/WARN/BLOCK) and findings list. If BLOCK: set status=BLOCKED. If WARN: add to findings but continue.
+
+Scope is NOT checked here. "Is this file ours to migrate?" is a string comparison against the file's package declaration, handled by the file scanner before any model is called.
 
 ## Java Upgrade Agent — forge/agents/java_upgrade.py
 System prompt instructs Claude Sonnet 4.5 to apply these rules in order:
@@ -128,13 +130,20 @@ PASS >= 80. RETRY 50-79. MANUAL < 50. Return JSON: score, verdict, feedback (spe
 ## Guardrails Post Agent — forge/agents/guardrails_post.py
 Two steps:
 Step 1 — Call Bedrock Guardrails (ApplyGuardrail, source=OUTPUT). If GUARDRAIL_INTERVENED: BLOCK.
-Step 2 — Call Claude Sonnet 4.5. Check: zero javax.* imports in output, no deprecated patterns remain, package naming follows enterprise convention from agents.yaml, no introduced security issues. Return JSON verdict and findings.
+Step 2 — Enforce "zero javax.* in output" deterministically in code (regex over imports, excluding the JDK's own javax packages — javax.crypto, javax.sql, javax.net, javax.naming, javax.security.auth, javax.xml.parsers/transform/stream). Do NOT ask the model to do this; it is a mechanical invariant.
+Step 3 — Call Claude Sonnet 4.5 for the qualitative checks only: no deprecated patterns remain, no security issues introduced, business logic preserved. Return JSON verdict and findings.
+
+Do NOT check package naming here. A migration never renames a package — doing so breaks every import, component-scan base package, and reflective lookup in the codebase. Whether a file is in scope at all is decided by the file scanner before any model call (see File Scanner below).
 
 ## DynamoDB State Manager — forge/state_store/dynamodb.py
 Table name from agents.yaml. Methods: put_file_status(file_status), get_file_status(file_path), get_files_by_status(status), get_progress_summary(), mark_pending(file_paths, phase). Create a GSI on the status attribute so get_files_by_status is efficient. Use PAY_PER_REQUEST billing. Create the table in infrastructure/create_dynamodb.py.
 
 ## File Scanner — forge/utils/file_scanner.py
-Walk source_dir recursively. For phase=java21 return all .java files. Filter out: generated code (contains "DO NOT EDIT"), test files (path contains src/test) unless explicitly included, binary files. Return list of relative paths.
+Walk source_dir recursively. Return the files eligible for the given phase (java21: .java; struts-spring6: .java plus Struts XML descriptors matched by exact filename). Filter out: generated code (contains "DO NOT EDIT"), test files (path contains src/test) unless explicitly included, binary files.
+
+Also apply the optional scope filter: when scope_package_prefix is non-empty, skip files whose declared package falls outside it. Match on a package boundary — "com.corp" covers com.corp.user but NOT com.corporate. A file with no package declaration (XML config, default-package class) is always in scope; never skip on absent evidence. Read the package, never rewrite it.
+
+Return both the eligible files and the skipped ones (path + package + reason) so the report can surface what was left out. Skipping here rather than mid-pipeline means an out-of-scope file costs zero Bedrock calls.
 
 ## File Writer — forge/utils/file_writer.py
 If dry_run=True: do nothing, return. Otherwise: read transform_output from state (JSON dict of path→content). For each file: create directory structure under output_dir, write content. Preserve the package path exactly.
@@ -150,7 +159,7 @@ Print progress: [N/total] filename → STATUS (score: N).
 At the end: print summary and path to migration-report.md.
 
 ## Configuration — agents.yaml
-Include: transform_model, review_model, aws_region, dynamodb_table, guardrail_id, guardrail_version, source_java_version, target_java_version, pass_threshold (80), retry_threshold (50), max_retries (2), scope_package_prefix (for scope validation), complexity_block_threshold (2000 LOC), langsmith_project.
+Include: transform_model, review_model, aws_region, dynamodb_table, guardrail_id, guardrail_version, source_java_version, target_java_version, pass_threshold (80), retry_threshold (50), max_retries (2), scope_package_prefix (scan-time scope filter; empty = migrate everything), complexity_block_threshold (2000 LOC), langsmith_project.
 
 ## Report — forge/utils/report.py
 Generate migration-report.md with: run timestamp, phase, source_dir, files scanned, files passed, files retried, files manual, files blocked, total Bedrock calls, per-file table (path, status, score, retries, guardrail findings).

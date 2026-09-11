@@ -3,7 +3,7 @@ from typing import TypedDict, Optional, List, Literal, Any
 
 class FileStatus(TypedDict):
     file_path: str
-    status: Literal["PENDING", "TRANSFORMING", "REVIEWING", "RETRY_1", "RETRY_2", "DONE", "MANUAL_REVIEW", "BLOCKED"]
+    status: Literal["PENDING", "TRANSFORMING", "REVIEWING", "VERIFYING", "RETRY_1", "RETRY_2", "DONE", "MANUAL_REVIEW", "BLOCKED"]
     phase: str
     risk_tier: str
     risk_score: int
@@ -15,6 +15,11 @@ class FileStatus(TypedDict):
     guardrail_post_verdict: Optional[str]
     guardrail_findings: List[str]
     retry_count: int
+    written_paths: List[str]
+    # XML configs the transform replaced with Java config (struts-spring6)
+    deleted_files: List[str]
+    build_verdict: Optional[Literal["PASS", "FAIL", "SKIPPED"]]
+    build_output: Optional[str]
     transform_model: Optional[str]
     review_model: Optional[str]
     error: Optional[str]
@@ -53,6 +58,10 @@ def make_file_status(file_path: str, phase: str) -> FileStatus:
         guardrail_post_verdict=None,
         guardrail_findings=[],
         retry_count=0,
+        written_paths=[],
+        deleted_files=[],
+        build_verdict=None,
+        build_output=None,
         transform_model=None,
         review_model=None,
         error=None,

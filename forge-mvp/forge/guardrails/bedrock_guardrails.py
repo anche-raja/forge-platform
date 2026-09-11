@@ -18,11 +18,20 @@ class BedrockGuardrails:
             content=[{"text": {"text": text}}],
         )
         action = response.get("action", "NONE")
-        findings = []
+        findings: list[str] = []
+        # Only policy categories are findings — invocationMetrics is telemetry.
+        policy_keys = {
+            "topicPolicy",
+            "contentPolicy",
+            "wordPolicy",
+            "sensitiveInformationPolicy",
+            "contextualGroundingPolicy",
+        }
         for assessment in response.get("assessments", []):
             for category, data in assessment.items():
-                if data:
-                    findings.append(f"{category}: {data}")
+                if category not in policy_keys or not data:
+                    continue
+                findings.append(f"{category}: {data}")
         return {
             "action": action,
             "findings": findings,

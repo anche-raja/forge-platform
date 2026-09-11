@@ -11,6 +11,9 @@
 set -euo pipefail
 
 ENV="${1:-dev}"
+# Optional org package root. Filters which files the scanner picks up;
+# empty = migrate everything under source_dir. Never renames packages.
+SCOPE_PACKAGE_PREFIX="${FORGE_SCOPE_PACKAGE_PREFIX:-}"
 
 # Resolve the forge-terraform directory relative to this script's location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +47,7 @@ cat <<EOF
 #   ./scripts/generate-agents-yaml.sh ${ENV} > ../forge-mvp/agents.yaml
 
 # ─── Models ───────────────────────────────────────────────────────────────────
-transform_model: "us.anthropic.claude-sonnet-4-5-20251001-v1:0"
+transform_model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 review_model: "us.amazon.nova-pro-v1:0"
 
 # ─── AWS ──────────────────────────────────────────────────────────────────────
@@ -77,8 +80,41 @@ target_java_version: "21"
 pass_threshold: 80
 retry_threshold: 50
 max_retries: 2
-scope_package_prefix: "com.corp"
+# Which files are ours to migrate. Filters at scan time by the file's declared
+# package, so an out-of-scope file costs zero Bedrock calls. Empty (the default)
+# migrates everything under source_dir. Matching is on a package boundary, so
+# "com.corp" covers com.corp.user but not com.corporate. Files with no package
+# declaration (XML configs, default-package classes) are always in scope.
+# This NEVER renames a package — the declaration is read, never rewritten.
+scope_package_prefix: "${SCOPE_PACKAGE_PREFIX}"
 complexity_block_threshold: 2000
+
+# ─── Cost model (drives estimated_cost_usd + the FORGE-CostSpike alarm) ──────
+# USD per 1,000 tokens. Update when Bedrock pricing changes — no code change needed.
+model_pricing:
+  "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
+    input_per_1k: 0.003
+    output_per_1k: 0.015
+  "us.amazon.nova-pro-v1:0":
+    input_per_1k: 0.0008
+    output_per_1k: 0.0032
+
+# Publish pipeline counters to the FORGE/Migration namespace. The Terraform
+# alarms and dashboard read these; turning it off leaves them blind.
+emit_cloudwatch_metrics: true
+
+# ─── Build verification ───────────────────────────────────────────────────────
+# A file can score 95 and still not compile. When enabled, each written file is
+# compiled and a failure is fed back to the transform agent as review feedback.
+#   mode: javac   — fast syntax/symbol check of the single file
+#         maven   — mvn -q compile at the output project root (needs a pom.xml)
+#         command — run `command` verbatim; {file} and {output_dir} are substituted
+build_verification:
+  enabled: false
+  mode: "javac"
+  command: ""
+  classpath: ""
+  timeout_seconds: 300
 
 # ─── LangSmith observability ─────────────────────────────────────────────────
 langsmith_project: "forge-migration"

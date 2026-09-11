@@ -8,6 +8,12 @@ from boto3.dynamodb.conditions import Key
 
 from forge.config import ForgeConfig
 from forge.state import FileStatus
+from forge.utils.telemetry import get_logger
+
+_log = get_logger(__name__)
+
+# 400 KB hard limit, minus headroom for the rest of the item's attributes.
+_MAX_TRANSFORM_OUTPUT_BYTES = 350_000
 
 
 # ─── Application-level state manager ─────────────────────────────────────────
@@ -28,7 +34,19 @@ class DynamoDBStateManager:
         if "review_score" in item and item["review_score"] is not None:
             item["review_score"] = Decimal(str(item["review_score"]))
         if item.get("transform_output"):
-            item["transform_output"] = json.dumps(item["transform_output"])
+            serialized = json.dumps(item["transform_output"])
+            # DynamoDB rejects items over 400 KB. Transformed source for a large
+            # file can exceed that on its own, which would fail the whole write
+            # and lose the status record — the one thing worth keeping.
+            if len(serialized.encode("utf-8")) > _MAX_TRANSFORM_OUTPUT_BYTES:
+                _log.warning(
+                    "transform_output for %s is %d bytes; storing a marker instead. "
+                    "The migrated file itself is already on disk in output_dir.",
+                    item.get("file_path", "<unknown>"),
+                    len(serialized.encode("utf-8")),
+                )
+                serialized = json.dumps({"_truncated": True, "bytes": len(serialized)})
+            item["transform_output"] = serialized
         self.table.put_item(Item=item)
 
     def get_file_status(self, file_path: str) -> Optional[FileStatus]:
@@ -39,11 +57,19 @@ class DynamoDBStateManager:
         return self._deserialize(item)
 
     def get_files_by_status(self, status: str) -> List[FileStatus]:
-        response = self.table.query(
-            IndexName="status-index",
-            KeyConditionExpression=Key("status").eq(status),
-        )
-        return [self._deserialize(item) for item in response.get("Items", [])]
+        items: List[dict] = []
+        kwargs: dict = {
+            "IndexName": "status-index",
+            "KeyConditionExpression": Key("status").eq(status),
+        }
+        while True:
+            response = self.table.query(**kwargs)
+            items.extend(response.get("Items", []))
+            last_key = response.get("LastEvaluatedKey")
+            if not last_key:
+                break
+            kwargs["ExclusiveStartKey"] = last_key
+        return [self._deserialize(item) for item in items]
 
     def get_progress_summary(self) -> dict:
         response = self.table.scan(
@@ -186,6 +212,17 @@ try:
                 "parent_checkpoint_id": parent_id,
             })
             return {**config, "configurable": {**config["configurable"], "checkpoint_id": checkpoint_id}}
+
+        def put_writes(
+            self,
+            config: RunnableConfig,
+            writes: Sequence[Tuple[str, Any]],
+            task_id: str,
+            task_path: str = "",
+        ) -> None:
+            # Intermediate task writes are recreated from the parent checkpoint
+            # on resume, so persisting them per-step is not required for MVP.
+            return None
 
 except ImportError:
     # Fallback: LangGraph not installed — DynamoDBSaver unavailable

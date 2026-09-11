@@ -10,7 +10,7 @@ forge-terraform/override.tf.json
 forge-terraform/**/*_override.tf
 forge-terraform/**/*_override.tf.json
 
-# Python (forge-mvp — not yet built)
+# Python (forge-mvp)
 forge-mvp/.env
 forge-mvp/__pycache__/
 forge-mvp/**/__pycache__/
@@ -22,6 +22,10 @@ forge-mvp/.pytest_cache/
 forge-mvp/migrated/
 forge-mvp/migration-report.md
 forge-mvp/manual-review-queue.json
+# agents.yaml contains account-specific AWS resource IDs — generate via
+# forge-terraform/scripts/generate-agents-yaml.sh
+forge-mvp/agents.yaml
+forge-mvp/test-fixtures/
 
 # OS
 .DS_Store
