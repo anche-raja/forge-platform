@@ -9,7 +9,8 @@ FORGE is an AI-powered Java migration pipeline. It uses LangGraph + AWS Bedrock 
 The repo currently contains:
 - `forge-terraform/` — all AWS infrastructure as Terraform modules
 - `prompts/` — full specifications for each build phase
-- `forge-mvp/` — Python pipeline, built and covered by 66 tests (`pytest` from `forge-mvp/`)
+- `forge-mvp/` — Python pipeline, covered by 300+ tests (`pytest` from `forge-mvp/`, no AWS needed)
+- `prompts/packs/` — the stack pack library: one technology transition per file, loaded at runtime
 
 ## Terraform — forge-terraform/
 
@@ -92,10 +93,53 @@ Original spec in `prompts/FORGE-Phase0-MVP.md`. Key design points:
 
 ```bash
 cd forge-mvp
-pytest                                    # 66 tests, no AWS needed
-python migrate.py ./myapp --phase java21 --dry-run --file path/to/Foo.java
-python migrate.py ./myapp --phase struts-spring6 --output-dir ./migrated
+pytest                                    # no AWS needed
+python migrate.py --list-packs            # the pack library, in dependency order
+python migrate.py ./myapp --phase javax-to-jakarta --dry-run --file path/to/Foo.java
+python migrate.py ./myapp --phase webapp-bootstrap-jakarta10 --output-dir ./migrated
 ```
+
+`--phase` accepts the two built-in phases (`java21`, `struts-spring6`) and every *complete* pack.
+A pack that needs a context extractor which is not built yet is refused with a message listing
+what is runnable; `forge.utils.file_scanner.runnable_phases()` is the source of truth.
+
+### Packs, extractors and context (Phase 1)
+
+The contract is `prompts/FORGE-Platform-Requirements.md`; read it before touching a pack.
+
+**Packs are data, loaded at startup.** `forge/packs/loader.py` parses `prompts/packs/*.pack.md`
+(YAML frontmatter + `## transform` + `## review`), validates strictly — rubric weights must total
+100 **and** match the response schema's per-check maxima in order; detect/acceptance kinds must be
+known; `depends_on` must resolve acyclically — and orders them topologically with tier as the
+tie-break. `depends_on` is an **ordering edge, not a requirement**: `jsp-jstl-modernize` lists
+both Struts packs because it must follow whichever runs. A malformed pack degrades the library to
+the built-in phases with a warning rather than stopping Phase 0; `--list-packs` prints the error.
+
+**`applies_to` has three kinds, and the difference is whether the pack runs today.** `file_glob`
+names files by path. `content_match: {glob, pattern}` names them by what is in them — "the class
+that extends `WebSecurityConfigurerAdapter`" is decidable from one file's bytes, so no extractor
+is needed. `selector:` names a set only a context extractor can resolve, and the scanner **refuses**
+the pack until that extractor is registered — running only the glob half would migrate the
+configuration and skip the classes it refers to, which is worse than not running.
+
+**Context extractors are deterministic and model-free** (`forge/extract/`). A pack declares
+`context: <name>`; the extractor runs once per module, cached in-process, never stored in
+`ForgeState` (DynamoDB item cap). `web_bootstrap` parses `web.xml` under every Servlet namespace,
+the JBoss/WebLogic/WebSphere vendor descriptors (`.xml` and `.xmi`), EAR, datasource sources and
+an existing Liberty `server.xml`, in declaration order and dropping nothing — unknown elements go
+to `raw_unmapped`. It resolves `servlet_components` (real files) and `server_config` (one
+**generated** `server.xml` per module; an existing one is an edit, not a generate).
+
+**Context reaches the prompts through `forge/context/`.** `render_context` produces a
+deterministic block bounded by `context.max_chars` — a hard guarantee, with section priority
+depending on the target and `summary` never omitted. `context_block_for` appends it in
+`java_upgrade`, `java_reviewer` and (for generated units) `guardrails_pre`; `FileStatus` records
+the extractor name and a sha256 of the block. The full context is written to
+`migration-context.json` beside the report, in dry-run too.
+
+Two idioms that have already bitten: never `a or b` on `ElementTree` elements (an element with no
+children is falsy — use `is not None`), and never write a regex in a double-quoted YAML scalar
+(`"\."` is an invalid escape — single-quote it).
 
 ### Architecture decisions baked into the pipeline
 

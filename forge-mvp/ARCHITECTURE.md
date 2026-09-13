@@ -1,7 +1,10 @@
 # FORGE MVP — Architecture (Phase 0)
 
-> **Scope note.** This document describes the **MVP that is actually built** in `forge-mvp/` — a
-> single-phase **Java 8 → 21 upgrade** pipeline. It is *not* the 15-agent vision in
+> **Scope note.** This document describes the Phase 0 engine in `forge-mvp/`. Phase 1 — the
+> pack library and context extractors that make it a generic J2EE migration platform — is
+> summarised in §12 and specified in
+> [prompts/FORGE-Platform-Requirements.md](../prompts/FORGE-Platform-Requirements.md).
+> The engine started as a single-phase **Java 8 → 21 upgrade** pipeline. It is *not* the 15-agent vision in
 > `FORGE-AgentDeepDive.pptx`. Per [prompts/FORGE-Phase0-MVP.md](../prompts/FORGE-Phase0-MVP.md),
 > Phase 0 is deliberately *"one transform agent, one review agent, nothing else — no RAG, no SQS,
 > no Discovery agent yet."* The deck is the target end-state; this is the foundation.
@@ -125,14 +128,11 @@ it to its prompt ([java_upgrade.py:68](forge/agents/java_upgrade.py#L68)). Exhau
 > Nova Pro — two different model families. The two guardrail nodes also use Sonnet 4.5 as a
 > second-pass reasoning check *in addition to* the deterministic Bedrock Guardrails policy.
 
-> ⚠️ **No build / compile verification.** Every check in this pipeline is **LLM/text-based**, not
-> compiler-based. The pipeline never runs `javac`, Maven, or Gradle against the migrated output —
-> there are no `subprocess` calls anywhere. `java_reviewer`'s "syntactically and logically valid"
-> check is the *model's opinion* of one file (truncated to 8,000 chars, no classpath, no `pom.xml`
-> resolution, no cross-file context), not a real compile. **A file can score PASS (≥80) and be
-> written to `./migrated/` even if it would not actually compile** — e.g. a missing `jakarta`
-> dependency, a broken cross-file reference, or a malformed edit the model didn't catch. See
-> §11 Known gaps.
+> **Build verification is opt-in.** `verify_build` runs `javac` (per file) or `mvn compile`
+> (per output project) when `build_verification.enabled` is set; a failure re-enters the retry
+> loop with the compiler output as feedback. Off by default because single-file `javac` needs the
+> project's classpath. When it is off, "syntactically valid" is the reviewer's opinion, not a
+> compile — see §11.
 
 ---
 
@@ -207,8 +207,8 @@ python migrate.py ./myapp --phase java21 --dry-run
 python migrate.py ./myapp --phase java21 --resume
 ```
 
-Flags: `--phase java21` (only phase implemented), `--dry-run`, `--resume`, `--file`,
-`--output-dir` (default `./migrated`), `--config`.
+Flags: `--phase` (a built-in phase or any complete pack — see §12), `--dry-run`, `--resume`,
+`--file`, `--output-dir` (default `./migrated`), `--config`, `--no-metrics`, `--list-packs`.
 
 > **Note:** `--dry-run` skips file writes and the DynamoDB *state* update, but the graph still
 > calls **Bedrock** (guardrails + both models) and the **checkpointer still writes** to DynamoDB.
@@ -266,13 +266,41 @@ forge-mvp/
 These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives in
 [TODO.md](TODO.md).
 
-- **No build/compile gate.** The pipeline never runs `javac` / Maven / Gradle on the output
-  (no `subprocess` calls). All verification is LLM/text-based, so output can be written without
-  being compile-verified. *(Top of the next-cycle backlog.)*
-- **Per-file, no project context.** Reviewer sees one file (truncated to 8,000 chars) — no
-  classpath, no `pom.xml` resolution, no cross-file references.
+- **Build gate is per file unless `mode: maven`.** A whole-module compile after a batch is the
+  reliable form; per-file `javac` needs the classpath configured.
+- **Project context is extractor-by-extractor.** Packs whose context is `web_bootstrap` get the
+  full descriptor set (§12). Packs naming an unbuilt extractor (`struts_routing_table`,
+  `spring_bean_graph`, `view_bindings`, `reactor`, `test_subject`) either run without context or
+  are refused if they need a selector.
 - **RAG not wired.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB.
-- **Single phase only.** `--phase java21` is the only implemented phase; the deck's Spring,
-  Struts→MVC, Discovery, Risk-Scorer, Containerize, and Test-Gen agents are not built.
+- **No discovery stage yet.** Which packs apply to a repo is chosen by hand; the profile is not
+  generated.
+- **No mechanical acceptance runner.** Packs declare `acceptance` checks and
+  `migration-context.json` carries the pre-migration facts, but nothing diffs them yet.
 - **No review portal.** `manual-review-queue.json` is written, but there is no `review_portal.py`.
 - **Placeholder guardrail.** `agents.yaml` ships `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"`.
+
+---
+
+## 12. Phase 1 — packs, extractors, context
+
+The engine above is unchanged. What Phase 1 adds is *what it runs* and *what it is given*.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Pack library | `../prompts/packs/*.pack.md` | One technology transition each: detection rules, transform rules, a rubric totalling 100, mechanical acceptance checks. Loaded by `forge/packs/loader.py`; ordered by `depends_on` then tier. |
+| Registry | `forge/phases.py` | `get_phase()` resolves a built-in phase or a pack; `PHASE_NAMES` feeds `--phase`. A broken library degrades to the built-ins with a warning. |
+| Scanner | `forge/utils/file_scanner.py` | Matches `file_glob` and `content_match` selectors itself; resolves `selector:` entries through the pack's extractor, or refuses the pack if that extractor is not registered. Reports `generated` targets a pack creates. |
+| Extractors | `forge/extract/` | Deterministic parsers named by a pack's `context:`. `web_bootstrap` covers `web.xml` (all namespaces), JBoss/WebLogic/WebSphere descriptors (`.xml`/`.xmi`), EAR, datasources, Liberty `server.xml`; declaration order kept, nothing dropped, literal secrets masked. Cached per module, never in state. |
+| Context | `forge/context/` | `render_context` → a deterministic block under `context.max_chars`; `context_block_for` appends it to the transform, review and (for generated units) pre-flight prompts; `snapshot` writes `migration-context.json`. |
+
+**Runnable today** (`runnable_phases()`): `java21`, `struts-spring6`, `build-maven-modernize`,
+`java8-to-java21`, `javax-to-jakarta`, `spring-to-spring6`, `springsec-to-springsec6`,
+`struts2-modernize`, `jsp-jstl-modernize`, `junit4-to-junit5`, `webapp-bootstrap-jakarta10`,
+`liberty-server-config`. Refused until their extractor exists: `struts1-to-springmvc6`,
+`struts2-to-springmvc6`.
+
+**Two decisions fixed at platform level** (see the requirements spec): the target is a **WAR on
+WebSphere/Open Liberty at Jakarta EE 10, Spring Framework 6.2, no Spring Boot**; and
+`web_framework: modernize-in-place` (Struts → Struts 7) is the first route, with
+`migrate-to-spring` as the later one.

@@ -3,27 +3,26 @@
 Actionable backlog for the next development cycle. Context for each item lives in
 [ARCHITECTURE.md](ARCHITECTURE.md) §11 (Known gaps). Ordered by priority.
 
-## P0 — Build / compile verification (the missing safety gate)
+## P0 — Done
 
-- [ ] **Add a `compile_check` node** to the LangGraph pipeline ([forge/graph.py](forge/graph.py))
-      after `guardrails_post` / `write_file`. Run `mvn -q compile` (or `gradle compileJava`) on the
-      migrated tree via `subprocess`. This converts the reviewer's *opinion* of "syntactically valid"
-      into a *fact*.
-- [ ] **Route compile failures into the existing retry loop** — non-zero exit → re-enter
-      `java_upgrade` with the `javac`/build errors injected as feedback (mirror the
-      `route_reviewer` retry mechanism); exhausted retries → `manual_queue`.
-- [ ] Make the build tool + command configurable in [agents.yaml](agents.yaml)
-      (`build_tool: maven|gradle|none`, `build_command`, working dir).
-- [ ] Capture and persist compiler output in `FileStatus` (new field, e.g. `compile_errors`) so it
-      shows in the audit trail and `migration-report.md`.
-- [ ] Decide granularity: per-file compile is unreliable (no classpath) — likely a **whole-module
-      compile pass** after a batch of files is written, not per-file. Note the trade-off in the report.
+- [x] Build / compile gate — `verify_build` node, `javac`/`maven`/`command` modes, compiler
+      errors fed back through the retry loop (`forge/verify/build_verifier.py`).
+- [x] Pack library and loader — `prompts/packs/`, `forge/packs/`, `--list-packs`.
+- [x] `web_bootstrap` context extractor — `web.xml`, vendor descriptors, Liberty `server.xml`
+      with full context in the transform and review prompts; generated units.
 
 ## P1 — Verification quality
 
-- [ ] **Give the reviewer project context.** Today it sees one file truncated to 8,000 chars
-      ([java_reviewer.py](forge/review/java_reviewer.py)) — no classpath, no `pom.xml`, no cross-file
-      refs. Consider feeding dependency/`pom.xml` context, and handle files >8,000 chars (chunk or raise).
+- [ ] **More context extractors.** `web_bootstrap` is built. Packs still waiting on one:
+      `struts_routing_table` (unblocks `struts1/2-to-springmvc6`), `spring_bean_graph`,
+      `view_bindings`, `reactor`, `test_subject`. Each is a deterministic parser under
+      `forge/extract/` registered like `web_bootstrap`; the ratchet test in `tests/test_packs.py`
+      lists them.
+- [ ] **Acceptance runner.** Packs declare `acceptance` checks (`no_match`, `count_unchanged`,
+      `routing_parity`, `authz_parity`, `build`) and `migration-context.json` carries the
+      pre-migration facts; nothing diffs them yet. `forge/verify/acceptance.py`.
+- [ ] **Discovery.** Scanners that emit a stack profile for any repo and select which packs apply
+      (`forge discover`). Today the pack list is chosen by hand.
 - [ ] **Wire RAG.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB. Hook the
       transform/review agents to the KB so enterprise standards actually ground the output.
 
@@ -48,4 +47,4 @@ Actionable backlog for the next development cycle. Context for each item lives i
 - [ ] **Test-Gen agent** + run generated JUnit 5 tests as a second verification gate (complements the
       compile gate above).
 - [ ] **Review portal** (`review_portal.py`) over `manual-review-queue.json` for human approve/reject.
-- [ ] Fix the stale line in [../CLAUDE.md](../CLAUDE.md): it says `forge-mvp/` is "not yet built" — it is.
+- [ ] Module-level build gate — `mvn -pl <module> -am compile` after a batch, in addition to the per-file gate.

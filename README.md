@@ -102,11 +102,13 @@ forge-platform/
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
 │   │   └── utils/         scanner, writer, report, java_checks,
 │   │                      telemetry (CloudWatch), cost (token pricing)
-│   └── tests/             66 tests, fully mocked
+│   └── tests/             300+ tests, fully mocked
 │
-└── prompts/               Phase specifications
+└── prompts/               Specifications and the pack library
     ├── FORGE-Infra-Terraform.md
-    └── FORGE-Phase0-MVP.md
+    ├── FORGE-Phase0-MVP.md
+    ├── FORGE-Platform-Requirements.md   Phase 1 — pack contract, invariants, decisions
+    └── packs/                           one technology transition per *.pack.md
 ```
 
 ---
@@ -145,6 +147,9 @@ pip install -r requirements.txt
 # Run the test suite first — fully mocked, needs no AWS credentials
 pytest
 
+# The pack library, in dependency order (no AWS needed)
+python migrate.py --list-packs
+
 # Dry run against a single file (no writes, no DynamoDB updates, no metrics)
 python migrate.py /path/to/java/project --phase java21 --dry-run --file /path/to/Foo.java
 
@@ -162,8 +167,10 @@ python migrate.py /path/to/legacy/app --phase struts-spring6 --output-dir ./migr
 | `java21` | Java 8 → 21, `javax.*` → `jakarta.*`, deprecated + date/time APIs | `.java` |
 | `struts-spring6` | Struts 1/2 → Spring MVC 6, Spring 4 → 6, Jackson 1 → 2, Java 8 → 21 | `.java`, `struts-config.xml`, `struts.xml`, `validation.xml`, Tiles configs |
 
-Phases are defined in [forge-mvp/forge/phases.py](forge-mvp/forge/phases.py) — each pairs a transform
-prompt with the reviewer rubric that grades it. Add a phase by adding one registry entry.
+The two phases above are built in. Everything else is a **pack** under [prompts/packs/](prompts/packs/) —
+one technology transition per file (`javax-to-jakarta`, `struts2-modernize`, `springsec-to-springsec6`,
+`webapp-bootstrap-jakarta10`, `liberty-server-config`, …), loaded at startup and accepted by
+`--phase`. The contract is [prompts/FORGE-Platform-Requirements.md](prompts/FORGE-Platform-Requirements.md).
 
 ### Optional: build verification
 
@@ -185,10 +192,11 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 ## Status
 
 - ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`
-- ✅ **Phase 0 pipeline** — complete, 66 tests passing (`cd forge-mvp && pytest`, no AWS required)
+- ✅ **Phase 0 pipeline** — complete, 300+ tests passing (`cd forge-mvp && pytest`, no AWS required)
 - ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
-- ✅ **Phases** — `java21` and `struts-spring6`, defined in `forge-mvp/forge/phases.py`
+- ✅ **Phases** — `java21` and `struts-spring6` built in; 10 runnable packs on top
+- ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml`, vendor descriptors and Liberty `server.xml` migrate with full descriptor context
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
 - ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
 
