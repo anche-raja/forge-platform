@@ -594,6 +594,24 @@ def test_scanner_matches_pack_globs_against_the_full_relative_path(fresh_registr
     assert found == ["web.xml"]
 
 
+def test_scanner_refuses_a_pack_that_also_has_globs(fresh_registry, tmp_path):
+    """A pack with both globs and selectors is the dangerous case: it would
+    migrate the configuration and skip the classes the configuration refers to,
+    reporting success over a half-migrated codebase."""
+    packs_dir = tmp_path / "packs"
+    write_pack(packs_dir, "half-runnable", frontmatter=_fm(
+        "half-runnable",
+        applies_to='\n  - file_glob: "**/struts*.xml"\n  - selector: struts_actions'))
+    fresh_registry(packs_dir)
+
+    from forge.utils.file_scanner import scan_java_files
+
+    src = _tree(tmp_path / "src", "res/struts.xml", "com/corp/LoginAction.java")
+    with pytest.raises(ValueError) as exc:
+        scan_java_files(str(src), "half-runnable")
+    assert "worse than not running at all" in str(exc.value)
+
+
 def test_scanner_refuses_a_selector_only_pack_instead_of_finding_nothing(fresh_registry, tmp_path):
     """Silently scanning zero files would report a clean run over an untouched
     codebase — the worst available outcome."""

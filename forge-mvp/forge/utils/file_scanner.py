@@ -27,6 +27,23 @@ class ScanResult(NamedTuple):
     skipped: List[SkippedFile]
 
 
+def runnable_phases() -> List[str]:
+    """Phases and packs that can be run as a bare ``--phase`` today.
+
+    A pack needing a context extractor is excluded until that extractor exists.
+    """
+    # all_phase_names() rather than the import-time PHASE_NAMES snapshot, so
+    # this stays correct when the pack directory is pointed somewhere else.
+    from forge.phases import all_phase_names, get_phase
+
+    out = []
+    for name in all_phase_names():
+        spec = get_phase(name)
+        if not getattr(spec, "needs_selectors", False):
+            out.append(name)
+    return out
+
+
 def scan_java_files(
     source_dir: str,
     phase: str = "java21",
@@ -51,10 +68,17 @@ def scan_java_files(
     # Struts actions?") cannot be answered by walking the tree — the routing
     # table answers it. Scanning anyway would return zero files and report a
     # clean run over an untouched codebase, which is the worst possible outcome.
-    if getattr(spec, "needs_selectors", False) and not spec.globs:
+    if getattr(spec, "needs_selectors", False):
         raise ValueError(
             f"Pack '{phase}' selects files by {', '.join(spec.selectors)}, which only the "
-            "context extractor can resolve. It cannot be run as a bare --phase yet."
+            f"'{spec.context}' context extractor can resolve, and that is not built yet.\n"
+            + (
+                f"It also matches {', '.join(spec.globs)} directly — but running only those "
+                "would migrate the configuration and skip the classes it refers to, which is "
+                "worse than not running at all.\n"
+                if spec.globs else ""
+            )
+            + "Runnable today: " + ", ".join(runnable_phases()) + "."
         )
 
     source_path = Path(source_dir).resolve()
