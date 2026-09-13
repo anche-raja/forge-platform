@@ -16,8 +16,8 @@ depends_on: []
 decisions: []
 eliminates: []
 acceptance:
-  - no_match: "unused"
-    scope: "src/**/*.java"
+  - no_match: 'ant'
+    scope: "**/build.xml"
 ---
 
 ## transform

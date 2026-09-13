@@ -15,7 +15,7 @@ depends_on: [javax-to-jakarta, spring-to-spring6]
 decisions: []
 eliminates: []
 acceptance:
-  - no_match: "javax\.jms"
+  - no_match: 'javax\.jms'
     scope: "src/**/*.java"
 ---
 

@@ -6,7 +6,7 @@ tier: view
 detect:
   any:
     - file_glob: "**/*.jsp"
-    - content_match: "java\\.sun\\.com/jsp/jstl"
+    - content_match: 'java\.sun\.com/jsp/jstl'
     - dependency: "javax.servlet:jstl"
 applies_to:
   - file_glob: "**/*.jsp"
@@ -19,9 +19,9 @@ decisions: [views, url_compat]
 eliminates:
   - "javax.servlet:jstl"
 acceptance:
-  - no_match: "java\\.sun\\.com/jsp/jstl"
+  - no_match: 'java\.sun\.com/jsp/jstl'
     scope: "**/*.jsp"
-  - no_match: "<(s|html|bean|logic|nested):"
+  - no_match: '<(s|html|bean|logic|nested):'
     scope: "**/*.jsp"
 ---
 

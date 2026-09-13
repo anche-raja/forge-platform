@@ -22,7 +22,7 @@ eliminates:
   - "org.apache.struts:struts-core"
   - "org.apache.struts:struts-taglib"
 acceptance:
-  - no_match: "org\\.apache\\.struts\\.action"
+  - no_match: 'org\.apache\.struts\.action'
     scope: "src/**/*.java"
   - routing_parity: true
 ---

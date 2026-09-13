@@ -23,9 +23,9 @@ eliminates:
   - "javax.annotation:javax.annotation-api"
   - "javax.validation:validation-api"
 acceptance:
-  - no_match: "^import javax\\.(servlet|persistence|validation|transaction|ejb|enterprise|faces|el|jms|mail|ws\\.rs|websocket|interceptor|annotation\\.(Resource|PostConstruct|PreDestroy)|xml\\.(bind|soap|ws))"
+  - no_match: '^import javax\.(servlet|persistence|validation|transaction|ejb|enterprise|faces|el|jms|mail|ws\.rs|websocket|interceptor|annotation\.(Resource|PostConstruct|PreDestroy)|xml\.(bind|soap|ws))'
     scope: "**/*.java"
-  - count_unchanged: "^import javax\\.(sql|crypto|net|naming|security\\.auth|xml\\.(parsers|transform|stream|xpath)|imageio|swing|management|script|tools|lang\\.model|annotation\\.processing)"
+  - count_unchanged: '^import javax\.(sql|crypto|net|naming|security\.auth|xml\.(parsers|transform|stream|xpath)|imageio|swing|management|script|tools|lang\.model|annotation\.processing)'
     scope: "**/*.java"
 ---
 

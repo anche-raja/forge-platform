@@ -20,7 +20,7 @@ eliminates:
   - "org.apache.struts:*"
   - "ognl:ognl"
 acceptance:
-  - no_match: "org\\.apache\\.struts|com\\.opensymphony\\.xwork2"
+  - no_match: 'org\.apache\.struts|com\.opensymphony\.xwork2'
     scope: "src/**/*.java"
   - routing_parity: true
 ---

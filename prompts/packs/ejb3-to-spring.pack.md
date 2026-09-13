@@ -16,7 +16,7 @@ depends_on: [spring-to-spring6]
 decisions: [persistence]
 eliminates: []
 acceptance:
-  - no_match: "(javax|jakarta)\.ejb\."
+  - no_match: '(javax|jakarta)\.ejb\.'
     scope: "src/**/*.java"
 ---
 

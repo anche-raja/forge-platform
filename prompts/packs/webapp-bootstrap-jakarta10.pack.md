@@ -20,7 +20,7 @@ depends_on: [spring-to-spring6, springsec-to-springsec6]
 decisions: [runtime, container]
 eliminates: []
 acceptance:
-  - no_match: "SpringBootServletInitializer|SpringBootApplication|org\\.springframework\\.boot"
+  - no_match: 'SpringBootServletInitializer|SpringBootApplication|org\.springframework\.boot'
     scope: "src/**/*.java"
   - build: "mvn -q -DskipTests package"
 ---
@@ -103,13 +103,25 @@ it. Note that `<security-constraint>` matching and `requestMatchers` matching di
 slashes and on unlisted HTTP methods — a constraint that omitted `<http-method>` covered *all*
 methods.
 
-Rule 6 — Servlet API level. Jakarta EE 10 is Servlet 6.0. Removed or changed since 3.1:
+Rule 6 — Namespace, in every filter, listener and servlet you touch. The `javax-to-jakarta` pack
+runs before this one, but the components you rewrite here are Java sources and the same rule and
+the same trap apply:
+- MIGRATE `javax.servlet.*` → `jakarta.servlet.*`, and likewise `javax.annotation.@Resource`,
+  `@PostConstruct`, `@PreDestroy`.
+- **LEAVE ALONE the JDK's own `javax.*`** — `javax.sql` (a filter or listener that looks up a
+  `DataSource` uses `javax.sql.DataSource`, and rewriting it breaks the build), `javax.naming`
+  (the JNDI lookup itself), `javax.crypto`, `javax.net`, `javax.security.auth`,
+  `javax.xml.parsers`, `javax.xml.transform`.
+- `ServletRequestAware`-style framework interfaces are gone with the framework; take
+  `HttpServletRequest` / `HttpServletResponse` as method parameters instead.
+
+Rule 7 — Servlet API level. Jakarta EE 10 is Servlet 6.0. Removed or changed since 3.1:
 `HttpServletRequest.getRealPath()` (use `getServletContext().getRealPath()`),
 `HttpSessionContext`, `SingleThreadModel`, `javax.servlet.http.HttpUtils`, and
 `ServletContext.getServlet*`. Replace or flag each. Also: Servlet 6 rejects request paths
 containing encoded path separators by default, which can break URLs that previously worked.
 
-Rule 7 — EAR assembly. If an `application.xml` declares multiple modules with a shared library
+Rule 8 — EAR assembly. If an `application.xml` declares multiple modules with a shared library
 directory, keep it. An EAR classloader isolates modules in ways a plain WAR does not, and
 flattening it changes which class wins. Preserve the module list and `<library-directory>`, and
 flag any module that is being retired so the assembly is updated rather than left dangling.

@@ -19,7 +19,7 @@ depends_on: [javax-to-jakarta]
 decisions: [views]
 eliminates: []
 acceptance:
-  - no_match: "javax\.faces\."
+  - no_match: 'javax\.faces\.'
     scope: "src/**/*.java"
 ---
 

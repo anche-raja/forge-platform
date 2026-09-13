@@ -16,7 +16,7 @@ depends_on: [spring-to-spring6]
 decisions: []
 eliminates: []
 acceptance:
-  - no_match: "WebSecurityConfigurerAdapter|authorizeRequests|antMatchers|mvcMatchers|EnableGlobalMethodSecurity"
+  - no_match: 'WebSecurityConfigurerAdapter|authorizeRequests|antMatchers|mvcMatchers|EnableGlobalMethodSecurity'
     scope: "src/**/*.java"
   - authz_parity: true
 ---

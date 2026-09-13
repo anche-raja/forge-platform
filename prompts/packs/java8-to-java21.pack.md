@@ -16,7 +16,7 @@ depends_on: [build-maven-modernize]
 decisions: [idiom_aggressiveness]
 eliminates: []
 acceptance:
-  - no_match: "Thread\\.stop\\(|\\.runFinalizersOnExit\\(|new (Integer|Long|Double|Boolean|Character)\\("
+  - no_match: 'Thread\.stop\(|\.runFinalizersOnExit\(|new (Integer|Long|Double|Boolean|Character)\('
     scope: "**/*.java"
   - build: "mvn -q -DskipTests compile"
 ---

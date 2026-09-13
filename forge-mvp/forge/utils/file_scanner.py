@@ -46,6 +46,17 @@ def scan_java_files(
     pipeline means an out-of-scope file costs zero Bedrock calls.
     """
     spec = get_phase(phase)
+
+    # A pack whose applies_to is entirely named selectors ("which files are
+    # Struts actions?") cannot be answered by walking the tree — the routing
+    # table answers it. Scanning anyway would return zero files and report a
+    # clean run over an untouched codebase, which is the worst possible outcome.
+    if getattr(spec, "needs_selectors", False) and not spec.globs:
+        raise ValueError(
+            f"Pack '{phase}' selects files by {', '.join(spec.selectors)}, which only the "
+            "context extractor can resolve. It cannot be run as a bare --phase yet."
+        )
+
     source_path = Path(source_dir).resolve()
     results: List[str] = []
     skipped: List[SkippedFile] = []
@@ -55,12 +66,14 @@ def scan_java_files(
         dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS]
 
         for fname in files:
-            if not spec.includes(fname):
-                continue
             abs_path = Path(root) / fname
-            rel_path = str(abs_path.relative_to(source_path))
+            rel_path = str(abs_path.relative_to(source_path)).replace("\\", "/")
+            # Packs match on the path ("**/WEB-INF/web.xml"); a PhaseSpec reads
+            # the basename off it. Passing the relative path satisfies both.
+            if not spec.includes(rel_path):
+                continue
 
-            if "src/test" in rel_path.replace("\\", "/"):
+            if "src/test" in rel_path:
                 continue
 
             try:

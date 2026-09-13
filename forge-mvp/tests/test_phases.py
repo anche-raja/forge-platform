@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from forge.phases import PHASE_NAMES, PHASES, get_phase
+from forge.phases import BUILTIN_PHASE_NAMES, PHASE_NAMES, PHASES, get_phase
 from forge.utils.file_scanner import scan_java_files
 from tests.conftest import llm_reply, make_state, write_config
 from tests.test_phase0_closeout import _graph_mocks
@@ -19,7 +19,7 @@ def test_unknown_phase_is_rejected_with_options():
         get_phase("java99")
 
 
-@pytest.mark.parametrize("name", PHASE_NAMES)
+@pytest.mark.parametrize("name", BUILTIN_PHASE_NAMES)
 def test_every_phase_is_well_formed(name):
     spec = PHASES[name]
     assert spec.name == name
@@ -29,7 +29,7 @@ def test_every_phase_is_well_formed(name):
     assert '"score"' in spec.review_prompt
 
 
-@pytest.mark.parametrize("name", PHASE_NAMES)
+@pytest.mark.parametrize("name", BUILTIN_PHASE_NAMES)
 def test_review_rubric_sums_to_100(name):
     """A reviewer whose checks do not total 100 makes the pass/retry thresholds
     meaningless."""
@@ -38,7 +38,7 @@ def test_review_rubric_sums_to_100(name):
     assert sum(weights) == 100, f"{name} rubric sums to {sum(weights)}: {weights}"
 
 
-@pytest.mark.parametrize("name", PHASE_NAMES)
+@pytest.mark.parametrize("name", BUILTIN_PHASE_NAMES)
 def test_jdk_javax_exception_is_stated_in_both_prompts(name):
     """Telling the model 'zero javax.* allowed' without the JDK carve-out invites
     it to rewrite javax.crypto to jakarta.crypto and break the build."""
@@ -94,7 +94,7 @@ def test_struts_phase_includes_struts_xml_but_not_pom(tmp_path):
 
 def test_test_sources_excluded_in_every_phase(tmp_path):
     root = _tree(tmp_path)
-    for phase in PHASE_NAMES:
+    for phase in BUILTIN_PHASE_NAMES:
         assert not any("src/test" in f for f in _scan(root, phase))
 
 

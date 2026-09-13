@@ -18,7 +18,7 @@ depends_on: [javax-to-jakarta, spring-to-spring6]
 decisions: [persistence]
 eliminates: []
 acceptance:
-  - no_match: "javax\.ejb\.(SessionBean|EntityBean|EJBHome)"
+  - no_match: 'javax\.ejb\.(SessionBean|EntityBean|EJBHome)'
     scope: "src/**/*.java"
 ---
 

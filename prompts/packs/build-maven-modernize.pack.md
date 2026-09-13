@@ -14,7 +14,7 @@ decisions: [runtime, container]
 eliminates: []
 acceptance:
   - build: "mvn -q -DskipTests package"
-  - no_match: "org\\.springframework\\.boot"
+  - no_match: 'org\.springframework\.boot'
     scope: "**/pom.xml"
 ---
 

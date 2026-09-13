@@ -72,8 +72,11 @@ acceptance:                      # mechanical, post-migration; no model involved
   table, an EJB bean table, a faces navigation graph) declares it here and the engine guarantees it
   is populated before any model call. **A pack whose rules reference facts it did not declare is
   a bug** — the loader rejects it.
-- **`depends_on`** is a hard ordering edge. The planner topologically sorts activated packs; a
-  cycle is a startup error.
+- **`depends_on`** is an **ordering edge, not a requirement**. It fixes the order of two packs when
+  both are active and says nothing when only one is — `jsp-jstl-modernize` lists both Struts packs
+  because it must follow whichever is active, and a Struts 2 project never activates the Struts 1
+  one. The planner topologically sorts activated packs; a cycle is a startup error, and an edge
+  pointing outside the activated set is reported, not enforced.
 - **`acceptance`** checks run after the migration and are how "done" is decided. Model scores gate
   individual files; acceptance checks gate the **project**.
 - **`review` weights must total 100.** The loader asserts it, because `pass_threshold` is

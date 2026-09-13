@@ -71,6 +71,34 @@ def _emit_file_metrics(metrics, final: dict, fs: dict) -> None:
     metrics.emit(payload)
 
 
+def _list_packs() -> int:
+    """Print the pack library in dependency order. Exits non-zero if it is broken.
+
+    This is the one place a malformed pack reports in full — everywhere else the
+    library degrades to the built-in phases with a warning so that Phase 0 keeps
+    running.
+    """
+    from forge.packs import PackError, load_packs
+
+    try:
+        registry = load_packs()
+    except PackError as e:
+        print(f"Pack library failed to load:\n  {e}")
+        return 1
+
+    print(f"{len(registry)} packs — {len(registry.complete)} complete, "
+          f"{len(registry.detect_only)} detect-only\n")
+    for i, pack_id in enumerate(registry.order, 1):
+        pack = registry[pack_id]
+        mark = " " if pack.is_complete else "*"
+        deps = f"  after: {', '.join(pack.depends_on)}" if pack.depends_on else ""
+        print(f"{i:3}.{mark} [{pack.tier:<11}] {pack.id:<28} {pack.title}")
+        if deps:
+            print(f"     {deps}")
+    print("\n* detect-only — recognised, reported, but not yet migrated")
+    return 0
+
+
 def _force_utf8_console() -> None:
     """Windows consoles default to cp1252, which cannot encode the arrows and
     box characters this CLI prints. Degrade gracefully rather than crash."""
@@ -84,10 +112,12 @@ def _force_utf8_console() -> None:
 def main():
     _force_utf8_console()
     parser = argparse.ArgumentParser(description="FORGE Java migration pipeline")
-    parser.add_argument("source_dir", help="Root of the Java project to migrate")
-    from forge.phases import PHASES, PHASE_NAMES
-    phase_help = " | ".join(f"{n}: {PHASES[n].description}" for n in PHASE_NAMES)
-    parser.add_argument("--phase", required=True, choices=list(PHASE_NAMES),
+    parser.add_argument("source_dir", nargs="?", help="Root of the Java project to migrate")
+    parser.add_argument("--list-packs", action="store_true",
+                        help="List the stack pack library and exit")
+    from forge.phases import PHASE_NAMES, get_phase
+    phase_help = " | ".join(f"{n}: {get_phase(n).description}" for n in PHASE_NAMES)
+    parser.add_argument("--phase", choices=list(PHASE_NAMES),
                         help=f"Migration phase — {phase_help}")
     parser.add_argument("--dry-run", action="store_true", help="Run full pipeline without writing files or updating DynamoDB")
     parser.add_argument("--resume", action="store_true", help="Process only files with PENDING status in DynamoDB")
@@ -97,6 +127,13 @@ def main():
     parser.add_argument("--no-metrics", action="store_true", help="Skip CloudWatch metric emission")
     parser.add_argument("--log-level", default=None, help="Logging level (default: INFO, or $FORGE_LOG_LEVEL)")
     args = parser.parse_args()
+
+    if args.list_packs:
+        return _list_packs()
+    if not args.source_dir:
+        parser.error("source_dir is required (or use --list-packs)")
+    if not args.phase:
+        parser.error("--phase is required")
 
     from forge.utils.telemetry import MetricsEmitter, configure_logging
     configure_logging(args.log_level)

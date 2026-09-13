@@ -18,7 +18,7 @@ depends_on: [webapp-bootstrap-jakarta10]
 decisions: [container, liberty_edition, liberty_features]
 eliminates: []
 acceptance:
-  - no_match: "\\.xmi$"
+  - no_match: '\.xmi$'
     scope: "**/WEB-INF/ibm-web-*"
   - build: "mvn -q -DskipTests package"
 ---

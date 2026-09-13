@@ -17,7 +17,7 @@ depends_on: [javax-to-jakarta]
 decisions: []
 eliminates: []
 acceptance:
-  - no_match: "WebMvcConfigurerAdapter|AsyncRestTemplate|LocalContainerEntityManagerFactoryBean\\s*\\(\\s*\\)"
+  - no_match: 'WebMvcConfigurerAdapter|AsyncRestTemplate|LocalContainerEntityManagerFactoryBean\s*\(\s*\)'
     scope: "src/**/*.java"
 ---
 

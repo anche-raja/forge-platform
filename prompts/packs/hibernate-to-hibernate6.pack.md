@@ -18,7 +18,7 @@ depends_on: [javax-to-jakarta]
 decisions: [persistence]
 eliminates: []
 acceptance:
-  - no_match: "org\.hibernate\.(Criteria|classic)"
+  - no_match: 'org\.hibernate\.(Criteria|classic)'
     scope: "src/**/*.java"
 ---
 

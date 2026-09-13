@@ -10,8 +10,13 @@ carries the full mapping tables and six worked examples.
 """
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Tuple
+
+from forge.utils.telemetry import get_logger
+
+_log = get_logger(__name__)
 
 # ─── java21 ───────────────────────────────────────────────────────────────────
 
@@ -248,13 +253,58 @@ PHASES: Dict[str, PhaseSpec] = {
     ),
 }
 
-PHASE_NAMES = tuple(PHASES)
+# ─── packs ────────────────────────────────────────────────────────────────────
+#
+# The two phases above are Phase 0: hardcoded, and the only thing the deployed
+# pipeline runs today. Everything else is a pack on disk under prompts/packs/,
+# loaded lazily so that a malformed pack cannot stop `--phase java21` from
+# working. A PackSpec exposes .name/.description/.includes, so from here down a
+# pack and a PhaseSpec are interchangeable.
 
 
-def get_phase(name: str) -> PhaseSpec:
+@lru_cache(maxsize=1)
+def _packs():
+    """The pack registry, or None if the library could not be loaded."""
+    from forge.packs import load_packs
+    from forge.packs.spec import PackError
+
     try:
+        return load_packs()
+    except PackError as e:
+        # Loud, but not fatal: Phase 0 must keep running even while the pack
+        # library is mid-edit. `migrate.py --list-packs` reports it in full.
+        _log.warning("Pack library did not load, continuing with built-in phases only: %s", e)
+        return None
+
+
+def pack_names() -> Tuple[str, ...]:
+    """Ids of packs that are complete enough to name on the command line."""
+    registry = _packs()
+    if registry is None:
+        return ()
+    return tuple(p.id for p in registry.complete)
+
+
+def all_phase_names() -> Tuple[str, ...]:
+    return tuple(PHASES) + pack_names()
+
+
+# The two hardcoded phases, as distinct from packs loaded off disk. Phase 0
+# invariants are asserted against these; pack invariants live in test_packs.py.
+BUILTIN_PHASE_NAMES = tuple(PHASES)
+
+PHASE_NAMES = all_phase_names()
+
+
+def get_phase(name: str):
+    """Resolve a phase name to its spec — a built-in phase or a pack."""
+    if name in PHASES:
         return PHASES[name]
-    except KeyError:
-        raise ValueError(
-            f"Unknown phase '{name}'. Available: {', '.join(PHASE_NAMES)}"
-        ) from None
+
+    registry = _packs()
+    if registry is not None and name in registry:
+        return registry[name]
+
+    raise ValueError(
+        f"Unknown phase '{name}'. Available: {', '.join(all_phase_names())}"
+    )

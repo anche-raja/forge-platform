@@ -18,7 +18,7 @@ depends_on: [spring-to-spring6]
 decisions: [persistence]
 eliminates: []
 acceptance:
-  - no_match: "com\.ibatis"
+  - no_match: 'com\.ibatis'
     scope: "src/**/*.java"
 ---
 

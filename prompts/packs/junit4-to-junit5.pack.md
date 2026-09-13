@@ -17,7 +17,7 @@ decisions: []
 eliminates:
   - "junit:junit"
 acceptance:
-  - no_match: "org\\.junit\\.(Test|Before|After|Ignore|runner|Assert)"
+  - no_match: 'org\.junit\.(Test|Before|After|Ignore|runner|Assert)'
     scope: "**/src/test/java/**/*.java"
   - test_parity: true
 ---

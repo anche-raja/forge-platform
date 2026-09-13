@@ -16,7 +16,7 @@ depends_on: [javax-to-jakarta]
 decisions: []
 eliminates: []
 acceptance:
-  - no_match: "javax\.ws\.rs"
+  - no_match: 'javax\.ws\.rs'
     scope: "src/**/*.java"
 ---
 
