@@ -9,9 +9,11 @@ detect:
     - import_prefix: "org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter"
     - xml_element: "http://www.springframework.org/schema/security:http"
 applies_to:
-  - selector: security_config
   - file_glob: "**/spring-security*.xml"
-context: authz_rule_set
+  - content_match:
+      glob: "**/*.java"
+      pattern: 'WebSecurityConfigurerAdapter|@EnableWebSecurity|@EnableGlobalMethodSecurity|@EnableMethodSecurity|GlobalMethodSecurityConfiguration|SecurityFilterChain'
+context: none
 depends_on: [spring-to-spring6]
 decisions: []
 eliminates: []
@@ -25,10 +27,11 @@ acceptance:
 
 You are migrating Spring Security 4.x/5.x configuration to Spring Security 6.3.
 
-**You are given the extracted authorization rule set**: every path pattern, its required
-authority/role/expression, the order the rules were declared in, and the CSRF, session, headers
-and authentication configuration. Spring Security evaluates rules **in declaration order, first
-match wins** — reordering them silently changes who can reach what.
+The file you are given **is** the authorization rule set: every path pattern, its required
+authority or role, the order the rules are declared in, and the CSRF, session, headers and
+authentication configuration. Spring Security evaluates rules **in declaration order, first match
+wins** — reordering them silently changes who can reach what, so work through them in sequence and
+keep that sequence.
 
 This pack has one overriding constraint: **the effective authorization outcome for every path must
 be identical before and after.** Everything else is secondary.
@@ -82,7 +85,7 @@ Respond ONLY with valid JSON:
 Score on 5 checks (total 100).
 
 Check 1 — Authorization outcome identical (40 pts):
-Compare the migrated rules against the supplied rule set, in order. Every pattern, every
+Compare the migrated rules against the original, in order. Every pattern, every
 authority, the same first-match-wins order, the same `hasRole` vs `hasAuthority` choice, the same
 `anyRequest()` terminal. **Any added, removed, reordered or weakened rule scores 0 for the whole
 check** — this is the only check that matters if it fails.

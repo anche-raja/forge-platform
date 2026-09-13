@@ -129,7 +129,29 @@ A 2.3 or 2.5 DOCTYPE may be uplifted to 6.5. Inventing a 7.0 DTD makes the confi
 unparseable and the application fails at startup. Validation XML keeps its
 `xwork-validator-1.0.3.dtd` DOCTYPE — that filename is unchanged.
 
-Rule 8 — Leave alone: action names, namespaces, result names, the interceptor stack composition,
+Rule 8 — Struts and Spring in the same application. This is the common shape — Struts serving
+most paths, a Spring root context underneath, often a `DispatcherServlet` on its own prefix — and
+Struts 7 changes it in one specific way that is easy to miss:
+
+- `struts.objectFactory = spring` and `struts.objectFactory.spring.autoWire` keep working. Do not
+  change them, and do not convert `@Component("FooAction") @Scope("prototype")` actions into
+  anything else. **They stay prototype-scoped** — a Struts action is created per request, and that
+  is exactly what you are preserving by staying on Struts.
+- **OGNL access to proxied objects is now blocked, and a Spring-managed action is frequently a
+  proxy.** Any action carrying `@Transactional`, `@Secured`, `@PreAuthorize`, `@Async`, `@Cacheable`
+  or a custom AOP aspect is proxied by Spring, and OGNL can no longer traverse it — the JSP renders
+  blank values or the parameter interceptor fails to set them, with no exception. For every action
+  class that is proxied, add its package to `struts.allowlist.packageNames`, and flag it so a human
+  confirms the page still renders. Do **not** respond by disabling the allowlist.
+- `struts2-spring-plugin` must move to the same version as `struts2-core`. A mixed pair fails at
+  startup while resolving the object factory, which at least fails loudly.
+- Where a `DispatcherServlet` is mounted alongside the Struts filter, `struts.action.excludePattern`
+  keeps Struts from claiming those paths. Preserve it verbatim. Changing the Struts filter mapping
+  or the exclude pattern changes which framework answers a URL.
+- Spring Security's filter chain runs in front of Struts, in `web.xml` or the initializer. It is
+  migrated by `springsec-to-springsec6`, not here — leave the filter declarations alone.
+
+Rule 9 — Leave alone: action names, namespaces, result names, the interceptor stack composition,
 result types, JSP tag usage (`/struts-tags` is unchanged), and all business logic. The URL a user
 hits before this upgrade must be the URL they hit after it.
 
@@ -160,10 +182,13 @@ both set explicitly to their pre-7 values, with a TODO recommending a deliberate
 Action names, namespaces and result names are untouched. Silently accepting the new defaults
 scores 0 — actions that resolved before will 404.
 
-Check 4 — Removed plugins and restricted OGNL handled (15 pts):
+Check 4 — Removed plugins, restricted OGNL, and Spring coexistence (15 pts):
 `fileUpload` replaced by `actionFileUpload` with `UploadedFile` properties. Removed plugins
-flagged rather than substituted. Static-field OGNL expressions, over-length expressions and
-custom map instantiation each flagged; allowlist configured by package rather than disabled.
+flagged rather than substituted. Static-field OGNL expressions, over-length expressions and custom
+map instantiation each flagged; the allowlist configured by package rather than disabled. Actions
+that Spring proxies (`@Transactional`, `@Secured`, `@PreAuthorize`, AOP) are allowlisted and
+flagged — an unlisted proxied action renders blank values with no exception, so missing this
+scores 0. `@Scope("prototype")` preserved; `struts.objectFactory` and `excludePattern` untouched.
 
 Check 5 — DTD and scope discipline (10 pts):
 The DOCTYPE is a real DTD — 6.5 or the existing one, **never an invented 7.0**. FreeMarker

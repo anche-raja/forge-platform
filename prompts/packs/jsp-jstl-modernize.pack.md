@@ -14,8 +14,8 @@ applies_to:
   - file_glob: "**/*.tag"
   - file_glob: "**/*.tagf"
 context: view_bindings
-depends_on: [struts2-to-springmvc6, struts1-to-springmvc6, javax-to-jakarta]
-decisions: [views, url_compat]
+depends_on: [struts2-modernize, struts2-to-springmvc6, struts1-to-springmvc6, javax-to-jakarta]
+decisions: [views, url_compat, web_framework]
 eliminates:
   - "javax.servlet:jstl"
 acceptance:
@@ -23,12 +23,26 @@ acceptance:
     scope: "**/*.jsp"
   - no_match: '<(s|html|bean|logic|nested):'
     scope: "**/*.jsp"
+    when: {web_framework: migrate-to-spring}
 ---
 
 ## transform
 
 You are migrating one JSP from JSTL 1.x (and, where present, a framework taglib) to Jakarta
 JSTL 3.0 on Jakarta EE 10.
+
+**How much you change depends on the `web_framework` decision, and getting this wrong breaks every
+page:**
+
+- **`modernize-in-place`** — the application is staying on Struts, upgraded to Struts 7. Struts 7
+  still ships `/struts-tags` and every `<s:` tag still works. **Apply Rule 1 only.** Leave every
+  `<s:` tag, the `/struts-tags` declaration, and every OGNL expression exactly as they are.
+  Stripping them would remove the framework that is still rendering the page. Rules 2 to 4 do not
+  apply; skip them.
+- **`migrate-to-spring`** — the framework is being replaced, so the tags must go. Apply all rules.
+
+Rule 1 is mandatory in both cases: Jakarta EE 10 does not serve the old JSTL URIs, so a JSP left
+on `java.sun.com` fails to render regardless of which route the application is taking.
 
 **You are given the view bindings**: the controller that renders this view, the model attribute
 names and types it exposes, the form-backing object where one exists, and the migrated URL for

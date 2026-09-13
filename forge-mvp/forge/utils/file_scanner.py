@@ -1,7 +1,9 @@
 import os
+import re
 from pathlib import Path
 from typing import List, NamedTuple
 
+from forge.packs.glob import glob_match
 from forge.phases import get_phase
 from forge.utils.java_checks import declared_package, in_scope
 from forge.utils.telemetry import get_logger
@@ -25,6 +27,15 @@ class SkippedFile(NamedTuple):
 class ScanResult(NamedTuple):
     files: List[str]
     skipped: List[SkippedFile]
+
+
+def _wants_tests(spec) -> bool:
+    """Whether this phase deliberately targets test sources.
+
+    Test sources are excluded by default — they are not what a migration is
+    judged on. A pack that exists to migrate them says so with its globs.
+    """
+    return any("src/test" in g for g in getattr(spec, "globs", ()))
 
 
 def runnable_phases() -> List[str]:
@@ -92,12 +103,17 @@ def scan_java_files(
         for fname in files:
             abs_path = Path(root) / fname
             rel_path = str(abs_path.relative_to(source_path)).replace("\\", "/")
-            # Packs match on the path ("**/WEB-INF/web.xml"); a PhaseSpec reads
-            # the basename off it. Passing the relative path satisfies both.
-            if not spec.includes(rel_path):
+            if "src/test" in rel_path and not _wants_tests(spec):
                 continue
 
-            if "src/test" in rel_path:
+            # Packs match on the path ("**/WEB-INF/web.xml"); a PhaseSpec reads
+            # the basename off it. Passing the relative path satisfies both.
+            matched = spec.includes(rel_path)
+            matchers = [
+                pattern for glob, pattern in getattr(spec, "content_matchers", ())
+                if glob_match(glob, rel_path)
+            ]
+            if not matched and not matchers:
                 continue
 
             try:
@@ -105,6 +121,11 @@ def scan_java_files(
                 if "DO NOT EDIT" in content[:500]:
                     continue
             except OSError:
+                continue
+
+            # A content matcher answers "is this the security config?" from the
+            # file's own bytes — no extractor, so the pack stays runnable.
+            if not matched and not any(re.search(p, content) for p in matchers):
                 continue
 
             # Reuses the content already read above — no extra I/O.

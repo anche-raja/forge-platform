@@ -152,15 +152,26 @@ def _applies_to(meta: dict, where: Path) -> Tuple[Dict[str, str], ...]:
         if not isinstance(entry, dict) or len(entry) != 1:
             raise PackError(f"{where}: each applies_to entry must be a single-key mapping, got {entry!r}")
         (key, value), = entry.items()
-        if key not in ("file_glob", "selector"):
-            raise PackError(f"{where}: applies_to key must be 'file_glob' or 'selector', got '{key}'")
-        if not isinstance(value, str) or not value:
+        if key not in ("file_glob", "selector", "content_match"):
+            raise PackError(
+                f"{where}: applies_to key must be 'file_glob', 'content_match' or 'selector', got '{key}'"
+            )
+        if key == "content_match":
+            if not isinstance(value, dict) or set(value) != {"glob", "pattern"}:
+                raise PackError(
+                    f"{where}: applies_to 'content_match' needs exactly {{glob, pattern}}, got {value!r}"
+                )
+            try:
+                re.compile(value["pattern"])
+            except re.error as e:
+                raise PackError(f"{where}: applies_to 'content_match' pattern is not a valid regex: {e}") from None
+        elif not isinstance(value, str) or not value:
             raise PackError(f"{where}: applies_to '{key}' must be a non-empty string")
         out.append({key: value})
     return tuple(out)
 
 
-def _acceptance(meta: dict, where: Path) -> Tuple[AcceptanceCheck, ...]:
+def _acceptance(meta: dict, where: Path, declared_decisions: Tuple[str, ...]) -> Tuple[AcceptanceCheck, ...]:
     raw = meta.get("acceptance")
     if raw is None:
         raw = []
@@ -171,7 +182,16 @@ def _acceptance(meta: dict, where: Path) -> Tuple[AcceptanceCheck, ...]:
         if not isinstance(entry, dict):
             raise PackError(f"{where}: each acceptance check must be a mapping, got {entry!r}")
         scope = entry.get("scope", "")
-        kinds = [k for k in entry if k != "scope"]
+        when = entry.get("when") or {}
+        if not isinstance(when, dict) or any(not isinstance(v, str) for v in when.values()):
+            raise PackError(f"{where}: acceptance 'when' must be a mapping of decision to value")
+        for key in when:
+            if key not in declared_decisions:
+                raise PackError(
+                    f"{where}: acceptance 'when' names decision '{key}', which the pack does not "
+                    f"declare in its 'decisions' list"
+                )
+        kinds = [k for k in entry if k not in ("scope", "when")]
         if len(kinds) != 1:
             raise PackError(
                 f"{where}: each acceptance check needs exactly one kind besides 'scope', got {kinds!r}"
@@ -193,7 +213,8 @@ def _acceptance(meta: dict, where: Path) -> Tuple[AcceptanceCheck, ...]:
                 re.compile(value)
             except re.error as e:
                 raise PackError(f"{where}: acceptance '{kind}' is not a valid regex: {e}") from None
-        out.append(AcceptanceCheck(kind=kind, value=value, scope=scope))
+        out.append(AcceptanceCheck(kind=kind, value=value, scope=scope,
+                                   when=tuple(sorted(when.items()))))
     return tuple(out)
 
 
@@ -289,7 +310,7 @@ def parse_pack(path: Path) -> PackSpec:
         decisions=_str_list(meta, "decisions", path),
         eliminates=_str_list(meta, "eliminates", path),
         upgrades=_coordinates(meta, "upgrades", path, parts=3),
-        acceptance=_acceptance(meta, path),
+        acceptance=_acceptance(meta, path, _str_list(meta, "decisions", path)),
         transform_prompt=transform,
         review_prompt=review,
         source_path=path,

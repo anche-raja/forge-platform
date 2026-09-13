@@ -80,6 +80,12 @@ class AcceptanceCheck:
     kind: str
     value: Any
     scope: str = ""
+    # Only applies when the profile's decisions match. "No Struts tag remains"
+    # is correct when replacing the framework and wrong when upgrading it.
+    when: Tuple[Tuple[str, str], ...] = ()
+
+    def applies(self, decisions: Mapping[str, str]) -> bool:
+        return all(decisions.get(k) == v for k, v in self.when)
 
 
 @dataclass(frozen=True)
@@ -96,7 +102,7 @@ class PackSpec:
     tier: str
     status: str
     detect: Tuple[DetectRule, ...]
-    applies_to: Tuple[Dict[str, str], ...]
+    applies_to: Tuple[Dict[str, object], ...]
     context: str
     depends_on: Tuple[str, ...]
     decisions: Tuple[str, ...]
@@ -125,7 +131,21 @@ class PackSpec:
 
     @property
     def globs(self) -> Tuple[str, ...]:
-        return tuple(a["file_glob"] for a in self.applies_to if "file_glob" in a)
+        return tuple(a["file_glob"] for a in self.applies_to if "file_glob" in a)  # type: ignore[misc]
+
+    @property
+    def content_matchers(self) -> Tuple[Tuple[str, str], ...]:
+        """(glob, regex) pairs: files matching `glob` whose text matches `regex`.
+
+        The escape hatch for a file set that is real but not nameable by path —
+        "the class that extends WebSecurityConfigurerAdapter" is not a filename
+        pattern. Unlike a selector this needs no extractor: it is decidable from
+        one file's own bytes, which is what keeps the pack runnable.
+        """
+        return tuple(
+            (a["content_match"]["glob"], a["content_match"]["pattern"])  # type: ignore[index]
+            for a in self.applies_to if "content_match" in a
+        )
 
     @property
     def selectors(self) -> Tuple[str, ...]:
@@ -135,7 +155,7 @@ class PackSpec:
         known from the routing table, not from a path. The planner resolves
         these; :meth:`includes` cannot and does not try.
         """
-        return tuple(a["selector"] for a in self.applies_to if "selector" in a)
+        return tuple(a["selector"] for a in self.applies_to if "selector" in a)  # type: ignore[misc]
 
     @property
     def needs_selectors(self) -> bool:

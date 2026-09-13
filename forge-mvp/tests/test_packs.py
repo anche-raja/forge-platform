@@ -195,7 +195,7 @@ def test_invalid_detect_regex_is_rejected(packs):
 
 def test_unknown_applies_to_key_is_rejected(packs):
     write_pack(packs, "p", frontmatter=_fm(applies_to='\n  - everything: "yes"'))
-    assert "'file_glob' or 'selector'" in load_error(packs)
+    assert "'file_glob', 'content_match' or 'selector'" in load_error(packs)
 
 
 def test_unknown_acceptance_kind_is_rejected(packs):
@@ -712,3 +712,42 @@ def test_struts_modernize_keeps_struts_rather_than_removing_it(library):
     assert any(c.startswith("org.apache.struts:struts2-core:") for c in pack.upgrades)
     assert "org.apache.struts:*" not in pack.eliminates
     assert "org.apache.struts:struts2-core" not in pack.eliminates
+
+
+def test_acceptance_when_must_name_a_declared_decision(packs):
+    write_pack(packs, "p", frontmatter=_fm(
+        "p", acceptance="\n  - no_match: 'x'\n    when: {views: in-place}"))
+    assert "does not declare" in load_error(packs)
+
+
+def test_jsp_pack_only_strips_framework_tags_when_replacing_the_framework(library):
+    """Struts 7 still ships /struts-tags. Stripping them from an app that is
+    staying on Struts deletes the framework rendering the page."""
+    pack = library["jsp-jstl-modernize"]
+    assert "web_framework" in pack.decisions
+
+    strip = [a for a in pack.acceptance if a.kind == "no_match" and "nested" in str(a.value)]
+    assert strip, "expected the framework-tag check"
+    assert strip[0].applies({"web_framework": "migrate-to-spring"})
+    assert not strip[0].applies({"web_framework": "modernize-in-place"})
+
+    # The JSTL URI move is unconditional: Jakarta EE 10 does not serve the old
+    # URIs, so a JSP left on java.sun.com fails to render either way.
+    jstl = [a for a in pack.acceptance if "java" in str(a.value) and "sun" in str(a.value)]
+    assert jstl and jstl[0].when == ()
+
+
+def test_a_hybrid_struts_spring_app_has_no_blocked_packs(library):
+    """The shape this platform was asked to handle first: Struts and Spring in
+    one application, upgraded in place."""
+    from forge.utils.file_scanner import runnable_phases
+
+    hybrid = ["build-maven-modernize", "java8-to-java21", "javax-to-jakarta",
+              "spring-to-spring6", "springsec-to-springsec6", "struts2-modernize",
+              "jsp-jstl-modernize", "junit4-to-junit5"]
+    assert set(hybrid) <= set(runnable_phases())
+    # ...and they resolve into a real order, build first, views after the framework.
+    order = library.resolve_order(hybrid)
+    assert order[0] == "build-maven-modernize"
+    assert order.index("struts2-modernize") < order.index("jsp-jstl-modernize")
+    assert order.index("javax-to-jakarta") < order.index("spring-to-spring6")

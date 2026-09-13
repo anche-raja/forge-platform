@@ -48,8 +48,11 @@ detect:                          # ANY match activates the pack
     - import_prefix: "com.opensymphony.xwork2"
 
 applies_to:                      # which files this pack transforms
-  - selector: struts_actions     # named selector resolved by the context extractor
   - file_glob: "**/struts*.xml"
+  - content_match:               # decidable from one file's bytes — no extractor
+      glob: "**/*.java"
+      pattern: 'WebSecurityConfigurerAdapter|@EnableWebSecurity'
+  - selector: struts_actions     # named selector resolved by the context extractor
 
 context: struts_routing_table    # deterministic extractor that must run before transform
 depends_on: [javax-to-jakarta, spring-to-spring6]
@@ -70,6 +73,16 @@ acceptance:                      # mechanical, post-migration; no model involved
 
 - **`detect`** must be decidable **without an LLM** — dependency coordinates, file globs, import
   prefixes, XML doctypes, descriptor element names. Detection is evidence, not opinion.
+- **`applies_to`** takes three kinds. A `file_glob` names files by path. A `content_match`
+  (`{glob, pattern}`) names them by what is in them — "the class that extends
+  `WebSecurityConfigurerAdapter`" is a real file set with no filename pattern, and it is decidable
+  from one file's own bytes, so a pack using it needs no extractor and stays runnable. A
+  `selector` names a set only a context extractor can resolve, and blocks the pack until that
+  extractor exists. **Prefer `content_match` to a `selector` wherever the question is answerable
+  from a single file** — the difference is whether the pack runs today.
+- **`acceptance`** checks may carry `when: {decision: value}`, so a check that is right on one
+  route is not applied on the other. "No Struts tag remains" is correct when the framework is
+  being replaced and wrong when it is being upgraded.
 - **`context`** names a deterministic extractor. A pack that needs cross-file facts (a routing
   table, an EJB bean table, a faces navigation graph) declares it here and the engine guarantees it
   is populated before any model call. **A pack whose rules reference facts it did not declare is
