@@ -1,6 +1,7 @@
 import re
+import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Mapping, Optional, Sequence
 
 from forge.state import ForgeState
 from forge.utils.java_checks import declared_package
@@ -49,32 +50,98 @@ def resolve_relative(file_path: str, content: str, source_dir: str) -> Path:
     return _resolve_relative(file_path, content, source_dir)
 
 
-def write_output(state: ForgeState) -> List[str]:
-    """Write transformed files to output_dir, preserving package paths.
+# Held units wait here, inside output_dir, until a human approves them. Inside
+# so the same path guard covers both trees; a dot-directory so the merged view
+# and the acceptance checks skip it.
+STAGING_DIR = ".forge-staging"
 
-    Returns the absolute paths written, so the build verifier knows what to
-    compile. No-op returning [] when dry_run=True.
+
+def staging_root(output_dir: str) -> Path:
+    return Path(output_dir).resolve() / STAGING_DIR
+
+
+def write_files(files: Mapping[str, str], source_dir: str, dest_root: Path) -> List[str]:
+    """Write ``files`` (model-keyed path → content) under ``dest_root``, preserving package paths.
+
+    The key comes from model output; it is never allowed to escape ``dest_root``.
+    Returns the absolute paths written.
     """
-    if state.get("dry_run"):
-        return []
-
-    transform_output = state["current_file"].get("transform_output") or {}
-    output_dir = Path(state["output_dir"]).resolve()
-    source_dir = Path(state["source_dir"]).resolve()
+    dest_root = Path(dest_root).resolve()
+    src = Path(source_dir).resolve()
     written: List[str] = []
-
-    for file_path, content in transform_output.get("files", {}).items():
-        rel_path = _resolve_relative(file_path, content, source_dir)
-        dest = (output_dir / rel_path).resolve()
-
-        # The key comes from model output; never let it escape output_dir.
-        if not dest.is_relative_to(output_dir):
-            _log.error("Refusing to write outside output dir: %s -> %s", file_path, dest)
+    for file_path, content in files.items():
+        rel_path = _resolve_relative(file_path, content, src)
+        dest = (dest_root / rel_path).resolve()
+        if not dest.is_relative_to(dest_root):
+            _log.error("Refusing to write outside %s: %s -> %s", dest_root, file_path, dest)
             continue
-
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
         written.append(str(dest))
         _log.info("Wrote %s", dest)
-
     return written
+
+
+def _files_from(state: ForgeState) -> Mapping[str, str]:
+    out = state["current_file"].get("transform_output") or {}
+    return out.get("files", {}) if isinstance(out, dict) else {}
+
+
+def write_output(state: ForgeState) -> List[str]:
+    """Write transformed files to output_dir. No-op returning [] when dry_run=True."""
+    if state.get("dry_run"):
+        return []
+    return write_files(_files_from(state), state["source_dir"], Path(state["output_dir"]))
+
+
+def stage_output(state: ForgeState) -> List[str]:
+    """Write transformed files to the staging tree instead — held for a human."""
+    if state.get("dry_run"):
+        return []
+    return write_files(_files_from(state), state["source_dir"], staging_root(state["output_dir"]))
+
+
+def promote_staged(output_dir: str, held_paths: Sequence[str]) -> List[str]:
+    """Move approved files from staging into output_dir. Both ends are guarded."""
+    root = Path(output_dir).resolve()
+    stage = staging_root(output_dir)
+    written: List[str] = []
+    for held in held_paths:
+        src = Path(held).resolve()
+        if not src.is_relative_to(stage) or not src.is_file():
+            _log.error("Refusing to promote %s: not a staged file", held)
+            continue
+        dest = (root / src.relative_to(stage)).resolve()
+        if not dest.is_relative_to(root):
+            _log.error("Refusing to promote %s outside output dir", held)
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        written.append(str(dest))
+        _log.info("Promoted %s", dest)
+    _prune_empty(stage)
+    return written
+
+
+def discard_staged(output_dir: str, held_paths: Sequence[str]) -> None:
+    """Remove rejected or retried units from staging."""
+    stage = staging_root(output_dir)
+    for held in held_paths:
+        p = Path(held).resolve()
+        if p.is_relative_to(stage) and p.is_file():
+            p.unlink()
+    _prune_empty(stage)
+
+
+def _prune_empty(root: Path) -> None:
+    if not root.is_dir():
+        return
+    for d in sorted((d for d in root.rglob("*") if d.is_dir()), key=lambda d: -len(d.parts)):
+        try:
+            d.rmdir()
+        except OSError:
+            pass
+    try:
+        root.rmdir()
+    except OSError:
+        pass

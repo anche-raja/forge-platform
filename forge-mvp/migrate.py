@@ -30,6 +30,7 @@ def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, sour
         "files_retried": 0,
         "files_manual": 0,
         "files_blocked": 0,
+        "files_held": 0,
         "bedrock_calls": 0,
         "estimated_cost_usd": 0.0,
         "messages": [],
@@ -362,7 +363,9 @@ def main():
     blocked = sum(1 for fs in all_statuses if fs.get("status") == "BLOCKED")
     manual_count = len(manual)
 
-    print(f"\nSummary: {passed} passed | {manual_count} manual | {blocked} blocked | {total_bedrock_calls} Bedrock calls")
+    held = sum(1 for fs in all_statuses if fs.get("status") == "HELD")
+    held_str = f" | {held} held" if held else ""
+    print(f"\nSummary: {passed} passed | {manual_count} manual | {blocked} blocked{held_str} | {total_bedrock_calls} Bedrock calls")
     print(f"Report: {report_path}")
 
 

@@ -183,9 +183,12 @@ def test_webapp_bootstrap_single_file_run_injects_context_and_writes_snapshot(tm
 
 def test_liberty_run_generates_server_xml_under_the_module(tmp_path, capsys):
     """A generated unit has no source; the scan yields it, the transform is
-    given the context, and the output lands at the module's Liberty config path."""
+    given the context, and the output lands at the module's Liberty config path.
+
+    A generated unit is HIGH risk by rule, so this run opts out of the default
+    hold with risk_ceiling: auto; the sibling test below pins the default."""
     cfg = tmp_path / "agents.yaml"
-    write_config(tmp_path)
+    write_config(tmp_path, decisions={"risk_ceiling": "auto"})
     module = _webapp_project(tmp_path)
     out = tmp_path / "migrated"
 
@@ -259,3 +262,29 @@ def test_acceptance_after_a_dry_run_is_skipped_with_a_reason(tmp_path, project, 
 def _run_main(argv):
     with patch.object(sys, "argv", ["migrate.py"] + argv):
         return migrate.main()
+
+
+def test_liberty_generated_unit_is_held_by_default(tmp_path, capsys):
+    """Under the default risk_ceiling (review-high) a generated server.xml is
+    staged and held, never written unseen."""
+    cfg = tmp_path / "agents.yaml"
+    write_config(tmp_path)
+    _webapp_project(tmp_path)
+    out = tmp_path / "migrated"
+
+    with _mocked_aws(cfg):
+        with patch("forge.state_store.dynamodb.DynamoDBStateManager.put_file_status"), \
+             patch("forge.state_store.dynamodb.DynamoDBStateManager.mark_pending"):
+            _run([str(tmp_path / "proj"), "--phase", "liberty-server-config",
+                  "--output-dir", str(out), "--config", str(cfg)])
+
+    assert not (out / "orders/src/main/liberty/config/server.xml").exists()
+    staged = out / ".forge-staging/orders/src/main/liberty/config/server.xml"
+    assert staged.exists()
+    stdout = capsys.readouterr().out
+    assert "server.xml (generated) → HELD" in stdout and "1 held" in stdout
+    queue = json.loads((out / "manual-review-queue.json").read_text(encoding="utf-8"))
+    (entry,) = queue["entries"]
+    assert entry["status"] == "HELD" and entry["held_paths"] == [str(staged)]
+    assert "risk_ceiling=review-high" in entry["hold_reason"]
+    assert (out / "migration-review.html").exists()

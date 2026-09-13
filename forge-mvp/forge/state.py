@@ -3,7 +3,8 @@ from typing import TypedDict, Optional, List, Literal, Any
 
 class FileStatus(TypedDict):
     file_path: str
-    status: Literal["PENDING", "TRANSFORMING", "REVIEWING", "VERIFYING", "RETRY_1", "RETRY_2", "DONE", "MANUAL_REVIEW", "BLOCKED"]
+    status: Literal["PENDING", "TRANSFORMING", "REVIEWING", "VERIFYING", "RETRY_1", "RETRY_2", "DONE",
+                    "MANUAL_REVIEW", "BLOCKED", "HELD", "REJECTED"]
     phase: str
     risk_tier: str
     risk_score: int
@@ -33,6 +34,14 @@ class FileStatus(TypedDict):
     # audit trail records what the model saw without storing it in state.
     context_name: Optional[str]
     context_digest: Optional[str]
+    # HELD: written to .forge-staging/ and waiting for a human, per risk_ceiling.
+    held_paths: List[str]
+    hold_reason: Optional[str]
+    # The human's decision, once made — the audit trail carries it.
+    human_decision: Optional[str]
+    human_note: Optional[str]
+    human_rule: Optional[str]
+    human_decided_at: Optional[str]
 
 
 class ForgeState(TypedDict):
@@ -48,6 +57,7 @@ class ForgeState(TypedDict):
     files_retried: int
     files_manual: int
     files_blocked: int
+    files_held: int
     bedrock_calls: int
     estimated_cost_usd: float
     messages: List[Any]
@@ -80,4 +90,10 @@ def make_file_status(file_path: str, phase: str) -> FileStatus:
         module_dir=None,
         context_name=None,
         context_digest=None,
+        held_paths=[],
+        hold_reason=None,
+        human_decision=None,
+        human_note=None,
+        human_rule=None,
+        human_decided_at=None,
     )

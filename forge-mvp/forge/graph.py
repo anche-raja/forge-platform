@@ -7,7 +7,7 @@ from forge.config import ForgeConfig
 from forge.review.java_reviewer import JavaReviewer
 from forge.state import ForgeState
 from forge.state_store.dynamodb import DynamoDBSaver
-from forge.utils.file_writer import write_output
+from forge.utils.file_writer import stage_output, write_output
 from forge.utils.telemetry import get_logger
 from forge.verify.build_verifier import BuildVerifier
 
@@ -59,6 +59,29 @@ def build_graph(config: ForgeConfig):
             )
         return {**state, "current_file": file_status}
 
+    _CEILINGS = ("auto", "review-high", "review-all")
+
+    def risk_ceiling() -> str:
+        value = (config.get("decisions") or {}).get("risk_ceiling", "review-high")
+        if value not in _CEILINGS:
+            _log.warning("Unknown risk_ceiling %r; treating as review-high", value)
+            return "review-high"
+        return value
+
+    def must_hold(fs) -> bool:
+        ceiling = risk_ceiling()
+        return ceiling == "review-all" or (ceiling == "review-high" and fs.get("risk_tier") == "HIGH")
+
+    def hold_for_review(state: ForgeState) -> ForgeState:
+        """Stage instead of write: a human decides before this lands in output."""
+        staged = stage_output(state)
+        file_status = dict(state["current_file"])
+        file_status["status"] = "HELD"
+        file_status["held_paths"] = staged
+        file_status["hold_reason"] = f"risk_ceiling={risk_ceiling()}, risk_tier={file_status.get('risk_tier')}"
+        _log.info("Held %s for review (%s)", file_status["file_path"], file_status["hold_reason"])
+        return {**state, "current_file": file_status}
+
     def manual_queue(state: ForgeState) -> ForgeState:
         file_status = dict(state["current_file"])
         file_status["status"] = "MANUAL_REVIEW"
@@ -89,6 +112,8 @@ def build_graph(config: ForgeConfig):
             new_state["files_manual"] = state.get("files_manual", 0) + 1
         elif status == "BLOCKED":
             new_state["files_blocked"] = state.get("files_blocked", 0) + 1
+        elif status == "HELD":
+            new_state["files_held"] = state.get("files_held", 0) + 1
         return new_state
 
     # ─── Routing ──────────────────────────────────────────────────────────────
@@ -122,8 +147,11 @@ def build_graph(config: ForgeConfig):
         return "manual_queue"
 
     def route_post(state: ForgeState) -> str:
-        if state["current_file"].get("status") == "MANUAL_REVIEW":
+        fs = state["current_file"]
+        if fs.get("status") == "MANUAL_REVIEW":
             return "manual_queue"
+        if must_hold(fs):
+            return "hold_for_review"
         return "write_file"
 
     # ─── Build graph ──────────────────────────────────────────────────────────
@@ -136,6 +164,7 @@ def build_graph(config: ForgeConfig):
     graph.add_node("guardrails_post", guardrails_post)
     graph.add_node("write_file", write_file)
     graph.add_node("verify_build", verify_build)
+    graph.add_node("hold_for_review", hold_for_review)
     graph.add_node("manual_queue", manual_queue)
     graph.add_node("blocked", blocked)
     graph.add_node("increment_retry", increment_retry)
@@ -156,8 +185,11 @@ def build_graph(config: ForgeConfig):
     graph.add_edge("increment_retry", "java_upgrade")
     graph.add_conditional_edges("guardrails_post", route_post, {
         "write_file": "write_file",
+        "hold_for_review": "hold_for_review",
         "manual_queue": "manual_queue",
     })
+    # A held unit never reaches verify_build: nothing was written to output.
+    graph.add_edge("hold_for_review", "update_state")
     graph.add_edge("write_file", "verify_build")
     graph.add_conditional_edges("verify_build", route_verify, {
         "update_state": "update_state",

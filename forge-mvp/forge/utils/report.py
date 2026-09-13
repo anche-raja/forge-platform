@@ -17,7 +17,7 @@ def generate_report(
 ) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    counts = {s: 0 for s in ("DONE", "MANUAL_REVIEW", "BLOCKED", "PENDING")}
+    counts = {s: 0 for s in ("DONE", "MANUAL_REVIEW", "BLOCKED", "HELD", "REJECTED", "PENDING")}
     retried = 0
     for fs in file_statuses:
         status = fs.get("status", "UNKNOWN")
@@ -37,6 +37,8 @@ def generate_report(
         f"- **Files retried:** {retried}",
         f"- **Files manual review:** {counts.get('MANUAL_REVIEW', 0)}",
         f"- **Files blocked:** {counts.get('BLOCKED', 0)}",
+        f"- **Files held for review (HELD):** {counts.get('HELD', 0)}",
+        f"- **Files rejected by reviewer:** {counts.get('REJECTED', 0)}",
         f"- **Total Bedrock calls:** {bedrock_calls}",
         f"- **Estimated Bedrock cost:** ${estimated_cost_usd:.4f}",
         f"",
