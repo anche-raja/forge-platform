@@ -331,13 +331,16 @@ def main():
     # dry-run too: it is an audit artifact, like the report.
     _write_snapshot(args.phase, source_dir, str(output_root), [u for u, _ in units], get_extractor, write_context_snapshot)
 
-    # Write manual review queue alongside migrated output
+    # The review queue: what the pipeline could not settle — and, in a dry run,
+    # everything it would have done, since a first trial exists to look at that.
+    from forge.review_queue import QUEUE_NAME, write_queue, write_review_page
+
     manual = [fs for fs in all_statuses if fs.get("status") == "MANUAL_REVIEW"]
-    if manual and not args.dry_run:
-        queue_path = output_root / "manual-review-queue.json"
-        with open(queue_path, "w", encoding="utf-8") as f:
-            json.dump(manual, f, indent=2, default=str)
-        print(f"\nManual review queue: {queue_path} ({len(manual)} files)")
+    queue = write_queue(str(output_root), all_statuses, source_dir, phase=args.phase, dry_run=args.dry_run)
+    if queue["entries"]:
+        page = write_review_page(str(output_root), queue)
+        print(f"\nReview queue: {output_root / QUEUE_NAME} ({len(queue['entries'])} files)")
+        print(f"Review page:  {page}")
 
     report_path = output_root / "migration-report.md"
     generate_report(

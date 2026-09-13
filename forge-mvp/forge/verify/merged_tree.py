@@ -54,9 +54,18 @@ class MergedTree:
 
     @staticmethod
     def _is_artifact(rel: str) -> bool:
-        """The pipeline's own outputs live in output_dir too; they are not project files."""
+        """The pipeline's own outputs live in output_dir too; they are not project files.
+
+        Held units live under .forge-staging/ until a human approves them — an
+        acceptance check must not see them as part of the migrated tree.
+        """
+        if rel.startswith(".forge-staging/"):
+            return True
+        if rel.startswith("decisions") and rel.endswith(".json"):
+            return True
         return rel in ("migration-report.md", "migration-context.json", "migration-acceptance.json",
-                       "manual-review-queue.json")
+                       "manual-review-queue.json", "migration-review.html", "pack-feedback.md",
+                       "decisions-applied.jsonl")
 
     def resolve(self, rel: str) -> Optional[Path]:
         """The file backing ``rel`` in the merged view — output wins over source."""

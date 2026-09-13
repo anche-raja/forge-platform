@@ -44,6 +44,11 @@ def _resolve_relative(file_path: str, content: str, source_dir: Path) -> Path:
     return _package_relative_path(content) or raw
 
 
+def resolve_relative(file_path: str, content: str, source_dir: str) -> Path:
+    """Public name for the destination-path rule; the review queue keys transformed files by it."""
+    return _resolve_relative(file_path, content, source_dir)
+
+
 def write_output(state: ForgeState) -> List[str]:
     """Write transformed files to output_dir, preserving package paths.
 
