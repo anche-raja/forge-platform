@@ -130,6 +130,11 @@ class PackSpec:
         return self.status == "complete"
 
     @property
+    def has_context(self) -> bool:
+        """Whether the pack's rules reference cross-file facts an extractor must produce."""
+        return self.context != "none"
+
+    @property
     def globs(self) -> Tuple[str, ...]:
         return tuple(a["file_glob"] for a in self.applies_to if "file_glob" in a)  # type: ignore[misc]
 

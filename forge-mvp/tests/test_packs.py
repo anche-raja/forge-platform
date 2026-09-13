@@ -392,7 +392,8 @@ def test_named_selectors_are_not_resolvable_by_path(packs):
     """`selector: struts_actions` is answered by the routing table, not by a
     path. A caller that scans the filesystem and trusts includes() would migrate
     zero files, so needs_selectors exists to make that visible."""
-    spec = parse_pack(write_pack(packs, "p", frontmatter=_fm(applies_to="\n  - selector: struts_actions")))
+    spec = parse_pack(write_pack(packs, "p", frontmatter=_fm(
+        context="struts_routing_table", applies_to="\n  - selector: struts_actions")))
     assert spec.selectors == ("struts_actions",)
     assert spec.needs_selectors
     assert spec.globs == ()
@@ -602,6 +603,7 @@ def test_scanner_refuses_a_pack_that_also_has_globs(fresh_registry, tmp_path):
     packs_dir = tmp_path / "packs"
     write_pack(packs_dir, "half-runnable", frontmatter=_fm(
         "half-runnable",
+        context="struts_routing_table",
         applies_to='\n  - file_glob: "**/struts*.xml"\n  - selector: struts_actions'))
     fresh_registry(packs_dir)
 
@@ -618,7 +620,8 @@ def test_scanner_refuses_a_selector_only_pack_instead_of_finding_nothing(fresh_r
     codebase — the worst available outcome."""
     packs_dir = tmp_path / "packs"
     write_pack(packs_dir, "actions-only",
-               frontmatter=_fm("actions-only", applies_to="\n  - selector: struts_actions"))
+               frontmatter=_fm("actions-only", context="struts_routing_table",
+                               applies_to="\n  - selector: struts_actions"))
     fresh_registry(packs_dir)
 
     from forge.utils.file_scanner import scan_java_files
@@ -751,3 +754,67 @@ def test_a_hybrid_struts_spring_app_has_no_blocked_packs(library):
     assert order[0] == "build-maven-modernize"
     assert order.index("struts2-modernize") < order.index("jsp-jstl-modernize")
     assert order.index("javax-to-jakarta") < order.index("spring-to-spring6")
+
+
+# ─── context contract ─────────────────────────────────────────────────────────
+
+def test_context_none_with_selectors_is_a_load_error(packs):
+    """A selector is a file set only an extractor can name; a pack that uses one
+    and declares it needs no context contradicts itself."""
+    write_pack(packs, "p", frontmatter=_fm(applies_to="\n  - selector: struts_actions"))
+    msg = load_error(packs)
+    assert "needs a context extractor" in msg and "'context' is none" in msg
+
+
+def test_selector_not_provided_by_registered_context_is_a_load_error(packs):
+    write_pack(packs, "p", frontmatter=_fm(context="web_bootstrap", applies_to="\n  - selector: struts_actions"))
+    msg = load_error(packs)
+    assert "not provided by context 'web_bootstrap'" in msg
+    assert "server_config" in msg and "servlet_components" in msg, "the error names what the extractor does provide"
+
+
+def test_registered_context_with_its_own_selectors_loads(packs):
+    write_pack(packs, "p", frontmatter=_fm(context="web_bootstrap", applies_to="\n  - selector: servlet_components"))
+    spec = load_packs(packs)["p"]
+    assert spec.has_context and spec.selectors == ("servlet_components",)
+
+
+def test_unregistered_context_is_tolerated_for_complete_and_detect_only_packs(packs):
+    """Refusing an unbuilt extractor at load time would take the whole library
+    down (phases._packs() degrades to none on any PackError). Runnability is the
+    scanner's call; the ratchet below keeps the pending set from growing."""
+    write_pack(packs, "a", frontmatter=_fm("a", context="struts_routing_table", applies_to="\n  - selector: struts_actions"))
+    write_pack(packs, "b", frontmatter=_fm("b", status="detect-only", context="faces_navigation_graph",
+                                           applies_to="\n  - selector: faces_backing_beans"),
+               review="No rubric yet.")
+    registry = load_packs(packs)
+    assert registry["a"].has_context and registry["b"].has_context
+
+
+# Extractors the shipped library references that are not built yet. Building one
+# removes it from this set; naming a new one in a pack fails the test below.
+PENDING_EXTRACTORS = {
+    "reactor", "view_bindings", "spring_bean_graph", "test_subject", "struts_routing_table",
+}
+
+
+def test_every_complete_pack_context_is_registered_or_pending(library):
+    from forge.extract import get_extractor
+
+    for pack in library.complete:
+        if not pack.has_context:
+            continue
+        assert get_extractor(pack.context) is not None or pack.context in PENDING_EXTRACTORS, (
+            f"{pack.id} names context '{pack.context}', which is neither registered nor on the pending list"
+        )
+
+
+def test_web_bootstrap_packs_selectors_match_the_extractor(library):
+    from forge.extract import get_extractor
+
+    ext = get_extractor("web_bootstrap")
+    for pid in ("webapp-bootstrap-jakarta10", "liberty-server-config"):
+        pack = library[pid]
+        assert pack.context == "web_bootstrap"
+        for sel in pack.selectors:
+            assert ext.provides(sel), f"{pid} uses selector '{sel}' the extractor does not provide"

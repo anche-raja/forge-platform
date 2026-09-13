@@ -218,6 +218,44 @@ def _acceptance(meta: dict, where: Path, declared_decisions: Tuple[str, ...]) ->
     return tuple(out)
 
 
+def _validate_context_contract(context: str, applies_to: Tuple[Dict[str, object], ...], where: Path) -> None:
+    """A pack's selectors must be answerable by the context it declares.
+
+    Three cases, in order of how sure we can be:
+
+    1. ``context: none`` with a ``selector:`` is a contradiction — the pack asks
+       for a file set only an extractor can name and then says it needs none.
+    2. A registered extractor must actually provide every selector the pack
+       uses; otherwise the pack references a fact nothing produces.
+    3. An unregistered context is tolerated at load time. Several shipped packs
+       name extractors that are not built yet, and refusing them here would
+       take the whole library down (``phases._packs()`` degrades to none on any
+       PackError). The scanner decides runnability; a ratchet test in
+       ``tests/test_packs.py`` stops the pending set from growing.
+    """
+    selectors = [a["selector"] for a in applies_to if "selector" in a]
+    if not selectors:
+        return
+    if context == "none":
+        raise PackError(
+            f"{where}: selector '{selectors[0]}' needs a context extractor to resolve it, "
+            "but 'context' is none"
+        )
+    # Lazy: forge.extract must not be imported at module load, or the extractors'
+    # own imports (forge.utils.*) would race this module during package init.
+    from forge.extract import get_extractor
+
+    extractor = get_extractor(context)
+    if extractor is None:
+        return
+    missing = [s for s in selectors if not extractor.provides(s)]
+    if missing:
+        raise PackError(
+            f"{where}: selector '{missing[0]}' is not provided by context '{context}' "
+            f"(provides: {', '.join(sorted(extractor.selectors))})"
+        )
+
+
 def rubric_weights(review_prompt: str) -> Tuple[int, ...]:
     """The ``(N pts)`` weights declared in a review rubric, in order."""
     return tuple(int(n) for n in _PROSE_WEIGHT.findall(review_prompt))
@@ -287,6 +325,9 @@ def parse_pack(path: Path) -> PackSpec:
     if not isinstance(context, str) or not context:
         raise PackError(f"{path}: 'context' must be a non-empty string ('none' when none is needed)")
 
+    applies_to = _applies_to(meta, path)
+    _validate_context_contract(context, applies_to, path)
+
     if not transform:
         raise PackError(f"{path}: '## transform' section is empty")
     if not review:
@@ -304,7 +345,7 @@ def parse_pack(path: Path) -> PackSpec:
         tier=tier,
         status=status,
         detect=_detect_rules(meta, path),
-        applies_to=_applies_to(meta, path),
+        applies_to=applies_to,
         context=context,
         depends_on=_str_list(meta, "depends_on", path),
         decisions=_str_list(meta, "decisions", path),
