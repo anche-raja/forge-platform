@@ -5,7 +5,10 @@ title: App-server config -> Liberty server.xml + IBM bindings
 tier: platform
 detect:
   any:
+    # decision_equals is a gate, not evidence: the pack applies to a web
+    # application (below) only when the target container is Liberty.
     - decision_equals: {key: "container", value: "liberty"}
+    - file_glob: "**/WEB-INF/web.xml"
     - file_glob: "**/server.xml"
     - file_glob: "**/WEB-INF/ibm-web-*.xmi"
     - file_glob: "**/WEB-INF/ibm-web-*.xml"

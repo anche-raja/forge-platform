@@ -60,6 +60,44 @@ def run_file(app, config, state_manager, metrics, file_path: str, index: int, to
     return final
 
 
+def _discover(args) -> int:
+    """Profile a repository and say which packs apply, on what evidence.
+
+    No model, no AWS. The profile it writes is the editable input the rest of
+    the platform consumes; a pack it names as blocked or detect-only is a gap
+    made visible, not a technology silently ignored.
+    """
+    from forge.discover import build_profile, render_summary, resolve_packs, write_outputs
+    from forge.discover.emit import DEFAULT_DECISIONS
+    from forge.discover.resolve import content_patterns
+    from forge.packs import PackError, load_packs
+    from forge.utils.file_scanner import runnable_phases
+
+    try:
+        registry = load_packs()
+    except PackError as e:
+        print(f"Pack library failed to load:\n  {e}")
+        return 1
+    decisions = dict(DEFAULT_DECISIONS)
+    if args.config and Path(args.config).is_file():
+        from forge.config import ForgeConfig
+        decisions.update(ForgeConfig(args.config).get("decisions") or {})
+
+    source_dir = str(Path(args.source_dir).resolve())
+    packs = list(registry.values())
+    profile = build_profile(source_dir, content_patterns=content_patterns(packs), decisions=decisions)
+    activations = resolve_packs(profile, packs)
+    runnable = set(runnable_phases())
+    for a in activations:
+        a.runnable = a.pack_id in runnable
+    order = registry.resolve_order([a.pack_id for a in activations])
+
+    print(render_summary(profile, activations, order))
+    json_path, yaml_path = write_outputs(profile, activations, order, decisions, args.output_dir)
+    print(f"\nProfile: {yaml_path}\nDetail:  {json_path}")
+    return 0
+
+
 def _acceptance_only(args) -> int:
     from forge.config import ForgeConfig
 
@@ -176,6 +214,8 @@ def main():
     parser.add_argument("source_dir", nargs="?", help="Root of the Java project to migrate")
     parser.add_argument("--list-packs", action="store_true",
                         help="List the stack pack library and exit")
+    parser.add_argument("--discover", action="store_true",
+                        help="Profile source_dir and report which packs apply; writes forge-profile.yaml")
     from forge.phases import PHASE_NAMES, get_phase
     phase_help = " | ".join(f"{n}: {get_phase(n).description}" for n in PHASE_NAMES)
     parser.add_argument("--phase", choices=list(PHASE_NAMES),
@@ -199,6 +239,8 @@ def main():
         return _list_packs()
     if not args.source_dir:
         parser.error("source_dir is required (or use --list-packs)")
+    if args.discover:
+        return _discover(args)
     if not args.phase:
         parser.error("--phase is required")
     if args.acceptance_only:

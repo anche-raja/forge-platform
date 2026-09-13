@@ -71,6 +71,10 @@ acceptance:                      # mechanical, post-migration; no model involved
 
 ### Field rules
 
+- **`detect.any` fires on repository evidence; `decision_equals` rules are gates.** A decision
+  describes the target, not the repository, so it can never activate a pack by itself — every
+  decision rule a pack declares must hold *and* at least one other rule must fire. Otherwise an
+  empty directory would "need" the Liberty pack because the config names Liberty.
 - **`detect`** must be decidable **without an LLM** — dependency coordinates, file globs, import
   prefixes, XML doctypes, descriptor element names. Detection is evidence, not opinion.
 - **`applies_to`** takes three kinds. A `file_glob` names files by path. A `content_match`
