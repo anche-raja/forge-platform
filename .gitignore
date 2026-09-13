@@ -31,3 +31,5 @@ forge-mvp/test-fixtures/
 .DS_Store
 Thumbs.db
 github-pat
+# Office lock/temp files
+~$*
