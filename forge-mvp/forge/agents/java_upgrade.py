@@ -51,6 +51,16 @@ class JavaUpgradeAgent(BaseAgent):
             file_status["context_name"] = spec.context
             file_status["context_digest"] = digest
 
+        # A human's note is its own block, not a value in review_feedback: that
+        # field is only rendered on retries and a build failure overwrites it.
+        # The note must survive both and outrank automated feedback.
+        human_note = file_status.get("human_note")
+        if human_note:
+            user_content += (
+                f"\n\nHUMAN REVIEW FEEDBACK:\n{human_note}\n"
+                "Address every point above; it takes precedence over automated feedback."
+            )
+
         if retry_count > 0:
             feedback = file_status.get("review_feedback", "")
             user_content += (

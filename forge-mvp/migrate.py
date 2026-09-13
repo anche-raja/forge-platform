@@ -13,10 +13,12 @@ load_dotenv()
 
 
 def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, source_dir: str, output_dir: str,
-                         generate: bool = False) -> dict:
+                         generate: bool = False, file_status_overrides: dict | None = None) -> dict:
     from forge.state import make_file_status
     file_status = make_file_status(file_path, phase)
     file_status["generate"] = generate
+    if file_status_overrides:
+        file_status.update(file_status_overrides)
     return {
         "current_file": file_status,
         "phase": phase,
@@ -38,9 +40,11 @@ def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, sour
 
 
 def run_file(app, config, state_manager, metrics, file_path: str, index: int, total: int, phase: str, dry_run: bool,
-             source_dir: str, output_dir: str, generate: bool = False) -> dict:
-    initial = _build_initial_state(config, file_path, phase, dry_run, source_dir, output_dir, generate=generate)
-    cfg = {"configurable": {"thread_id": file_path}}
+             source_dir: str, output_dir: str, generate: bool = False, file_status_overrides: dict | None = None,
+             thread_id: str | None = None) -> dict:
+    initial = _build_initial_state(config, file_path, phase, dry_run, source_dir, output_dir,
+                                   generate=generate, file_status_overrides=file_status_overrides)
+    cfg = {"configurable": {"thread_id": thread_id or file_path}}
 
     final = app.invoke(initial, config=cfg)
     fs = final["current_file"]
@@ -97,6 +101,82 @@ def _discover(args) -> int:
     json_path, yaml_path = write_outputs(profile, activations, order, decisions, args.output_dir)
     print(f"\nProfile: {yaml_path}\nDetail:  {json_path}")
     return 0
+
+
+def _apply_decisions(args) -> int:
+    """Make a reviewer's decisions real: promote, discard, or re-run with the note.
+
+    No --phase: each queue entry names the pack that produced it. Exit 0 only
+    when every decision applied, so a CI step can gate on it.
+    """
+    from datetime import datetime, timezone
+
+    from forge.config import ForgeConfig
+    from forge.decisions import (append_report_section, applied_section, apply_decisions, load_decisions,
+                                 write_applied_log)
+    from forge.graph import build_graph
+    from forge.review_queue import load_queue, write_queue, write_review_page
+    from forge.state_store.dynamodb import DynamoDBStateManager
+    from forge.utils.telemetry import MetricsEmitter
+    from forge.verify.build_verifier import BuildVerifier
+
+    config = ForgeConfig(args.config)
+    source_dir = str(Path(args.source_dir).resolve())
+    output_dir = str(Path(args.output_dir).resolve())
+    try:
+        queue = load_queue(output_dir)
+        run, decisions = load_decisions(args.apply_decisions)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Cannot apply decisions: {e}")
+        return 1
+    if not decisions:
+        print("No decisions in the file — nothing to apply.")
+        return 0
+
+    state_manager = DynamoDBStateManager(config)
+    metrics = MetricsEmitter(config, enabled=False)
+    verifier = BuildVerifier(config)
+    app = build_graph(config) if any(d.decision == "retry" for d in decisions) else None
+    counter = {"n": 0}
+
+    def rerun(entry: dict, decision) -> dict:
+        counter["n"] += 1
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        overrides = {"human_note": decision.note or None, "human_rule": decision.rule or None,
+                     "human_decision": "retry", "human_decided_at": stamp}
+        final = run_file(
+            app, config, state_manager, metrics,
+            file_path=entry["file_path"], index=counter["n"], total=len(decisions),
+            phase=entry.get("pack") or args.phase or "java21", dry_run=args.dry_run,
+            source_dir=source_dir, output_dir=output_dir, generate=bool(entry.get("generate")),
+            file_status_overrides=overrides,
+            # A fresh budget on a fresh thread: the checkpointer must not resume the exhausted run.
+            thread_id=f"{entry['file_path']}#human-{stamp}",
+        )
+        return final["current_file"]
+
+    def verify_build(written):
+        return verifier.verify({"dry_run": False, "output_dir": output_dir, "current_file": {"written_paths": written}})
+
+    outcomes, remaining = apply_decisions(
+        decisions, queue, source_dir=source_dir, output_dir=output_dir,
+        put_status=state_manager.put_file_status, verify_build=verify_build, rerun=rerun, dry_run=args.dry_run,
+    )
+
+    print(f"{'FILE':<48} {'DECISION':<8} {'APPLIED':<8} {'STATUS':<14} DETAIL")
+    for o in outcomes:
+        print(f"{o.file[-48:]:<48} {o.decision:<8} {'yes' if o.applied else 'no':<8} {o.status_after:<14} {o.detail}")
+
+    if not args.dry_run:
+        new_queue = write_queue(output_dir, remaining, source_dir, phase=queue.get("phase", ""), run_id=queue.get("run"))
+        if new_queue["entries"]:
+            write_review_page(output_dir, new_queue)
+        append_report_section(output_dir, applied_section(outcomes))
+        log = write_applied_log(output_dir, run or queue.get("run", ""), decisions, outcomes)
+        print(f"\n{len(new_queue['entries'])} file(s) still awaiting review · decisions logged to {log}")
+    else:
+        print("\nDry run — nothing was written, moved or re-run.")
+    return 0 if all(o.applied for o in outcomes) else 1
 
 
 def _acceptance_only(args) -> int:
@@ -233,6 +313,8 @@ def main():
                         help="Skip migration; run acceptance checks against an existing --output-dir")
     parser.add_argument("--acceptance-build", action="store_true",
                         help="Also run `build` acceptance checks (needs the toolchain; slow)")
+    parser.add_argument("--apply-decisions", metavar="DECISIONS_JSON",
+                        help="Apply a reviewer's approve/reject/retry decisions to the review queue in --output-dir")
     parser.add_argument("--log-level", default=None, help="Logging level (default: INFO, or $FORGE_LOG_LEVEL)")
     args = parser.parse_args()
 
@@ -242,6 +324,8 @@ def main():
         parser.error("source_dir is required (or use --list-packs)")
     if args.discover:
         return _discover(args)
+    if args.apply_decisions:
+        return _apply_decisions(args)
     if not args.phase:
         parser.error("--phase is required")
     if args.acceptance_only:
