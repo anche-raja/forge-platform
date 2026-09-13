@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<webappbnd:WebAppBinding xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:webappbnd="webappbnd.xmi" xmi:id="WebAppBinding_1" virtualHostName="default_host">
+  <webapp href="WEB-INF/web.xml#WebApp_ID"/>
+  <resRefBindings xmi:id="ResourceRefBinding_1" jndiName="jdbc/OrdersDS">
+    <bindingResourceRef href="WEB-INF/web.xml#ResourceRef_1"/>
+  </resRefBindings>
+  <resRefBindings xmi:id="ResourceRefBinding_2" jndiName="jdbc/GhostDS">
+    <bindingResourceRef href="WEB-INF/web.xml#ResourceRef_99"/>
+  </resRefBindings>
+  <roleAssignments xmi:id="RoleAssignment_1">
+    <role href="WEB-INF/web.xml#SecurityRole_1"/>
+    <groups xmi:id="Group_1" name="acme-admins"/>
+    <users xmi:id="User_1" name="svc-orders"/>
+  </roleAssignments>
+</webappbnd:WebAppBinding>

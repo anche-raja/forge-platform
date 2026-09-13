@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Context>
+  <Resource name="jdbc/ordersDS" auth="Container" type="javax.sql.DataSource" maxTotal="25" maxIdle="5" minIdle="2" password="hunter2"/>
+</Context>

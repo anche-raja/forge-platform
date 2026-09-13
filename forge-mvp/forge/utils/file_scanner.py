@@ -10,12 +10,9 @@ from forge.utils.telemetry import get_logger
 
 _log = get_logger(__name__)
 
-_EXCLUDED_DIRS = {
-    "target", "build", "out", "bin",
-    "node_modules", ".git", ".svn", ".hg",
-    ".idea", ".vscode", ".gradle", ".mvn",
-    "generated", "generated-sources", "generated-test-sources",
-}
+# Re-exported under the historical name; the definition lives in forge.utils.fs
+# so the context extractors can share it without importing this module.
+from forge.utils.fs import EXCLUDED_DIRS as _EXCLUDED_DIRS  # noqa: E402
 
 
 class SkippedFile(NamedTuple):

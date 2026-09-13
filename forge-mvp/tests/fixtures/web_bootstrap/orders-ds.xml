@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<datasources xmlns="http://www.jboss.org/ironjacamar/schema">
+  <datasource jndi-name="java:jboss/datasources/OrdersDS" pool-name="OrdersPool">
+    <connection-url>jdbc:h2:mem:orders</connection-url>
+    <pool><min-pool-size>4</min-pool-size><max-pool-size>40</max-pool-size></pool>
+  </datasource>
+</datasources>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<weblogic-web-app xmlns="http://xmlns.oracle.com/weblogic/weblogic-web-app">
+  <context-root>/orders</context-root>
+  <container-descriptor>
+    <prefer-web-inf-classes>true</prefer-web-inf-classes>
+    <prefer-application-packages><package-name>org.slf4j.*</package-name></prefer-application-packages>
+  </container-descriptor>
+  <session-descriptor><timeout-secs>1800</timeout-secs><cookie-name>ACMESESSION</cookie-name></session-descriptor>
+  <resource-description><res-ref-name>jdbc/ordersDS</res-ref-name><jndi-name>OrdersDS</jndi-name></resource-description>
+  <security-role-assignment><role-name>admin</role-name><principal-name>AcmeAdmins</principal-name></security-role-assignment>
+  <jsp-descriptor><keepgenerated>true</keepgenerated></jsp-descriptor>
+</weblogic-web-app>

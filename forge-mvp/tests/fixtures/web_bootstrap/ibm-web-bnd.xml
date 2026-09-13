@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-bnd xmlns="http://websphere.ibm.com/xml/ns/javaee" version="1.0">
+  <virtual-host name="default_host"/>
+  <resource-ref name="jdbc/ordersDS" binding-name="jdbc/OrdersDS"/>
+  <security-role name="admin"><group name="acme-admins"/><user name="svc-orders"/></security-role>
+</web-bnd>

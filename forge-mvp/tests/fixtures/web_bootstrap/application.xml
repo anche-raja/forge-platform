@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application xmlns="http://xmlns.jcp.org/xml/ns/javaee" version="7">
+  <display-name>acme-ear</display-name>
+  <module><web><web-uri>orders.war</web-uri><context-root>/orders</context-root></web></module>
+  <module><ejb>orders-ejb.jar</ejb></module>
+  <library-directory>lib</library-directory>
+  <security-role><role-name>admin</role-name></security-role>
+</application>

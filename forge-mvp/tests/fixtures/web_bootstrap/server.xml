@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<server description="orders">
+  <featureManager><feature>servlet-3.1</feature><feature>jsp-2.3</feature><feature>jdbc-4.1</feature></featureManager>
+  <httpEndpoint id="defaultHttpEndpoint" host="*" httpPort="9080" httpsPort="9443"/>
+  <keyStore id="defaultKeyStore" password="literal-secret"/>
+  <library id="H2Lib"><fileset dir="${shared.resource.dir}" includes="h2*.jar"/></library>
+  <dataSource id="ordersDS" jndiName="jdbc/ordersDS" transactional="true">
+    <jdbcDriver libraryRef="H2Lib"/>
+    <properties URL="${db.url}" user="${db.user}" password="${db.password}"/>
+    <connectionManager maxPoolSize="40" minPoolSize="4" connectionTimeout="30s"/>
+  </dataSource>
+  <application id="orders" location="orders.war" name="orders" type="war" context-root="/orders">
+    <classloader delegation="parentLast"/>
+  </application>
+  <basicRegistry id="basic" realm="dev"><user name="dev" password="dev"/></basicRegistry>
+</server>

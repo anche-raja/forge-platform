@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee" version="6.0">
+  <filter><filter-name>audit</filter-name><filter-class>com.acme.orders.web.LoggingFilter</filter-class></filter>
+  <filter-mapping><filter-name>audit</filter-name><url-pattern>/*</url-pattern></filter-mapping>
+</web-app>

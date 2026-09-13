@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE web-app PUBLIC "-//Sun Microsystems, Inc.//DTD Web Application 2.3//EN" "http://java.sun.com/dtd/web-app_2_3.dtd">
+<web-app>
+  <filter><filter-name>audit</filter-name><filter-class>com.acme.orders.web.LoggingFilter</filter-class></filter>
+  <filter-mapping><filter-name>audit</filter-name><url-pattern>/*</url-pattern></filter-mapping>
+  <taglib><taglib-uri>/acme</taglib-uri><taglib-location>/WEB-INF/acme.tld</taglib-location></taglib>
+</web-app>

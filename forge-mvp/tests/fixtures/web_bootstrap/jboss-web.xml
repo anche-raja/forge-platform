@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jboss-web>
+  <context-root>/orders</context-root>
+  <security-domain>java:/jaas/acme</security-domain>
+  <virtual-host>orders.acme.example</virtual-host>
+  <resource-ref><res-ref-name>jdbc/ordersDS</res-ref-name><jndi-name>java:jboss/datasources/OrdersDS</jndi-name></resource-ref>
+  <security-role><role-name>admin</role-name><principal-name>acme-admins</principal-name></security-role>
+  <class-loading java2ClassLoadingCompliance="false"><loader-repository>acme:loader=orders.war</loader-repository></class-loading>
+  <max-active-sessions>500</max-active-sessions>
+</jboss-web>
