@@ -103,6 +103,18 @@ def _discover(args) -> int:
     return 0
 
 
+def _feedback_report(args) -> int:
+    """Corrections become pack edits: notes grouped by pack and rule, with the file to edit."""
+    from forge.feedback_report import collect_notes, write_feedback_report
+
+    notes = collect_notes(args.output_dir)
+    path = write_feedback_report(args.output_dir)
+    packs = sorted({n["pack"] for n in notes})
+    print(f"{len(notes)} decision note(s) across {len(packs)} pack(s)" + (f": {', '.join(packs)}" if packs else ""))
+    print(f"Feedback report: {path}")
+    return 0
+
+
 def _apply_decisions(args) -> int:
     """Make a reviewer's decisions real: promote, discard, or re-run with the note.
 
@@ -315,11 +327,15 @@ def main():
                         help="Also run `build` acceptance checks (needs the toolchain; slow)")
     parser.add_argument("--apply-decisions", metavar="DECISIONS_JSON",
                         help="Apply a reviewer's approve/reject/retry decisions to the review queue in --output-dir")
+    parser.add_argument("--feedback-report", action="store_true",
+                        help="Group reviewers' notes by pack and rule into pack-feedback.md in --output-dir")
     parser.add_argument("--log-level", default=None, help="Logging level (default: INFO, or $FORGE_LOG_LEVEL)")
     args = parser.parse_args()
 
     if args.list_packs:
         return _list_packs()
+    if args.feedback_report:
+        return _feedback_report(args)
     if not args.source_dir:
         parser.error("source_dir is required (or use --list-packs)")
     if args.discover:
