@@ -95,9 +95,22 @@ Original spec in `prompts/FORGE-Phase0-MVP.md`. Key design points:
 cd forge-mvp
 pytest                                    # no AWS needed
 python migrate.py --list-packs            # the pack library, in dependency order
+python migrate.py ./myapp --discover      # which packs apply to this repo, with evidence; writes forge-profile.yaml
 python migrate.py ./myapp --phase javax-to-jakarta --dry-run --file path/to/Foo.java
-python migrate.py ./myapp --phase webapp-bootstrap-jakarta10 --output-dir ./migrated
+python migrate.py ./myapp --phase webapp-bootstrap-jakarta10 --output-dir ./migrated --acceptance
+python migrate.py ./myapp --phase javax-to-jakarta --acceptance-only --output-dir ./migrated   # re-check an existing output
 ```
+
+**Discovery** (`forge/discover/`) profiles a repository with no model — build system, Java level,
+resolved dependency versions (through `${properties}`, `dependencyManagement` and the well-known
+imported BOMs), imports, descriptors — and evaluates every pack's `detect` rules against it.
+`decision_equals` rules are gates, never evidence: a decision cannot activate a pack by itself.
+
+**Acceptance** (`forge/verify/acceptance.py`) runs a pack's declared checks over the *merged* view
+(source tree with `./migrated` overlaid — `forge/verify/merged_tree.py`), since the output holds
+only the files that were written. Every outcome is pass, fail with evidence, or skip with the
+reason; the verdict is `INCOMPLETE`, never `PASS`, while anything was skipped. The exit code
+reaches the shell, so `--acceptance-only` is a CI gate.
 
 `--phase` accepts the two built-in phases (`java21`, `struts-spring6`) and every *complete* pack.
 A pack that needs a context extractor which is not built yet is refused with a message listing

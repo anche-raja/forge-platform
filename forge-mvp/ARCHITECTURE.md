@@ -273,10 +273,9 @@ These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives
   `spring_bean_graph`, `view_bindings`, `reactor`, `test_subject`) either run without context or
   are refused if they need a selector.
 - **RAG not wired.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB.
-- **No discovery stage yet.** Which packs apply to a repo is chosen by hand; the profile is not
-  generated.
-- **No mechanical acceptance runner.** Packs declare `acceptance` checks and
-  `migration-context.json` carries the pre-migration facts, but nothing diffs them yet.
+- **The profile is written but not yet consumed.** `--discover` produces `forge-profile.yaml`;
+  a run still takes one `--phase` at a time.
+- **`routing_parity` is skipped** until the `struts_routing_table` extractor exists.
 - **No review portal.** `manual-review-queue.json` is written, but there is no `review_portal.py`.
 - **Placeholder guardrail.** `agents.yaml` ships `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"`.
 
@@ -293,6 +292,8 @@ The engine above is unchanged. What Phase 1 adds is *what it runs* and *what it 
 | Scanner | `forge/utils/file_scanner.py` | Matches `file_glob` and `content_match` selectors itself; resolves `selector:` entries through the pack's extractor, or refuses the pack if that extractor is not registered. Reports `generated` targets a pack creates. |
 | Extractors | `forge/extract/` | Deterministic parsers named by a pack's `context:`. `web_bootstrap` covers `web.xml` (all namespaces), JBoss/WebLogic/WebSphere descriptors (`.xml`/`.xmi`), EAR, datasources, Liberty `server.xml`; declaration order kept, nothing dropped, literal secrets masked. Cached per module, never in state. |
 | Context | `forge/context/` | `render_context` → a deterministic block under `context.max_chars`; `context_block_for` appends it to the transform, review and (for generated units) pre-flight prompts; `snapshot` writes `migration-context.json`. |
+| Discovery | `forge/discover/` | `--discover`: one walk builds a stack profile (build system, Java level, BOM-aware dependency versions, imports, descriptors); every pack's `detect` rules are evaluated against it with evidence. Writes `forge-profile.yaml` + `stack-profile.json`. |
+| Acceptance | `forge/verify/acceptance.py` | `--acceptance` / `--acceptance-only`: a pack's checks over the merged view (`merged_tree.py`). Pass / fail-with-evidence / skip-with-reason; `INCOMPLETE` while anything is skipped. Appends to the report, writes `migration-acceptance.json`, sets the exit code. |
 
 **Runnable today** (`runnable_phases()`): `java21`, `struts-spring6`, `build-maven-modernize`,
 `java8-to-java21`, `javax-to-jakarta`, `spring-to-spring6`, `springsec-to-springsec6`,

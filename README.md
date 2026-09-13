@@ -150,11 +150,14 @@ pytest
 # The pack library, in dependency order (no AWS needed)
 python migrate.py --list-packs
 
+# Which packs apply to a repository, with evidence — no AWS needed
+python migrate.py /path/to/app --discover
+
 # Dry run against a single file (no writes, no DynamoDB updates, no metrics)
 python migrate.py /path/to/java/project --phase java21 --dry-run --file /path/to/Foo.java
 
-# Full run
-python migrate.py /path/to/java/project --phase java21 --output-dir ./migrated
+# Full run, then the pack's acceptance checks over the merged tree (exit code is the gate)
+python migrate.py /path/to/java/project --phase java21 --output-dir ./migrated --acceptance
 
 # Struts 1/2 + Spring 4 + Jackson 1.x codebase (also picks up struts-config.xml)
 python migrate.py /path/to/legacy/app --phase struts-spring6 --output-dir ./migrated
@@ -197,6 +200,7 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
 - ✅ **Phases** — `java21` and `struts-spring6` built in; 10 runnable packs on top
 - ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml`, vendor descriptors and Liberty `server.xml` migrate with full descriptor context
+- ✅ **Discovery + acceptance** — `--discover` profiles any repo and selects packs; `--acceptance` gates the project on mechanical checks
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
 - ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
 

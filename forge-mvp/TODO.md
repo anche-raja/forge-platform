@@ -10,6 +10,10 @@ Actionable backlog for the next development cycle. Context for each item lives i
 - [x] Pack library and loader — `prompts/packs/`, `forge/packs/`, `--list-packs`.
 - [x] `web_bootstrap` context extractor — `web.xml`, vendor descriptors, Liberty `server.xml`
       with full context in the transform and review prompts; generated units.
+- [x] Acceptance runner — `--acceptance` / `--acceptance-only`; `no_match`, `count_unchanged`,
+      `test_parity`, `authz_parity`, `build`; verdict INCOMPLETE while anything is skipped.
+- [x] Discovery — `--discover`; stack profile, BOM-aware version resolution, pack activation
+      with evidence, `forge-profile.yaml`.
 
 ## P1 — Verification quality
 
@@ -18,11 +22,10 @@ Actionable backlog for the next development cycle. Context for each item lives i
       `view_bindings`, `reactor`, `test_subject`. Each is a deterministic parser under
       `forge/extract/` registered like `web_bootstrap`; the ratchet test in `tests/test_packs.py`
       lists them.
-- [ ] **Acceptance runner.** Packs declare `acceptance` checks (`no_match`, `count_unchanged`,
-      `routing_parity`, `authz_parity`, `build`) and `migration-context.json` carries the
-      pre-migration facts; nothing diffs them yet. `forge/verify/acceptance.py`.
-- [ ] **Discovery.** Scanners that emit a stack profile for any repo and select which packs apply
-      (`forge discover`). Today the pack list is chosen by hand.
+- [ ] **`routing_parity` check.** Declared by the Struts packs, skipped by the runner until the
+      `struts_routing_table` extractor exists to diff pre/post action tables.
+- [ ] **Run from the profile.** `--discover` writes `forge-profile.yaml`; nothing reads it yet. A
+      `--profile` run should iterate the activated packs in order, applying each pack's checks.
 - [ ] **Wire RAG.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB. Hook the
       transform/review agents to the KB so enterprise standards actually ground the output.
 
