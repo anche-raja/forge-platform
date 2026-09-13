@@ -14,6 +14,8 @@ Actionable backlog for the next development cycle. Context for each item lives i
       `test_parity`, `authz_parity`, `build`; verdict INCOMPLETE while anything is skipped.
 - [x] Discovery — `--discover`; stack profile, BOM-aware version resolution, pack activation
       with evidence, `forge-profile.yaml`.
+- [x] Human in the loop — risk scorer, `risk_ceiling` hold gate, review queue v2 + static review
+      page, `--apply-decisions`, `--feedback-report`.
 
 ## P1 — Verification quality
 
@@ -49,5 +51,4 @@ Actionable backlog for the next development cycle. Context for each item lives i
       Containerize, Test-Gen) — currently only `java21` exists.
 - [ ] **Test-Gen agent** + run generated JUnit 5 tests as a second verification gate (complements the
       compile gate above).
-- [ ] **Review portal** (`review_portal.py`) over `manual-review-queue.json` for human approve/reject.
 - [ ] Module-level build gate — `mvn -pl <module> -am compile` after a batch, in addition to the per-file gate.

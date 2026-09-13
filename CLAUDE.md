@@ -99,12 +99,30 @@ python migrate.py ./myapp --discover      # which packs apply to this repo, with
 python migrate.py ./myapp --phase javax-to-jakarta --dry-run --file path/to/Foo.java
 python migrate.py ./myapp --phase webapp-bootstrap-jakarta10 --output-dir ./migrated --acceptance
 python migrate.py ./myapp --phase javax-to-jakarta --acceptance-only --output-dir ./migrated   # re-check an existing output
+python migrate.py ./myapp --apply-decisions decisions.json --output-dir ./migrated            # approve / reject / retry from the review page
+python migrate.py --feedback-report --output-dir ./migrated                                    # notes grouped by pack and rule
 ```
 
 **Discovery** (`forge/discover/`) profiles a repository with no model — build system, Java level,
 resolved dependency versions (through `${properties}`, `dependencyManagement` and the well-known
 imported BOMs), imports, descriptors — and evaluates every pack's `detect` rules against it.
 `decision_equals` rules are gates, never evidence: a decision cannot activate a pack by itself.
+
+**Human in the loop** — three commands, one channel. Every unit is risk-scored deterministically
+in the pre-flight node (`forge/risk/score.py`; a security config or a generated unit is HIGH by
+rule). `decisions.risk_ceiling` decides what the tier means: `review-high` (default) stages HIGH
+units under `./migrated/.forge-staging/` as `HELD` instead of writing them; `review-all` holds
+everything; `auto` holds nothing. A held unit never reaches the build gate. Every run writes
+`manual-review-queue.json` (v2: original + transformed + verdicts + risk reasons) and
+`migration-review.html` — static, self-contained, original and transformed side by side with a
+diff and a decision widget that emits `decisions.json`. **A dry run writes them too**, listing every
+transform the model would have made. `migrate.py <source> --apply-decisions decisions.json
+--output-dir ...` makes decisions real: approve promotes staged files and runs the build verifier
+(a FAIL is reported, never reversed — the approval is the human's); reject discards with the reason;
+retry re-runs the unit with the note as a `HUMAN REVIEW FEEDBACK` prompt block on a fresh budget
+and a fresh checkpoint thread. The note lives in `human_note`, not `review_feedback` — that field
+is only rendered on retries and a build failure overwrites it. `--feedback-report` groups notes by
+pack and rule into `pack-feedback.md` so a repeated correction becomes a pack edit.
 
 **Acceptance** (`forge/verify/acceptance.py`) runs a pack's declared checks over the *merged* view
 (source tree with `./migrated` overlaid — `forge/verify/merged_tree.py`), since the output holds

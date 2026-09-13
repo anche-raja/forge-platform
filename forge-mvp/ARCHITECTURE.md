@@ -112,6 +112,7 @@ Source of truth: [forge/graph.py](forge/graph.py). Routing functions: `route_pre
 | `java_upgrade` | **Sonnet 4.5** | Transform Java per 5 rules; on retry, injects prior review feedback into the prompt | `transform_output` (JSON: files + manual_flags) |
 | `java_reviewer` | **Nova Pro** | Score 0–100 across 5 weighted checks; emit verdict + feedback | `PASS≥80` / `RETRY 50–79` / `MANUAL<50` |
 | `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Sonnet 4.5** | Verify zero `javax.*` left, no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
+| `hold_for_review` | local FS | Stage transformed files under `./migrated/.forge-staging/` when `decisions.risk_ceiling` says a human decides first | status `HELD` |
 | `write_file` | local FS | Write transformed files to `./migrated/` preserving package path (no-op on `--dry-run`) | status `DONE` |
 | `manual_queue` | — | Mark file for human review | status `MANUAL_REVIEW` |
 | `blocked` | — | Terminal block | status `BLOCKED` |
@@ -144,10 +145,15 @@ config — see [forge/state.py](forge/state.py).
 **File state machine:**
 ```
 PENDING → TRANSFORMING → REVIEWING → RETRY_1 → RETRY_2 → DONE
-                              │                            │
-                              └──────────────────────────▶ MANUAL_REVIEW
+                              │            │               ▲
+                              │            └──▶ HELD ──approve──┘   (staged; human decides)
+                              │                   └──reject──▶ REJECTED
+                              └──────────────────────────▶ MANUAL_REVIEW ──approve/retry──▶ …
    (pre-flight)  ────────────────────────────────────────▶ BLOCKED
 ```
+`HELD` is reached from `guardrails_post` when `risk_ceiling` holds the unit's risk tier; a human's
+`--apply-decisions` moves it on. Every unit carries `risk_score`/`risk_tier`/`risk_reasons` from
+the pre-flight node and, once decided, `human_decision`/`human_note`/`human_rule`/`human_decided_at`.
 
 Per-file audit fields persisted: `review_score`, `review_verdict`, `retry_count`,
 `transform_model`, `review_model`, `guardrail_pre_verdict`, `guardrail_post_verdict`,
@@ -162,7 +168,10 @@ Per-file audit fields persisted: `review_score`, `review_verdict`, `retry_count`
 | `forge-migration-state-dev` (DynamoDB) | Per-file final status / audit trail | PK `file_path`; GSIs `status-index`, `phase-status-index` |
 | `forge-langgraph-checkpoints-dev` (DynamoDB) | LangGraph checkpointer (resumable runs) | PK `thread_id` + SK `checkpoint_id` |
 | `./migrated/` (local FS) | Transformed output, package paths preserved | — |
-| `manual-review-queue.json` (local) | Files needing human review, with full context | written by `migrate.py` |
+| `manual-review-queue.json` (local) | v2: every unit a human must look at — original, transformed, verdicts, risk reasons; written in dry-run too | `forge/review_queue.py` |
+| `migration-review.html` (local) | Static review page: side-by-side + diff + decision widget → `decisions.json` | `forge/review_queue.py` |
+| `./migrated/.forge-staging/` (local) | Held units, in migrated layout, until approved | `forge/utils/file_writer.py` |
+| `decisions-applied.jsonl`, `pack-feedback.md` (local) | Decision audit log; notes grouped by pack and rule | `forge/decisions.py`, `forge/feedback_report.py` |
 | `migration-report.md` (local) | Run summary | written by `forge/utils/report.py` |
 
 Tables: create with [infrastructure/create_dynamodb.py](infrastructure/create_dynamodb.py) (dev)
@@ -276,7 +285,8 @@ These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives
 - **The profile is written but not yet consumed.** `--discover` produces `forge-profile.yaml`;
   a run still takes one `--phase` at a time.
 - **`routing_parity` is skipped** until the `struts_routing_table` extractor exists.
-- **No review portal.** `manual-review-queue.json` is written, but there is no `review_portal.py`.
+- **Review is page + file, not a service.** `migration-review.html` and `--apply-decisions` replace the
+  deck's `review_portal.py`; there is no long-lived process and no interactive mode.
 - **Placeholder guardrail.** `agents.yaml` ships `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"`.
 
 ---
@@ -293,6 +303,7 @@ The engine above is unchanged. What Phase 1 adds is *what it runs* and *what it 
 | Extractors | `forge/extract/` | Deterministic parsers named by a pack's `context:`. `web_bootstrap` covers `web.xml` (all namespaces), JBoss/WebLogic/WebSphere descriptors (`.xml`/`.xmi`), EAR, datasources, Liberty `server.xml`; declaration order kept, nothing dropped, literal secrets masked. Cached per module, never in state. |
 | Context | `forge/context/` | `render_context` → a deterministic block under `context.max_chars`; `context_block_for` appends it to the transform, review and (for generated units) pre-flight prompts; `snapshot` writes `migration-context.json`. |
 | Discovery | `forge/discover/` | `--discover`: one walk builds a stack profile (build system, Java level, BOM-aware dependency versions, imports, descriptors); every pack's `detect` rules are evaluated against it with evidence. Writes `forge-profile.yaml` + `stack-profile.json`. |
+| Human loop | `forge/risk/`, `forge/review_queue.py`, `forge/decisions.py`, `forge/feedback_report.py` | Risk score → `risk_ceiling` hold gate → review page → `--apply-decisions` (approve / reject / retry-with-note) → `--feedback-report`. The note is its own prompt block and outranks automated feedback. |
 | Acceptance | `forge/verify/acceptance.py` | `--acceptance` / `--acceptance-only`: a pack's checks over the merged view (`merged_tree.py`). Pass / fail-with-evidence / skip-with-reason; `INCOMPLETE` while anything is skipped. Appends to the report, writes `migration-acceptance.json`, sets the exit code. |
 
 **Runnable today** (`runnable_phases()`): `java21`, `struts-spring6`, `build-maven-modernize`,

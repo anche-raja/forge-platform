@@ -201,6 +201,7 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 - ✅ **Phases** — `java21` and `struts-spring6` built in; 10 runnable packs on top
 - ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml`, vendor descriptors and Liberty `server.xml` migrate with full descriptor context
 - ✅ **Discovery + acceptance** — `--discover` profiles any repo and selects packs; `--acceptance` gates the project on mechanical checks
+- ✅ **Human in the loop** — risky units are held for review; `migration-review.html` → `decisions.json` → `--apply-decisions`; notes roll up into `pack-feedback.md`
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
 - ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
 
