@@ -80,6 +80,17 @@ decisions:
   views: in-place                       # in-place | thymeleaf | defer
   url_compat: preserve-with-redirect
 
+# ─── Risk ─────────────────────────────────────────────────────────────────────
+# Every unit is scored deterministically before any model call (LOC, descriptor
+# fan-out, security constraints, Spring-proxied actions, OGNL density, Unsafe).
+# The score sets a tier; `decisions.risk_ceiling` decides what the tier means:
+#   auto         nothing is held for a human
+#   review-high  HIGH-tier units are staged and held until approved   (default)
+#   review-all   every unit is held
+risk:
+  high_at: 60
+  medium_at: 30
+
 # ─── Context extraction ──────────────────────────────────────────────────────
 # A pack that declares `context:` gets the extracted descriptor set (web.xml,
 # vendor descriptors, datasources, ...) appended to its transform and review

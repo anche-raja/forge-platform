@@ -5,6 +5,8 @@ from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
 from forge.context.inject import context_block_for
 from forge.guardrails.bedrock_guardrails import BedrockGuardrails
+from forge.phases import get_phase
+from forge.risk import score_unit, thresholds_from
 from forge.state import ForgeState
 from forge.utils.cost import accrue
 from forge.utils.llm_json import extract_json
@@ -58,6 +60,16 @@ class GuardrailsPreAgent(BaseAgent):
                 file_status["status"] = "BLOCKED"
                 file_status["error"] = f"Cannot read file: {e}"
                 return {**state, "current_file": file_status}
+
+        # Score before any verdict, so even a file the guardrail blocks carries
+        # its risk into the queue a human reads.
+        spec = get_phase(state.get("phase") or file_status.get("phase") or "java21")
+        score, tier, reasons = score_unit(
+            file_path, source_code, spec,
+            generate=bool(file_status.get("generate")),
+            thresholds=thresholds_from(self.config),
+        )
+        file_status["risk_score"], file_status["risk_tier"], file_status["risk_reasons"] = score, tier, reasons
 
         # Step 1: Bedrock Guardrails (INPUT)
         gr_result = self.guardrails.evaluate(source_code, "INPUT")

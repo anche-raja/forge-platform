@@ -7,6 +7,8 @@ class FileStatus(TypedDict):
     phase: str
     risk_tier: str
     risk_score: int
+    # Why the score is what it is — the text a held unit shows a reviewer.
+    risk_reasons: List[str]
     transform_output: Optional[dict]
     review_score: Optional[int]
     review_verdict: Optional[Literal["PASS", "RETRY", "MANUAL"]]
@@ -58,6 +60,7 @@ def make_file_status(file_path: str, phase: str) -> FileStatus:
         phase=phase,
         risk_tier="UNSCORED",
         risk_score=0,
+        risk_reasons=[],
         transform_output=None,
         review_score=None,
         review_verdict=None,
