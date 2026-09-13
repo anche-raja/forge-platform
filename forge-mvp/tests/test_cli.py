@@ -145,3 +145,60 @@ def test_no_eligible_files_exits_cleanly(tmp_path):
         with pytest.raises(SystemExit) as exc:
             _run([str(empty), "--phase", "java21", "--config", str(cfg)])
     assert exc.value.code == 0
+
+
+# ─── context-bearing packs ────────────────────────────────────────────────────
+
+def _webapp_project(tmp_path):
+    from tests.test_extract_web_bootstrap import make_module
+
+    return make_module(tmp_path / "proj", java=("LoggingFilter.java", "StartupListener.java"))
+
+
+def test_webapp_bootstrap_single_file_run_injects_context_and_writes_snapshot(tmp_path, capsys):
+    """The step-3 milestone, end to end: web.xml goes to the transform with its
+    descriptor set, and the full context lands next to the report."""
+    cfg = tmp_path / "agents.yaml"
+    write_config(tmp_path)
+    module = _webapp_project(tmp_path)
+    web_xml = module / "src/main/webapp/WEB-INF/web.xml"
+    out = tmp_path / "migrated"
+
+    with _mocked_aws(cfg) as mocks:
+        with patch("forge.state_store.dynamodb.DynamoDBStateManager.put_file_status"):
+            _run([str(tmp_path / "proj"), "--phase", "webapp-bootstrap-jakarta10", "--dry-run",
+                  "--file", str(web_xml), "--output-dir", str(out), "--config", str(cfg)])
+
+    human = mocks["upgrade"].return_value.invoke.call_args[0][0][1].content
+    assert human.startswith("Transform this file:\nFile path: ")
+    assert "=== CONTEXT: web_bootstrap ===" in human
+    assert "springSecurityFilterChain" in human and "## filter_chain" in human
+    snapshot = out / "migration-context.json"
+    assert snapshot.exists(), "written in dry-run too — it is an audit artifact"
+    body = snapshot.read_text(encoding="utf-8")
+    assert '"context": "web_bootstrap"' in body and "springSecurityFilterChain" in body
+    assert "Context snapshot:" in capsys.readouterr().out
+
+
+def test_liberty_run_generates_server_xml_under_the_module(tmp_path, capsys):
+    """A generated unit has no source; the scan yields it, the transform is
+    given the context, and the output lands at the module's Liberty config path."""
+    cfg = tmp_path / "agents.yaml"
+    write_config(tmp_path)
+    module = _webapp_project(tmp_path)
+    out = tmp_path / "migrated"
+
+    with _mocked_aws(cfg) as mocks:
+        with patch("forge.state_store.dynamodb.DynamoDBStateManager.put_file_status"), \
+             patch("forge.state_store.dynamodb.DynamoDBStateManager.mark_pending") as pending:
+            _run([str(tmp_path / "proj"), "--phase", "liberty-server-config",
+                  "--output-dir", str(out), "--config", str(cfg)])
+
+    human = mocks["upgrade"].return_value.invoke.call_args[0][0][1].content
+    assert "No existing file — generate it." in human
+    assert "## datasources" in human and "jdbc/ordersDS" in human
+    written = out / "orders/src/main/liberty/config/server.xml"
+    assert written.exists(), sorted(str(p) for p in out.rglob("*"))
+    pending.assert_not_called(), "a generated target is not a PENDING source file"
+    stdout = capsys.readouterr().out
+    assert "(+1 generated)" in stdout and "server.xml (generated) → DONE" in stdout

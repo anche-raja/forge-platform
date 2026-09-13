@@ -12,10 +12,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, source_dir: str, output_dir: str) -> dict:
+def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, source_dir: str, output_dir: str,
+                         generate: bool = False) -> dict:
     from forge.state import make_file_status
+    file_status = make_file_status(file_path, phase)
+    file_status["generate"] = generate
     return {
-        "current_file": make_file_status(file_path, phase),
+        "current_file": file_status,
         "phase": phase,
         "dry_run": dry_run,
         "source_dir": str(Path(source_dir).resolve()),
@@ -33,8 +36,9 @@ def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, sour
     }
 
 
-def run_file(app, config, state_manager, metrics, file_path: str, index: int, total: int, phase: str, dry_run: bool, source_dir: str, output_dir: str) -> dict:
-    initial = _build_initial_state(config, file_path, phase, dry_run, source_dir, output_dir)
+def run_file(app, config, state_manager, metrics, file_path: str, index: int, total: int, phase: str, dry_run: bool,
+             source_dir: str, output_dir: str, generate: bool = False) -> dict:
+    initial = _build_initial_state(config, file_path, phase, dry_run, source_dir, output_dir, generate=generate)
     cfg = {"configurable": {"thread_id": file_path}}
 
     final = app.invoke(initial, config=cfg)
@@ -43,7 +47,8 @@ def run_file(app, config, state_manager, metrics, file_path: str, index: int, to
     score = fs.get("review_score")
     score_str = f", score: {score}" if score is not None else ""
 
-    print(f"[{index}/{total}] {Path(file_path).name} → {status}{score_str}")
+    label = f"{Path(file_path).name} (generated)" if generate else Path(file_path).name
+    print(f"[{index}/{total}] {label} → {status}{score_str}")
 
     if not dry_run:
         state_manager.put_file_status(fs)
@@ -53,6 +58,22 @@ def run_file(app, config, state_manager, metrics, file_path: str, index: int, to
         _emit_file_metrics(metrics, final, fs)
 
     return final
+
+
+def _write_snapshot(phase: str, source_dir: str, output_dir: str, unit_paths, get_extractor, write_context_snapshot) -> None:
+    from forge.phases import get_phase
+
+    name = getattr(get_phase(phase), "context", "none")
+    extractor = get_extractor(name) if name != "none" else None
+    if extractor is None:
+        return
+    modules = sorted({extractor.module_for(p, source_dir) for p in unit_paths})
+    try:
+        path = write_context_snapshot(output_dir, name, source_dir, modules)
+    except ValueError as e:
+        print(f"Context snapshot skipped: {e}")
+        return
+    print(f"Context snapshot: {path}")
 
 
 def _emit_file_metrics(metrics, final: dict, fs: dict) -> None:
@@ -144,6 +165,12 @@ def main():
     from forge.utils.file_scanner import scan_java_files
     from forge.utils.report import generate_report
 
+    from forge.context.snapshot import write_context_snapshot
+    from forge.extract import clear_context_cache, get_extractor
+    from forge.extract.selectors import is_generated_target
+    from forge.phases import get_phase
+
+    clear_context_cache()
     config = ForgeConfig(args.config)
     app = build_graph(config)
     state_manager = DynamoDBStateManager(config)
@@ -153,9 +180,12 @@ def main():
 
     # Determine file list
     skipped = []
+    generated = ()
     if args.single_file:
         # Naming a file explicitly beats a config default — no scope filtering.
         files = [str(Path(args.single_file).resolve())]
+        if is_generated_target(get_phase(args.phase), files[0]):
+            files, generated = [], (files[0],)
     elif args.resume:
         pending = state_manager.get_files_by_status("PENDING")
         files = [fs["file_path"] for fs in pending]
@@ -166,24 +196,28 @@ def main():
         # Scope filtering happens here, before any model call, so an out-of-scope
         # file costs nothing rather than being discovered mid-pipeline.
         scan = scan_java_files(source_dir, args.phase, config.get("scope_package_prefix", ""))
-        files, skipped = scan.files, scan.skipped
+        files, skipped, generated = scan.files, scan.skipped, scan.generated
         if skipped:
             print(f"Skipped {len(skipped)} file(s) outside scope prefix "
                   f"'{config.get('scope_package_prefix', '')}'")
-        if not files:
+        if not files and not generated:
             print(f"No eligible files found in {source_dir}")
             sys.exit(0)
-        if not args.dry_run:
+        if not args.dry_run and files:
             state_manager.mark_pending(files, args.phase)
 
-    total = len(files)
-    print(f"FORGE — phase: {args.phase} | files: {total} | dry-run: {args.dry_run}")
+    # Generated targets run after the real files so the descriptors they are
+    # built from have already been migrated in this run.
+    units = [(f, False) for f in files] + [(g, True) for g in generated]
+    total = len(units)
+    gen_str = f" (+{len(generated)} generated)" if generated else ""
+    print(f"FORGE — phase: {args.phase} | files: {len(files)}{gen_str} | dry-run: {args.dry_run}")
 
     all_statuses = []
     total_bedrock_calls = 0
     total_cost = 0.0
 
-    for i, file_path in enumerate(files, start=1):
+    for i, (file_path, generate) in enumerate(units, start=1):
         final = run_file(
             app, config, state_manager, metrics,
             file_path=file_path,
@@ -193,6 +227,7 @@ def main():
             dry_run=args.dry_run,
             source_dir=source_dir,
             output_dir=args.output_dir,
+            generate=generate,
         )
         all_statuses.append(final["current_file"])
         total_bedrock_calls += final.get("bedrock_calls", 0)
@@ -200,6 +235,11 @@ def main():
 
     output_root = Path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+
+    # The full extracted context, for the reviewer of last resort and for the
+    # acceptance checks that diff pre- against post-migration facts. Written in
+    # dry-run too: it is an audit artifact, like the report.
+    _write_snapshot(args.phase, source_dir, str(output_root), [u for u, _ in units], get_extractor, write_context_snapshot)
 
     # Write manual review queue alongside migrated output
     manual = [fs for fs in all_statuses if fs.get("status") == "MANUAL_REVIEW"]

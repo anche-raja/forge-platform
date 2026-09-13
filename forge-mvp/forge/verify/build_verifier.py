@@ -62,8 +62,12 @@ class BuildVerifier:
             return {"verdict": SKIPPED, "output": "dry run — nothing written to compile", "command": ""}
 
         written = list(state["current_file"].get("written_paths") or [])
+        if self.mode == "javac":
+            # javac compiles Java. A migrated web.xml or a generated server.xml
+            # is verified by the maven mode, not by handing XML to the compiler.
+            written = [p for p in written if p.endswith(".java")]
         if not written and self.mode != "maven":
-            return {"verdict": SKIPPED, "output": "no files were written", "command": ""}
+            return {"verdict": SKIPPED, "output": "no Java sources were written", "command": ""}
 
         executable = {"maven": "mvn", "command": (self.command.split() or [""])[0]}.get(self.mode, "javac")
         if executable and shutil.which(executable) is None:

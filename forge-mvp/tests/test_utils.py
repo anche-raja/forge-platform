@@ -110,6 +110,23 @@ def test_writer_refuses_path_traversal(tmp_path):
     assert not list(tmp_path.rglob("evil.java"))
 
 
+def test_writer_accepts_an_absolute_target_that_does_not_exist_in_source(tmp_path):
+    """A generated unit (Liberty server.xml) names a path with no source file
+    behind it. Path.resolve() is non-strict, so the source-relative layout is
+    preserved under output_dir exactly as for an existing file."""
+    out, proj = tmp_path / "out", tmp_path / "proj"
+    module = proj / "orders"
+    module.mkdir(parents=True)
+    target = module / "src/main/liberty/config/server.xml"
+    assert not target.exists()
+    write_output({
+        "dry_run": False, "output_dir": str(out), "source_dir": str(proj),
+        "current_file": {"transform_output": {"files": {str(target): "<server/>"}}, "generate": True},
+    })
+    assert (out / "orders/src/main/liberty/config/server.xml").read_text(encoding="utf-8") == "<server/>"
+    assert not target.exists(), "the source tree is never written to"
+
+
 def test_writer_is_noop_in_dry_run(tmp_path):
     out = tmp_path / "out"
     write_output({

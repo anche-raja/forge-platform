@@ -1,8 +1,9 @@
 import os
 import re
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Tuple
 
+from forge.extract import get_context, get_extractor
 from forge.packs.glob import glob_match
 from forge.phases import get_phase
 from forge.utils.java_checks import declared_package, in_scope
@@ -24,6 +25,10 @@ class SkippedFile(NamedTuple):
 class ScanResult(NamedTuple):
     files: List[str]
     skipped: List[SkippedFile]
+    # Target paths a pack creates rather than edits (Liberty server.xml). They
+    # do not exist yet, so they are not in `files`; the transform is given the
+    # extracted context instead of a source.
+    generated: Tuple[str, ...] = ()
 
 
 def _wants_tests(spec) -> bool:
@@ -38,7 +43,7 @@ def _wants_tests(spec) -> bool:
 def runnable_phases() -> List[str]:
     """Phases and packs that can be run as a bare ``--phase`` today.
 
-    A pack needing a context extractor is excluded until that extractor exists.
+    A pack needing a context extractor is included once that extractor exists.
     """
     # all_phase_names() rather than the import-time PHASE_NAMES snapshot, so
     # this stays correct when the pack directory is pointed somewhere else.
@@ -47,9 +52,23 @@ def runnable_phases() -> List[str]:
     out = []
     for name in all_phase_names():
         spec = get_phase(name)
-        if not getattr(spec, "needs_selectors", False):
+        if not getattr(spec, "needs_selectors", False) or _extractor_for(spec) is not None:
             out.append(name)
     return out
+
+
+def _extractor_for(spec):
+    """The registered extractor that resolves every selector the spec uses, or None.
+
+    The loader already rejects a pack whose registered extractor lacks one of
+    its selectors, so here "registered" and "resolves everything" coincide.
+    """
+    if not getattr(spec, "needs_selectors", False):
+        return None
+    extractor = get_extractor(getattr(spec, "context", "none"))
+    if extractor is None or not all(extractor.provides(s) for s in spec.selectors):
+        return None
+    return extractor
 
 
 def scan_java_files(
@@ -76,10 +95,11 @@ def scan_java_files(
     # Struts actions?") cannot be answered by walking the tree — the routing
     # table answers it. Scanning anyway would return zero files and report a
     # clean run over an untouched codebase, which is the worst possible outcome.
-    if getattr(spec, "needs_selectors", False):
+    extractor = _extractor_for(spec)
+    if getattr(spec, "needs_selectors", False) and extractor is None:
         raise ValueError(
             f"Pack '{phase}' selects files by {', '.join(spec.selectors)}, which only the "
-            f"'{spec.context}' context extractor can resolve, and that is not built yet.\n"
+            f"'{spec.context}' context extractor can resolve, and no such extractor is registered.\n"
             + (
                 f"It also matches {', '.join(spec.globs)} directly — but running only those "
                 "would migrate the configuration and skip the classes it refers to, which is "
@@ -136,10 +156,49 @@ def scan_java_files(
 
             results.append(str(abs_path))
 
+    generated: List[str] = []
+    if extractor is not None and getattr(spec, "needs_selectors", False):
+        # The extractor answers "which files?" per module. The same filters
+        # that governed the glob walk apply — a selector is not a way around
+        # the scope prefix or the test-source exclusion.
+        seen = set(results)
+        for module in extractor.find_modules(str(source_path)):
+            ctx = get_context(spec.context, str(source_path), module).data
+            for name in spec.selectors:
+                selection = extractor.selectors[name](ctx, module)
+                for path in selection.files:
+                    if path in seen:
+                        continue
+                    rel = str(Path(path).resolve().relative_to(source_path)).replace("\\", "/")
+                    if "src/test" in rel and not _wants_tests(spec):
+                        continue
+                    try:
+                        content = Path(path).read_text(encoding="utf-8", errors="replace")
+                    except OSError:
+                        continue
+                    if not in_scope(content, scope_package_prefix):
+                        skipped.append(SkippedFile(
+                            path=path, package=declared_package(content) or "",
+                            reason=f"package outside scope prefix '{scope_package_prefix}'",
+                        ))
+                        continue
+                    seen.add(path)
+                    results.append(path)
+                # A target the pack would create is only "generated" while it
+                # is absent. Once it exists it is a file to migrate like any
+                # other — the transform must read it, not be told to invent it.
+                for target in selection.generated:
+                    if Path(target).exists():
+                        if target not in seen:
+                            seen.add(target)
+                            results.append(target)
+                    else:
+                        generated.append(target)
+
     if skipped:
         _log.info(
             "Skipped %d file(s) outside scope prefix '%s'",
             len(skipped), scope_package_prefix,
         )
 
-    return ScanResult(files=sorted(results), skipped=sorted(skipped))
+    return ScanResult(files=sorted(results), skipped=sorted(skipped), generated=tuple(sorted(set(generated))))
