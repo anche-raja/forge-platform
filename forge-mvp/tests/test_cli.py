@@ -5,6 +5,7 @@ path itself, report generation, and that --dry-run writes nothing anywhere.
 """
 
 import contextlib
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -202,3 +203,59 @@ def test_liberty_run_generates_server_xml_under_the_module(tmp_path, capsys):
     pending.assert_not_called(), "a generated target is not a PENDING source file"
     stdout = capsys.readouterr().out
     assert "(+1 generated)" in stdout and "server.xml (generated) → DONE" in stdout
+
+
+# ─── acceptance ───────────────────────────────────────────────────────────────
+
+def test_acceptance_only_checks_an_existing_output_and_records_the_verdict(tmp_path, project, capsys):
+    """No migration runs; the phase's checks execute over source + existing
+    output, and the verdict is persisted next to the report."""
+    cfg = tmp_path / "agents.yaml"
+    write_config(tmp_path)
+    out = tmp_path / "migrated"
+    migrated = out / "src/main/java/com/corp/user/UserAction.java"
+    migrated.parent.mkdir(parents=True)
+    migrated.write_text(MIGRATED, encoding="utf-8")
+    (out / "migration-report.md").write_text("# FORGE Migration Report\n", encoding="utf-8")
+
+    with _mocked_aws(cfg) as mocks:
+        code = _run_main([str(project), "--phase", "javax-to-jakarta", "--acceptance-only",
+                          "--output-dir", str(out), "--config", str(cfg)])
+
+    mocks["upgrade"].return_value.invoke.assert_not_called()
+    stdout = capsys.readouterr().out
+    assert "Acceptance:" in stdout and "[PASS] no_match" in stdout
+    assert code == 0
+    record = json.loads((out / "migration-acceptance.json").read_text(encoding="utf-8"))
+    assert record["verdict"] == "PASS"
+    assert "## Acceptance" in (out / "migration-report.md").read_text(encoding="utf-8")
+
+
+def test_acceptance_only_fails_loudly_when_the_source_still_has_javax_imports(tmp_path, project, capsys):
+    cfg = tmp_path / "agents.yaml"
+    write_config(tmp_path)
+    out = tmp_path / "migrated"
+    out.mkdir()   # nothing migrated: the source's javax.persistence import is still there
+
+    with _mocked_aws(cfg):
+        code = _run_main([str(project), "--phase", "javax-to-jakarta", "--acceptance-only",
+                          "--output-dir", str(out), "--config", str(cfg)])
+
+    assert code == 1
+    stdout = capsys.readouterr().out
+    assert "Acceptance: FAIL" in stdout and "[FAIL] no_match" in stdout
+
+
+def test_acceptance_after_a_dry_run_is_skipped_with_a_reason(tmp_path, project, capsys):
+    cfg = tmp_path / "agents.yaml"
+    write_config(tmp_path)
+    with _mocked_aws(cfg):
+        with patch("forge.state_store.dynamodb.DynamoDBStateManager.put_file_status"):
+            _run([str(project), "--phase", "javax-to-jakarta", "--dry-run", "--acceptance",
+                  "--output-dir", str(tmp_path / "out"), "--config", str(cfg)])
+    assert "Acceptance: skipped — a dry run writes nothing" in capsys.readouterr().out
+
+
+def _run_main(argv):
+    with patch.object(sys, "argv", ["migrate.py"] + argv):
+        return migrate.main()

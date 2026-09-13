@@ -60,6 +60,46 @@ def run_file(app, config, state_manager, metrics, file_path: str, index: int, to
     return final
 
 
+def _acceptance_only(args) -> int:
+    from forge.config import ForgeConfig
+
+    config = ForgeConfig(args.config)
+    source_dir = str(Path(args.source_dir).resolve())
+    return _run_acceptance(args.phase, source_dir, args.output_dir, config,
+                           run_build=args.acceptance_build, dry_run=False)
+
+
+def _run_acceptance(phase: str, source_dir: str, output_dir: str, config, *, deleted=(), run_build: bool,
+                    dry_run: bool) -> int:
+    """Execute the phase's acceptance checks and append the verdict to the report.
+
+    A pack's checks gate the *project*, independently of how files scored.
+    In a dry run nothing was written, so there is no post-migration tree to
+    check — say so rather than report the pre-migration state as a result.
+    """
+    from forge.phases import get_phase
+    from forge.verify.acceptance import run_acceptance, write_acceptance
+
+    spec = get_phase(phase)
+    checks = getattr(spec, "acceptance", ())
+    if not checks:
+        print(f"\nAcceptance: phase '{phase}' declares no acceptance checks")
+        return 0
+    if dry_run:
+        print("\nAcceptance: skipped — a dry run writes nothing, so there is no post-migration tree to check")
+        return 0
+
+    decisions = config.get("decisions") or {}
+    report = run_acceptance([spec], source_dir, output_dir, decisions, deleted=deleted, run_build=run_build)
+    path = write_acceptance(report, output_dir)
+    print(f"\nAcceptance: {report.verdict} — {sum(r.passed for r in report.results)} passed, "
+          f"{len(report.failed)} failed, {len(report.skipped)} skipped")
+    for r in report.results:
+        print(f"  [{r.outcome.upper():4}] {r.kind:<16} {r.detail}")
+    print(f"Acceptance record: {path}")
+    return 0 if report.verdict == "PASS" else 1
+
+
 def _write_snapshot(phase: str, source_dir: str, output_dir: str, unit_paths, get_extractor, write_context_snapshot) -> None:
     from forge.phases import get_phase
 
@@ -146,6 +186,12 @@ def main():
     parser.add_argument("--output-dir", default="./migrated", help="Destination root for migrated files (default: ./migrated)")
     parser.add_argument("--config", default=None, help="Path to agents.yaml (default: agents.yaml)")
     parser.add_argument("--no-metrics", action="store_true", help="Skip CloudWatch metric emission")
+    parser.add_argument("--acceptance", action="store_true",
+                        help="After the run, execute the phase's acceptance checks over the merged tree")
+    parser.add_argument("--acceptance-only", action="store_true",
+                        help="Skip migration; run acceptance checks against an existing --output-dir")
+    parser.add_argument("--acceptance-build", action="store_true",
+                        help="Also run `build` acceptance checks (needs the toolchain; slow)")
     parser.add_argument("--log-level", default=None, help="Logging level (default: INFO, or $FORGE_LOG_LEVEL)")
     args = parser.parse_args()
 
@@ -155,6 +201,8 @@ def main():
         parser.error("source_dir is required (or use --list-packs)")
     if not args.phase:
         parser.error("--phase is required")
+    if args.acceptance_only:
+        return _acceptance_only(args)
 
     from forge.utils.telemetry import MetricsEmitter, configure_logging
     configure_logging(args.log_level)
@@ -260,6 +308,11 @@ def main():
         skipped=skipped,
     )
 
+    if args.acceptance:
+        deleted = [d for fs in all_statuses for d in (fs.get("deleted_files") or [])]
+        _run_acceptance(args.phase, source_dir, str(output_root), config, deleted=deleted,
+                        run_build=args.acceptance_build, dry_run=args.dry_run)
+
     passed = sum(1 for fs in all_statuses if fs.get("status") == "DONE")
     blocked = sum(1 for fs in all_statuses if fs.get("status") == "BLOCKED")
     manual_count = len(manual)
@@ -269,4 +322,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main() returns an exit code on the acceptance paths; a CI gate needs it.
+    sys.exit(main() or 0)

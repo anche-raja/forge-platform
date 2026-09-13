@@ -69,6 +69,17 @@ build_verification:
   classpath: ""
   timeout_seconds: 300
 
+# ─── Decisions ────────────────────────────────────────────────────────────────
+# Project-level choices that packs read (see prompts/FORGE-Platform-Requirements.md
+# §4). An acceptance check guarded by `when:` is skipped — never passed — while
+# the decision it names is unset.
+decisions:
+  web_framework: modernize-in-place     # modernize-in-place | migrate-to-spring
+  runtime: war-xml-bootstrap            # war-xml-bootstrap | war-programmatic-bootstrap
+  container: liberty                    # liberty | wildfly | tomcat | jetty
+  views: in-place                       # in-place | thymeleaf | defer
+  url_compat: preserve-with-redirect
+
 # ─── Context extraction ──────────────────────────────────────────────────────
 # A pack that declares `context:` gets the extracted descriptor set (web.xml,
 # vendor descriptors, datasources, ...) appended to its transform and review
