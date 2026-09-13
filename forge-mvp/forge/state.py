@@ -23,6 +23,14 @@ class FileStatus(TypedDict):
     transform_model: Optional[str]
     review_model: Optional[str]
     error: Optional[str]
+    # A unit the pack creates rather than edits (Liberty server.xml): there is
+    # no source to read, so the transform is given the context instead.
+    generate: bool
+    module_dir: Optional[str]
+    # Which extractor fed the prompts, and a digest of the exact block — the
+    # audit trail records what the model saw without storing it in state.
+    context_name: Optional[str]
+    context_digest: Optional[str]
 
 
 class ForgeState(TypedDict):
@@ -65,4 +73,8 @@ def make_file_status(file_path: str, phase: str) -> FileStatus:
         transform_model=None,
         review_model=None,
         error=None,
+        generate=False,
+        module_dir=None,
+        context_name=None,
+        context_digest=None,
     )

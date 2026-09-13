@@ -3,6 +3,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
+from forge.context.inject import context_block_for
 from forge.guardrails.bedrock_guardrails import BedrockGuardrails
 from forge.state import ForgeState
 from forge.utils.cost import accrue
@@ -43,14 +44,20 @@ class GuardrailsPreAgent(BaseAgent):
         file_status = dict(state["current_file"])
         file_path = file_status["file_path"]
 
-        try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                source_code = f.read()
-        except Exception as e:
-            _log.error("Cannot read %s: %s", file_path, e)
-            file_status["status"] = "BLOCKED"
-            file_status["error"] = f"Cannot read file: {e}"
-            return {**state, "current_file": file_status}
+        if file_status.get("generate"):
+            # No file to read: the context block is the model's actual input,
+            # and vendor descriptors are where credentials leak — screen that.
+            source_code, _ = context_block_for(state, self.config)
+            source_code = source_code or ""
+        else:
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    source_code = f.read()
+            except Exception as e:
+                _log.error("Cannot read %s: %s", file_path, e)
+                file_status["status"] = "BLOCKED"
+                file_status["error"] = f"Cannot read file: {e}"
+                return {**state, "current_file": file_status}
 
         # Step 1: Bedrock Guardrails (INPUT)
         gr_result = self.guardrails.evaluate(source_code, "INPUT")

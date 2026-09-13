@@ -2,6 +2,7 @@ from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.config import ForgeConfig
+from forge.context.inject import context_block_for
 from forge.phases import get_phase
 from forge.review.base_reviewer import BaseReviewer
 from forge.state import ForgeState
@@ -37,9 +38,15 @@ class JavaReviewer(BaseReviewer):
             return {**state, "current_file": file_status}
 
         spec = get_phase(state.get("phase") or file_status.get("phase") or "java21")
+        human = f"Review this transformed code:\n\n```\n{all_content}\n```"
+        # The reviewer sees the same descriptors the transform saw, so "nothing
+        # from the descriptors was dropped" is checkable rather than assumed.
+        block, _ = context_block_for(state, self.config)
+        if block:
+            human += "\n\nThe descriptors the transform was given (check nothing was dropped):\n" + block
         messages = [
             SystemMessage(content=spec.review_prompt),
-            HumanMessage(content=f"Review this transformed code:\n\n```\n{all_content}\n```"),
+            HumanMessage(content=human),
         ]
         response = self.llm.invoke(messages)
         bedrock_calls = state.get("bedrock_calls", 0) + 1

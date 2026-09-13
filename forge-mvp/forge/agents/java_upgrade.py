@@ -3,6 +3,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
+from forge.context.inject import context_block_for
 from forge.phases import get_phase
 from forge.state import ForgeState
 from forge.utils.cost import accrue
@@ -26,16 +27,29 @@ class JavaUpgradeAgent(BaseAgent):
         file_path = file_status["file_path"]
         retry_count = file_status.get("retry_count", 0)
 
-        try:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                source_code = f.read()
-        except Exception as e:
-            file_status["status"] = "MANUAL_REVIEW"
-            file_status["error"] = f"Cannot read file: {e}"
-            return {**state, "current_file": file_status}
+        if file_status.get("generate"):
+            # The pack creates this file; the descriptors in the context block
+            # are its only input.
+            source_section = f"No existing file — generate it.\nTarget path: {file_path}"
+        else:
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    source_code = f.read()
+            except Exception as e:
+                file_status["status"] = "MANUAL_REVIEW"
+                file_status["error"] = f"Cannot read file: {e}"
+                return {**state, "current_file": file_status}
+            source_section = f"```\n{source_code}\n```"
 
         spec = get_phase(state.get("phase") or file_status.get("phase") or "java21")
-        user_content = f"Transform this file:\nFile path: {file_path}\n\n```\n{source_code}\n```"
+        # The "File path:" header is a contract — the CLI tests split on it.
+        user_content = f"Transform this file:\nFile path: {file_path}\n\n{source_section}"
+
+        block, digest = context_block_for(state, self.config)
+        if block:
+            user_content += "\n\n" + block
+            file_status["context_name"] = spec.context
+            file_status["context_digest"] = digest
 
         if retry_count > 0:
             feedback = file_status.get("review_feedback", "")

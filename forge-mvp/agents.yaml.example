@@ -69,5 +69,14 @@ build_verification:
   classpath: ""
   timeout_seconds: 300
 
+# ─── Context extraction ──────────────────────────────────────────────────────
+# A pack that declares `context:` gets the extracted descriptor set (web.xml,
+# vendor descriptors, datasources, ...) appended to its transform and review
+# prompts, rendered section by section up to this many characters. Sections
+# that do not fit are listed as omitted; the full context is written to
+# migration-context.json in the output directory.
+context:
+  max_chars: 60000
+
 # ─── LangSmith ────────────────────────────────────────────────────────────────
 langsmith_project: "forge-migration"

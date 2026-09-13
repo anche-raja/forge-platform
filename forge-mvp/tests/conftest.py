@@ -42,6 +42,8 @@ build_verification:
   command: ''
   classpath: ''
   timeout_seconds: 300
+context:
+  max_chars: 60000
 """
 
 
