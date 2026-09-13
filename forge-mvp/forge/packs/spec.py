@@ -45,6 +45,11 @@ DETECT_KINDS: Mapping[str, type] = {
     "decision_equals": dict,    # {key: "container", value: "liberty"}
 }
 
+# A pack declares the coordinate changes its technology requires, and the build
+# pack applies them. `eliminates` is "group:artifact" (artifact may be "*");
+# `upgrades` is "group:artifact:version" — the symmetric case, for a pack that
+# modernises a framework in place rather than replacing it.
+
 # Acceptance checks decide whether the *project* migrated, independently of how
 # individual files scored. Scalar kinds take `true`; the rest take a payload.
 ACCEPTANCE_KINDS: Mapping[str, type] = {
@@ -96,6 +101,7 @@ class PackSpec:
     depends_on: Tuple[str, ...]
     decisions: Tuple[str, ...]
     eliminates: Tuple[str, ...]
+    upgrades: Tuple[str, ...]
     acceptance: Tuple[AcceptanceCheck, ...]
     transform_prompt: str
     review_prompt: str

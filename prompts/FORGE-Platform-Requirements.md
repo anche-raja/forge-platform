@@ -56,6 +56,8 @@ depends_on: [javax-to-jakarta, spring-to-spring6]
 decisions: [url_compat]          # profile keys this pack reads
 eliminates:                      # coordinates the build pack must remove
   - "org.apache.struts:*"
+upgrades:                        # coordinates the build pack must bump, group:artifact:version
+  - "org.apache.struts:struts2-core:7.3.0"
 
 acceptance:                      # mechanical, post-migration; no model involved
   - no_match: "org\\.apache\\.struts|com\\.opensymphony"
@@ -77,6 +79,9 @@ acceptance:                      # mechanical, post-migration; no model involved
   because it must follow whichever is active, and a Struts 2 project never activates the Struts 1
   one. The planner topologically sorts activated packs; a cycle is a startup error, and an edge
   pointing outside the activated set is reported, not enforced.
+- **`eliminates`** and **`upgrades`** are how a pack tells the build pack what its technology
+  needs — remove this coordinate, or move that one to this version. A pack never edits a build
+  file itself, so two packs can never fight over the same `pom.xml`.
 - **`acceptance`** checks run after the migration and are how "done" is decided. Model scores gate
   individual files; acceptance checks gate the **project**.
 - **`review` weights must total 100.** The loader asserts it, because `pass_threshold` is
@@ -108,6 +113,7 @@ technology.
 | `javax-to-jakarta` | namespace | complete |
 | `spring-to-spring6` | framework | complete |
 | `springsec-to-springsec6` | framework | complete |
+| `struts2-modernize` | framework | complete |
 | `struts2-to-springmvc6` | framework | complete |
 | `struts1-to-springmvc6` | framework | complete |
 | `jsp-jstl-modernize` | view | complete |
@@ -166,6 +172,7 @@ specific input, and they live in `forge-profile.yaml` — never in a pack, never
 
 | Key | Values | Read by | Default |
 |---|---|---|---|
+| `web_framework` | `modernize-in-place` · `migrate-to-spring` | `struts*-modernize`, `struts*-to-springmvc6` | `modernize-in-place` |
 | `runtime` | `war-xml-bootstrap` · `war-programmatic-bootstrap` | `webapp-bootstrap-jakarta10`, `build-maven-modernize` | `war-xml-bootstrap` |
 | `container` | `liberty` *(platform standard)* · `wildfly` · `tomcat` · `jetty` | `webapp-bootstrap-jakarta10`, `liberty-server-config`, `build-maven-modernize` | `liberty` |
 | `liberty_edition` | `open` · `websphere` | `liberty-server-config` | `websphere` |
@@ -175,6 +182,17 @@ specific input, and they live in `forge-profile.yaml` — never in a pack, never
 | `persistence` | `keep-orm` · `to-spring-data` | `hibernate-to-hibernate6`, `ejb*-to-spring` | `keep-orm` |
 | `idiom_aggressiveness` | `conservative` · `moderate` | `java8-to-java21` | `conservative` |
 | `risk_ceiling` | `auto` · `review-high` · `review-all` | engine | `review-high` |
+
+`web_framework` picks between two mutually exclusive routes through the same portfolio, and the
+order matters more than it looks. `modernize-in-place` upgrades the framework to its current
+release — a per-file change with no cross-file context, so it runs on today's engine and gets the
+application onto Java 21 and Jakarta EE 10 without changing a single URL. `migrate-to-spring`
+replaces the framework, which needs the routing table and therefore the extract stage.
+
+Doing them in that order is not a compromise, it is the cheaper path: once an application is on
+Struts 7, it is already on Java 21, Jakarta EE 10 and Liberty, and the eventual Spring migration
+is a framework change **alone** rather than four changes at once. Activating both for one project
+is a configuration error — they edit the same files toward different targets.
 
 `risk_ceiling` is what makes the platform work at both ends of the size range: `auto` for a
 20-file WAR where a failed build is the only gate that matters, `review-all` for a payments

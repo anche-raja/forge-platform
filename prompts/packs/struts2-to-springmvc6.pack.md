@@ -15,7 +15,7 @@ applies_to:
   - file_glob: "**/struts*.xml"
 context: struts_routing_table
 depends_on: [javax-to-jakarta, spring-to-spring6]
-decisions: [url_compat]
+decisions: [url_compat, web_framework]
 eliminates:
   - "org.apache.struts:*"
   - "ognl:ognl"

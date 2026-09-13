@@ -61,7 +61,13 @@ Rule 3 — Remove every coordinate in the `eliminates` list supplied to you. Do 
 dependency that is not on that list, even if it looks obsolete — another pack may still be
 migrating code that uses it, and removing it breaks the build gate before that pack runs.
 
-Rule 4 — Jakarta EE 10 coordinates:
+Rule 4 — Apply every coordinate in the `upgrades` list supplied to you, as
+`group:artifact:version`. Set that exact version — in `<dependencyManagement>` if the artifact is
+managed there, otherwise on the dependency itself. If the artifact is absent from this pom, do
+nothing: it belongs to another module. An upgrade whose artifact you cannot find is reported in
+`manual_flags`, never invented.
+
+Rule 5 — Jakarta EE 10 coordinates:
 - `javax.servlet:javax.servlet-api` → `jakarta.servlet:jakarta.servlet-api` 6.0.0 (`provided`)
 - `javax.servlet:jstl` → `jakarta.servlet.jsp.jstl:jakarta.servlet.jsp.jstl-api` 3.0.0 plus the
   `org.glassfish.web:jakarta.servlet.jsp.jstl` 3.0.1 implementation (the API alone does not render)
@@ -72,13 +78,13 @@ Rule 4 — Jakarta EE 10 coordinates:
   and fails at startup
 - `javax.persistence:persistence-api` → `jakarta.persistence:jakarta.persistence-api` 3.1.0
 
-Rule 5 — Plugins that must move for Java 21 to build at all:
+Rule 6 — Plugins that must move for Java 21 to build at all:
 - `maven-compiler-plugin` 3.11+; `maven-surefire-plugin` 3.2+ (older surefire does not discover
   JUnit 5); `maven-failsafe-plugin` to match; `maven-war-plugin` 3.4+; `maven-ear-plugin` 3.3+;
   `jacoco` 0.8.11+ (earlier versions cannot read Java 21 class files and fail the build);
   `aspectj` 1.9.22+ if present (1.7/1.8 cannot weave Java 21 bytecode).
 
-Rule 6 — Packaging. **Packaging does not change.** A `war` module stays `war`; an `ear` module
+Rule 7 — Packaging. **Packaging does not change.** A `war` module stays `war`; an `ear` module
 stays `ear`; the module list is preserved. What changes is the container the WAR targets, per the
 `container` decision. The platform default is `liberty`:
 
@@ -112,7 +118,7 @@ becomes `provided` too** when the container owns the DataSource — on Liberty i
 conflict that surfaces as `LinkageError` or `ClassCastException` at deploy time, not at build
 time.
 
-Rule 7 — Preserve, exactly: `groupId`, `artifactId`, `version`, `<modules>` order, `<profiles>`,
+Rule 8 — Preserve, exactly: `groupId`, `artifactId`, `version`, `<modules>` order, `<profiles>`,
 `<repositories>`, `<distributionManagement>`, every existing explanatory comment, and the version
 of any dependency not covered by the rules above. A pinned version with a comment explaining the
 pin is a decision someone already made — keep both.
@@ -139,10 +145,12 @@ Check 3 — Plugins can build Java 21 (20 pts):
 compiler, surefire, failsafe, jacoco, war/ear and aspectj at versions that function on 21.
 Surefire below 3.0 or jacoco below 0.8.11 scores 0 — the build cannot run.
 
-Check 4 — Eliminations exact (20 pts):
-Every coordinate on the supplied `eliminates` list is gone, and **nothing outside that list was
-removed**. Removing an extra dependency scores 0 — it breaks the build gate for a pack that has
-not run yet.
+Check 4 — Eliminations and upgrades exact (20 pts):
+Every coordinate on the supplied `eliminates` list is gone, every coordinate on `upgrades` sits at
+exactly the requested version, and **nothing outside those lists changed**. Removing an extra
+dependency scores 0 — it breaks the build gate for a pack that has not run yet. An `upgrades`
+entry left at its old version also scores 0: the pack that requested it is about to migrate code
+against an API that is not on the classpath.
 
 Check 5 — Packaging and scopes preserved (15 pts):
 Packaging type is unchanged (`war` stays `war`, `ear` stays `ear`), the module list and its order

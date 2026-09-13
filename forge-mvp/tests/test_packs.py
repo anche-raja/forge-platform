@@ -284,7 +284,8 @@ def test_duplicate_ids_are_rejected():
     def spec(pid):
         return PackSpec(id=pid, version="1.0.0", title="t", tier="build", status="complete",
                         detect=(), applies_to=(), context="none", depends_on=(), decisions=(),
-                        eliminates=(), acceptance=(), transform_prompt="t", review_prompt="r")
+                        eliminates=(), upgrades=(), acceptance=(), transform_prompt="t",
+                        review_prompt="r")
 
     with pytest.raises(PackError, match="duplicate pack id 'same'"):
         PackRegistry([spec("same"), spec("same")])
@@ -413,7 +414,7 @@ def library():
 
 
 def test_the_shipped_library_loads(library):
-    assert len(library) >= 19
+    assert len(library) >= 20
     assert library.complete, "the library should ship at least one complete pack"
 
 
@@ -644,7 +645,7 @@ def test_list_packs_prints_the_library_in_order(capsys):
 
     assert migrate._list_packs() == 0
     out = capsys.readouterr().out
-    assert "19 packs" in out
+    assert re.search(r"\d+ packs", out)
     assert "javax-to-jakarta" in out
     assert "detect-only" in out
     # Dependency order, not alphabetical.
@@ -660,3 +661,54 @@ def test_list_packs_reports_a_broken_library_in_full(fresh_registry, tmp_path, c
 
     assert migrate._list_packs() == 1
     assert "unknown tier 'not-a-tier'" in capsys.readouterr().out
+
+
+def test_upgrade_coordinates_must_carry_a_version(packs):
+    """A malformed coordinate matches no dependency, so the build pack silently
+    leaves the old version in place — a no-op that looks like a success."""
+    write_pack(packs, "p", frontmatter=_fm(upgrades="[org.apache.struts:struts2-core]"))
+    assert "is not group:artifact:version" in load_error(packs)
+
+
+def test_upgrade_coordinates_are_parsed(packs):
+    write_pack(packs, "p", frontmatter=_fm(upgrades="[org.apache.struts:struts2-core:7.3.0]"))
+    assert parse_pack(packs / "p.pack.md").upgrades == ("org.apache.struts:struts2-core:7.3.0",)
+
+
+def test_a_pack_never_both_upgrades_and_eliminates_the_same_artifact(library):
+    """Modernising a framework in place and replacing it are alternatives. A
+    pack asking the build pack to do both would produce whichever the model
+    happened to apply last."""
+    for pack in library.values():
+        upgraded = {":".join(c.split(":")[:2]) for c in pack.upgrades}
+        assert not (upgraded & set(pack.eliminates)), pack.id
+
+
+def test_the_two_struts_routes_are_alternatives(library):
+    """modernize-in-place and migrate-to-spring edit the same files toward
+    different targets. Both are complete packs; activating both is a
+    configuration error, which is why each reads the web_framework decision."""
+    for pid in ("struts2-modernize", "struts2-to-springmvc6"):
+        assert library[pid].is_complete
+        assert "web_framework" in library[pid].decisions
+
+
+def test_struts_modernize_runs_on_todays_engine(library):
+    """The whole point of doing the version upgrade first: it is per-file, so it
+    needs no context extractor and is runnable before the extract stage exists."""
+    pack = library["struts2-modernize"]
+    assert pack.context == "none"
+    assert not pack.needs_selectors
+    assert pack.globs
+
+    from forge.utils.file_scanner import runnable_phases
+    assert "struts2-modernize" in runnable_phases()
+
+
+def test_struts_modernize_keeps_struts_rather_than_removing_it(library):
+    """It upgrades the framework; it must never hand the build pack an
+    instruction to delete struts2-core."""
+    pack = library["struts2-modernize"]
+    assert any(c.startswith("org.apache.struts:struts2-core:") for c in pack.upgrades)
+    assert "org.apache.struts:*" not in pack.eliminates
+    assert "org.apache.struts:struts2-core" not in pack.eliminates

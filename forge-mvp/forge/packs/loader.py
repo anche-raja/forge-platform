@@ -95,6 +95,20 @@ def _str_list(meta: dict, key: str, where: Path) -> Tuple[str, ...]:
     return tuple(raw)
 
 
+def _coordinates(meta: dict, key: str, where: Path, *, parts: int) -> Tuple[str, ...]:
+    """A list of Maven coordinates, checked for shape.
+
+    A malformed coordinate does not fail loudly downstream — it simply matches
+    no dependency, and the build pack silently leaves the old version in place.
+    """
+    values = _str_list(meta, key, where)
+    shape = "group:artifact" if parts == 2 else "group:artifact:version"
+    for coord in values:
+        if coord.count(":") != parts - 1:
+            raise PackError(f"{where}: '{key}' entry '{coord}' is not {shape}")
+    return values
+
+
 def _detect_rules(meta: dict, where: Path) -> Tuple[DetectRule, ...]:
     detect = meta.get("detect")
     if not isinstance(detect, dict) or "any" not in detect:
@@ -274,6 +288,7 @@ def parse_pack(path: Path) -> PackSpec:
         depends_on=_str_list(meta, "depends_on", path),
         decisions=_str_list(meta, "decisions", path),
         eliminates=_str_list(meta, "eliminates", path),
+        upgrades=_coordinates(meta, "upgrades", path, parts=3),
         acceptance=_acceptance(meta, path),
         transform_prompt=transform,
         review_prompt=review,
