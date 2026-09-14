@@ -7,7 +7,8 @@ in one place.
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+import contextlib
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -97,6 +98,58 @@ def make_state(file_path: str, tmp_path: Path, phase: str = "java21", dry_run: b
     }
     state.update(overrides)
     return state
+
+
+@contextlib.contextmanager
+def mocked_aws(config_path=None, review_score: int = 95):
+    """Patch every AWS touchpoint a run reaches.
+
+    forge.graph binds DynamoDBSaver at import, so both the source name and the
+    graph's copy are patched — a module imported before the patch would
+    otherwise keep the real class.
+    """
+    with contextlib.ExitStack() as stack:
+        boto_gr = stack.enter_context(patch("forge.guardrails.bedrock_guardrails.boto3"))
+        stack.enter_context(patch("forge.state_store.dynamodb.boto3"))
+        pre = stack.enter_context(patch("forge.agents.guardrails_pre.ChatBedrockConverse"))
+        up = stack.enter_context(patch("forge.agents.java_upgrade.ChatBedrockConverse"))
+        rev = stack.enter_context(patch("forge.review.java_reviewer.ChatBedrockConverse"))
+        post = stack.enter_context(patch("forge.agents.guardrails_post.ChatBedrockConverse"))
+        saver = stack.enter_context(patch("forge.state_store.dynamodb.DynamoDBSaver"))
+        graph_saver = stack.enter_context(patch("forge.graph.DynamoDBSaver"))
+        metrics = stack.enter_context(patch("forge.utils.telemetry.MetricsEmitter"))
+
+        from langgraph.checkpoint.memory import MemorySaver
+        saver.return_value = MemorySaver()
+        graph_saver.return_value = saver.return_value
+
+        client = MagicMock()
+        client.apply_guardrail.return_value = {"action": "NONE", "assessments": []}
+        boto_gr.client.return_value = client
+
+        pre.return_value.invoke.return_value = llm_reply({"verdict": "PASS", "findings": [], "reason": ""})
+        post.return_value.invoke.return_value = llm_reply({"verdict": "PASS", "findings": [], "reason": ""})
+        rev.return_value.invoke.return_value = llm_reply(
+            {"score": review_score, "verdict": "PASS", "feedback": "", "checks": {}}
+        )
+
+        def transform(messages):
+            # Echo back the path the agent was given, migrated.
+            human = messages[1].content
+            path = human.split("File path: ", 1)[1].splitlines()[0]
+            return llm_reply({"files": {path: MIGRATED_JAVA}, "manual_flags": []})
+
+        up.return_value.invoke.side_effect = transform
+        yield {"metrics": metrics, "upgrade": up, "review": rev, "pre": pre, "post": post}
+
+
+MIGRATED_JAVA = """\
+package com.corp.user;
+import jakarta.persistence.Entity;
+public class UserAction {
+    public void handle() {}
+}
+"""
 
 
 def llm_reply(payload: dict) -> MagicMock:

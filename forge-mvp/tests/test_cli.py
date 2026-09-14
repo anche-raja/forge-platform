@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import migrate
-from tests.conftest import CLEAN_JAVA, llm_reply, write_config
+from tests.conftest import CLEAN_JAVA, llm_reply, mocked_aws, write_config
 
 LEGACY = """\
 package com.corp.user;
@@ -40,40 +40,8 @@ def project(tmp_path):
     return tmp_path / "proj"
 
 
-@contextlib.contextmanager
-def _mocked_aws(config_path, review_score=95):
-    """Patch every AWS touchpoint the CLI reaches."""
-    with contextlib.ExitStack() as stack:
-        boto_gr = stack.enter_context(patch("forge.guardrails.bedrock_guardrails.boto3"))
-        stack.enter_context(patch("forge.state_store.dynamodb.boto3"))
-        pre = stack.enter_context(patch("forge.agents.guardrails_pre.ChatBedrockConverse"))
-        up = stack.enter_context(patch("forge.agents.java_upgrade.ChatBedrockConverse"))
-        rev = stack.enter_context(patch("forge.review.java_reviewer.ChatBedrockConverse"))
-        post = stack.enter_context(patch("forge.agents.guardrails_post.ChatBedrockConverse"))
-        saver = stack.enter_context(patch("forge.state_store.dynamodb.DynamoDBSaver"))
-        metrics = stack.enter_context(patch("forge.utils.telemetry.MetricsEmitter"))
-
-        from langgraph.checkpoint.memory import MemorySaver
-        saver.return_value = MemorySaver()
-
-        client = MagicMock()
-        client.apply_guardrail.return_value = {"action": "NONE", "assessments": []}
-        boto_gr.client.return_value = client
-
-        pre.return_value.invoke.return_value = llm_reply({"verdict": "PASS", "findings": [], "reason": ""})
-        post.return_value.invoke.return_value = llm_reply({"verdict": "PASS", "findings": [], "reason": ""})
-        rev.return_value.invoke.return_value = llm_reply(
-            {"score": review_score, "verdict": "PASS", "feedback": "", "checks": {}}
-        )
-
-        def transform(messages):
-            # Echo back the path the agent was given, migrated.
-            human = messages[1].content
-            path = human.split("File path: ", 1)[1].splitlines()[0]
-            return llm_reply({"files": {path: MIGRATED}, "manual_flags": []})
-
-        up.return_value.invoke.side_effect = transform
-        yield {"metrics": metrics, "upgrade": up}
+# The AWS mock lives in conftest so the service and UI tests share it.
+_mocked_aws = mocked_aws
 
 
 def _run(argv):

@@ -43,19 +43,26 @@ class Outcome:
     detail: str
 
 
+def decisions_from(data, where: str = "<decisions>") -> List[Decision]:
+    """Validate a list of decision dicts — from a file or an HTTP body — the same way."""
+    if not isinstance(data, list):
+        raise ValueError(f"{where}: 'decisions' must be a list")
+    out: List[Decision] = []
+    for i, d in enumerate(data):
+        if not isinstance(d, dict) or not d.get("file") or d.get("decision") not in VALID_DECISIONS:
+            raise ValueError(
+                f"{where}: decisions[{i}] needs 'file' and a 'decision' in {', '.join(VALID_DECISIONS)}; got {d!r}"
+            )
+        out.append(Decision(file=str(d["file"]), pack=str(d.get("pack") or ""), decision=d["decision"],
+                            note=str(d.get("note") or "").strip(), rule=str(d.get("rule") or "").strip()))
+    return out
+
+
 def load_decisions(path: str) -> Tuple[str, List[Decision]]:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("decisions"), list):
         raise ValueError(f"{path}: expected {{\"run\": ..., \"decisions\": [...]}}")
-    out: List[Decision] = []
-    for i, d in enumerate(data["decisions"]):
-        if not isinstance(d, dict) or not d.get("file") or d.get("decision") not in VALID_DECISIONS:
-            raise ValueError(
-                f"{path}: decisions[{i}] needs 'file' and a 'decision' in {', '.join(VALID_DECISIONS)}; got {d!r}"
-            )
-        out.append(Decision(file=str(d["file"]), pack=str(d.get("pack") or ""), decision=d["decision"],
-                            note=str(d.get("note") or "").strip(), rule=str(d.get("rule") or "").strip()))
-    return str(data.get("run") or ""), out
+    return str(data.get("run") or ""), decisions_from(data["decisions"], str(path))
 
 
 def find_entry(queue: dict, decision: Decision) -> Optional[dict]:

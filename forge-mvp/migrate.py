@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""FORGE migration CLI."""
+"""FORGE migration CLI — a thin printer over ``forge.service``.
+
+Every command here calls the same functions the web UI calls; this file only
+parses arguments, turns service events into the lines it has always printed,
+and maps results to exit codes.
+"""
 
 import argparse
-import json
-import os
 import sys
 from pathlib import Path
 
@@ -12,256 +15,44 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _build_initial_state(config, file_path: str, phase: str, dry_run: bool, source_dir: str, output_dir: str,
-                         generate: bool = False, file_status_overrides: dict | None = None) -> dict:
-    from forge.state import make_file_status
-    file_status = make_file_status(file_path, phase)
-    file_status["generate"] = generate
-    if file_status_overrides:
-        file_status.update(file_status_overrides)
-    return {
-        "current_file": file_status,
-        "phase": phase,
-        "dry_run": dry_run,
-        "source_dir": str(Path(source_dir).resolve()),
-        "output_dir": output_dir,
-        "target_java_version": config.get("target_java_version", "21"),
-        "target_spring_version": "3",
-        "files_processed": 0,
-        "files_passed": 0,
-        "files_retried": 0,
-        "files_manual": 0,
-        "files_blocked": 0,
-        "files_held": 0,
-        "bedrock_calls": 0,
-        "estimated_cost_usd": 0.0,
-        "messages": [],
-    }
+# ─── events → the historical stdout ───────────────────────────────────────────
+
+def _print_event(event: dict) -> None:
+    """Reproduce the CLI's output line for line from service events."""
+    t = event["type"]
+    if t == "skipped":
+        print(f"Skipped {event['count']} file(s) outside scope prefix '{event['prefix']}'")
+    elif t == "start":
+        gen_str = f" (+{event['generated']} generated)" if event["generated"] else ""
+        print(f"FORGE — phase: {event['phase']} | files: {event['files']}{gen_str} | dry-run: {event['dry_run']}")
+    elif t == "file":
+        score_str = f", score: {event['score']}" if event["score"] is not None else ""
+        print(f"[{event['index']}/{event['total']}] {event['label']} → {event['status']}{score_str}")
+    elif t == "snapshot":
+        print(f"Context snapshot: {event['path']}")
+    elif t == "snapshot_skipped":
+        print(f"Context snapshot skipped: {event['reason']}")
+    elif t == "queue":
+        print(f"\nReview queue: {event['path']} ({event['count']} files)")
+        print(f"Review page:  {event['page']}")
+    elif t == "acceptance_skipped":
+        print(f"\nAcceptance: {event['reason']}")
+    elif t == "acceptance":
+        print(f"\nAcceptance: {event['verdict']} — {event['passed']} passed, {event['failed']} failed, "
+              f"{event['skipped']} skipped")
+        for r in event["results"]:
+            print(f"  [{r['outcome'].upper():4}] {r['kind']:<16} {r['detail']}")
+        print(f"Acceptance record: {event['path']}")
+    elif t == "cancelled":
+        print(f"\nCancelled after {event['done']} of {event['total']} unit(s)")
+    elif t == "summary":
+        held_str = f" | {event['held']} held" if event["held"] else ""
+        print(f"\nSummary: {event['passed']} passed | {event['manual']} manual | {event['blocked']} blocked"
+              f"{held_str} | {event['bedrock_calls']} Bedrock calls")
+        print(f"Report: {event['report']}")
 
 
-def run_file(app, config, state_manager, metrics, file_path: str, index: int, total: int, phase: str, dry_run: bool,
-             source_dir: str, output_dir: str, generate: bool = False, file_status_overrides: dict | None = None,
-             thread_id: str | None = None) -> dict:
-    initial = _build_initial_state(config, file_path, phase, dry_run, source_dir, output_dir,
-                                   generate=generate, file_status_overrides=file_status_overrides)
-    cfg = {"configurable": {"thread_id": thread_id or file_path}}
-
-    final = app.invoke(initial, config=cfg)
-    fs = final["current_file"]
-    status = fs.get("status", "UNKNOWN")
-    score = fs.get("review_score")
-    score_str = f", score: {score}" if score is not None else ""
-
-    label = f"{Path(file_path).name} (generated)" if generate else Path(file_path).name
-    print(f"[{index}/{total}] {label} → {status}{score_str}")
-
-    if not dry_run:
-        state_manager.put_file_status(fs)
-        # Emitted per file, not per run: the FORGE-PipelineStalled alarm watches
-        # for files_processed dropping below 1 in a 15-minute window, so a long
-        # run that only reported at the end would trip it.
-        _emit_file_metrics(metrics, final, fs)
-
-    return final
-
-
-def _discover(args) -> int:
-    """Profile a repository and say which packs apply, on what evidence.
-
-    No model, no AWS. The profile it writes is the editable input the rest of
-    the platform consumes; a pack it names as blocked or detect-only is a gap
-    made visible, not a technology silently ignored.
-    """
-    from forge.discover import build_profile, render_summary, resolve_packs, write_outputs
-    from forge.discover.emit import DEFAULT_DECISIONS
-    from forge.discover.resolve import content_patterns
-    from forge.packs import PackError, load_packs
-    from forge.utils.file_scanner import runnable_phases
-
-    try:
-        registry = load_packs()
-    except PackError as e:
-        print(f"Pack library failed to load:\n  {e}")
-        return 1
-    decisions = dict(DEFAULT_DECISIONS)
-    if args.config and Path(args.config).is_file():
-        from forge.config import ForgeConfig
-        decisions.update(ForgeConfig(args.config).get("decisions") or {})
-
-    source_dir = str(Path(args.source_dir).resolve())
-    packs = list(registry.values())
-    profile = build_profile(source_dir, content_patterns=content_patterns(packs), decisions=decisions)
-    activations = resolve_packs(profile, packs)
-    runnable = set(runnable_phases())
-    for a in activations:
-        a.runnable = a.pack_id in runnable
-    order = registry.resolve_order([a.pack_id for a in activations])
-
-    print(render_summary(profile, activations, order))
-    json_path, yaml_path = write_outputs(profile, activations, order, decisions, args.output_dir)
-    print(f"\nProfile: {yaml_path}\nDetail:  {json_path}")
-    return 0
-
-
-def _feedback_report(args) -> int:
-    """Corrections become pack edits: notes grouped by pack and rule, with the file to edit."""
-    from forge.feedback_report import collect_notes, write_feedback_report
-
-    notes = collect_notes(args.output_dir)
-    path = write_feedback_report(args.output_dir)
-    packs = sorted({n["pack"] for n in notes})
-    print(f"{len(notes)} decision note(s) across {len(packs)} pack(s)" + (f": {', '.join(packs)}" if packs else ""))
-    print(f"Feedback report: {path}")
-    return 0
-
-
-def _apply_decisions(args) -> int:
-    """Make a reviewer's decisions real: promote, discard, or re-run with the note.
-
-    No --phase: each queue entry names the pack that produced it. Exit 0 only
-    when every decision applied, so a CI step can gate on it.
-    """
-    from datetime import datetime, timezone
-
-    from forge.config import ForgeConfig
-    from forge.decisions import (append_report_section, applied_section, apply_decisions, load_decisions,
-                                 write_applied_log)
-    from forge.graph import build_graph
-    from forge.review_queue import load_queue, write_queue, write_review_page
-    from forge.state_store.dynamodb import DynamoDBStateManager
-    from forge.utils.telemetry import MetricsEmitter
-    from forge.verify.build_verifier import BuildVerifier
-
-    config = ForgeConfig(args.config)
-    source_dir = str(Path(args.source_dir).resolve())
-    output_dir = str(Path(args.output_dir).resolve())
-    try:
-        queue = load_queue(output_dir)
-        run, decisions = load_decisions(args.apply_decisions)
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Cannot apply decisions: {e}")
-        return 1
-    if not decisions:
-        print("No decisions in the file — nothing to apply.")
-        return 0
-
-    state_manager = DynamoDBStateManager(config)
-    metrics = MetricsEmitter(config, enabled=False)
-    verifier = BuildVerifier(config)
-    app = build_graph(config) if any(d.decision == "retry" for d in decisions) else None
-    counter = {"n": 0}
-
-    def rerun(entry: dict, decision) -> dict:
-        counter["n"] += 1
-        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        overrides = {"human_note": decision.note or None, "human_rule": decision.rule or None,
-                     "human_decision": "retry", "human_decided_at": stamp}
-        final = run_file(
-            app, config, state_manager, metrics,
-            file_path=entry["file_path"], index=counter["n"], total=len(decisions),
-            phase=entry.get("pack") or args.phase or "java21", dry_run=args.dry_run,
-            source_dir=source_dir, output_dir=output_dir, generate=bool(entry.get("generate")),
-            file_status_overrides=overrides,
-            # A fresh budget on a fresh thread: the checkpointer must not resume the exhausted run.
-            thread_id=f"{entry['file_path']}#human-{stamp}",
-        )
-        return final["current_file"]
-
-    def verify_build(written):
-        return verifier.verify({"dry_run": False, "output_dir": output_dir, "current_file": {"written_paths": written}})
-
-    outcomes, remaining = apply_decisions(
-        decisions, queue, source_dir=source_dir, output_dir=output_dir,
-        put_status=state_manager.put_file_status, verify_build=verify_build, rerun=rerun, dry_run=args.dry_run,
-    )
-
-    print(f"{'FILE':<48} {'DECISION':<8} {'APPLIED':<8} {'STATUS':<14} DETAIL")
-    for o in outcomes:
-        print(f"{o.file[-48:]:<48} {o.decision:<8} {'yes' if o.applied else 'no':<8} {o.status_after:<14} {o.detail}")
-
-    if not args.dry_run:
-        new_queue = write_queue(output_dir, remaining, source_dir, phase=queue.get("phase", ""), run_id=queue.get("run"))
-        if new_queue["entries"]:
-            write_review_page(output_dir, new_queue)
-        append_report_section(output_dir, applied_section(outcomes))
-        log = write_applied_log(output_dir, run or queue.get("run", ""), decisions, outcomes)
-        print(f"\n{len(new_queue['entries'])} file(s) still awaiting review · decisions logged to {log}")
-    else:
-        print("\nDry run — nothing was written, moved or re-run.")
-    return 0 if all(o.applied for o in outcomes) else 1
-
-
-def _acceptance_only(args) -> int:
-    from forge.config import ForgeConfig
-
-    config = ForgeConfig(args.config)
-    source_dir = str(Path(args.source_dir).resolve())
-    return _run_acceptance(args.phase, source_dir, args.output_dir, config,
-                           run_build=args.acceptance_build, dry_run=False)
-
-
-def _run_acceptance(phase: str, source_dir: str, output_dir: str, config, *, deleted=(), run_build: bool,
-                    dry_run: bool) -> int:
-    """Execute the phase's acceptance checks and append the verdict to the report.
-
-    A pack's checks gate the *project*, independently of how files scored.
-    In a dry run nothing was written, so there is no post-migration tree to
-    check — say so rather than report the pre-migration state as a result.
-    """
-    from forge.phases import get_phase
-    from forge.verify.acceptance import run_acceptance, write_acceptance
-
-    spec = get_phase(phase)
-    checks = getattr(spec, "acceptance", ())
-    if not checks:
-        print(f"\nAcceptance: phase '{phase}' declares no acceptance checks")
-        return 0
-    if dry_run:
-        print("\nAcceptance: skipped — a dry run writes nothing, so there is no post-migration tree to check")
-        return 0
-
-    decisions = config.get("decisions") or {}
-    report = run_acceptance([spec], source_dir, output_dir, decisions, deleted=deleted, run_build=run_build)
-    path = write_acceptance(report, output_dir)
-    print(f"\nAcceptance: {report.verdict} — {sum(r.passed for r in report.results)} passed, "
-          f"{len(report.failed)} failed, {len(report.skipped)} skipped")
-    for r in report.results:
-        print(f"  [{r.outcome.upper():4}] {r.kind:<16} {r.detail}")
-    print(f"Acceptance record: {path}")
-    return 0 if report.verdict == "PASS" else 1
-
-
-def _write_snapshot(phase: str, source_dir: str, output_dir: str, unit_paths, get_extractor, write_context_snapshot) -> None:
-    from forge.phases import get_phase
-
-    name = getattr(get_phase(phase), "context", "none")
-    extractor = get_extractor(name) if name != "none" else None
-    if extractor is None:
-        return
-    modules = sorted({extractor.module_for(p, source_dir) for p in unit_paths})
-    try:
-        path = write_context_snapshot(output_dir, name, source_dir, modules)
-    except ValueError as e:
-        print(f"Context snapshot skipped: {e}")
-        return
-    print(f"Context snapshot: {path}")
-
-
-def _emit_file_metrics(metrics, final: dict, fs: dict) -> None:
-    status = fs.get("status")
-    payload = {
-        "files_processed": 1,
-        "files_passed": 1 if status == "DONE" else 0,
-        "files_manual": 1 if status == "MANUAL_REVIEW" else 0,
-        "files_blocked": 1 if status == "BLOCKED" else 0,
-        "files_retried": 1 if (fs.get("retry_count") or 0) > 0 else 0,
-        "bedrock_calls": final.get("bedrock_calls", 0),
-        "estimated_cost_usd": final.get("estimated_cost_usd", 0.0),
-    }
-    if fs.get("review_score") is not None:
-        payload["review_score"] = fs["review_score"]
-    metrics.emit(payload)
-
+# ─── commands ─────────────────────────────────────────────────────────────────
 
 def _list_packs() -> int:
     """Print the pack library in dependency order. Exits non-zero if it is broken.
@@ -288,6 +79,89 @@ def _list_packs() -> int:
         if deps:
             print(f"     {deps}")
     print("\n* detect-only — recognised, reported, but not yet migrated")
+    return 0
+
+
+def _discover(args) -> int:
+    from forge import service
+    from forge.config import ForgeConfig
+    from forge.packs import PackError
+
+    config = ForgeConfig(args.config) if args.config and Path(args.config).is_file() else None
+    try:
+        result = service.discover(args.source_dir, args.output_dir, config)
+    except PackError as e:
+        print(f"Pack library failed to load:\n  {e}")
+        return 1
+    print(result["summary"])
+    print(f"\nProfile: {result['paths']['yaml']}\nDetail:  {result['paths']['json']}")
+    return 0
+
+
+def _feedback_report(args) -> int:
+    from forge import service
+
+    result = service.feedback(args.output_dir)
+    packs = result["packs"]
+    print(f"{result['notes']} decision note(s) across {len(packs)} pack(s)" + (f": {', '.join(packs)}" if packs else ""))
+    print(f"Feedback report: {result['path']}")
+    return 0
+
+
+def _apply_decisions(args) -> int:
+    """Exit 0 only when every decision applied, so a CI step can gate on it."""
+    from forge import service
+    from forge.config import ForgeConfig
+    from forge.decisions import load_decisions
+
+    config = ForgeConfig(args.config)
+    try:
+        run, decisions = load_decisions(args.apply_decisions)
+        if not decisions:
+            print("No decisions in the file — nothing to apply.")
+            return 0
+        result = service.apply(decisions, args.source_dir, args.output_dir, config, run=run,
+                               dry_run=args.dry_run, phase=args.phase, on_event=_print_event)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Cannot apply decisions: {e}")
+        return 1
+
+    print(f"{'FILE':<48} {'DECISION':<8} {'APPLIED':<8} {'STATUS':<14} DETAIL")
+    for o in result.outcomes:
+        print(f"{o.file[-48:]:<48} {o.decision:<8} {'yes' if o.applied else 'no':<8} {o.status_after:<14} {o.detail}")
+    if not args.dry_run:
+        print(f"\n{len(result.queue_after['entries'])} file(s) still awaiting review · decisions logged to {result.log_path}")
+    else:
+        print("\nDry run — nothing was written, moved or re-run.")
+    return 0 if result.all_applied else 1
+
+
+def _acceptance_only(args) -> int:
+    from forge import service
+    from forge.config import ForgeConfig
+
+    outcome = service.acceptance(args.phase, str(Path(args.source_dir).resolve()), args.output_dir,
+                                 ForgeConfig(args.config), run_build=args.acceptance_build, dry_run=False)
+    service._emit_acceptance(_print_event, outcome)
+    return outcome.exit_code
+
+
+def _migrate(args) -> int:
+    from forge import service
+    from forge.config import ForgeConfig
+    from forge.utils.telemetry import configure_logging
+
+    configure_logging(args.log_level)
+    config = ForgeConfig(args.config)
+    try:
+        service.run_migration(
+            args.source_dir, args.phase, args.output_dir, config,
+            dry_run=args.dry_run, single_file=args.single_file, resume=args.resume, no_metrics=args.no_metrics,
+            run_acceptance=args.acceptance, acceptance_build=args.acceptance_build, on_event=_print_event,
+        )
+    except service.NoEligibleFiles as e:
+        print(str(e))
+        sys.exit(0)
     return 0
 
 
@@ -346,127 +220,7 @@ def main():
         parser.error("--phase is required")
     if args.acceptance_only:
         return _acceptance_only(args)
-
-    from forge.utils.telemetry import MetricsEmitter, configure_logging
-    configure_logging(args.log_level)
-
-    from forge.config import ForgeConfig
-    from forge.graph import build_graph
-    from forge.state_store.dynamodb import DynamoDBStateManager
-    from forge.utils.file_scanner import scan_java_files
-    from forge.utils.report import generate_report
-
-    from forge.context.snapshot import write_context_snapshot
-    from forge.extract import clear_context_cache, get_extractor
-    from forge.extract.selectors import is_generated_target
-    from forge.phases import get_phase
-
-    clear_context_cache()
-    config = ForgeConfig(args.config)
-    app = build_graph(config)
-    state_manager = DynamoDBStateManager(config)
-    metrics = MetricsEmitter(config, enabled=not args.no_metrics and not args.dry_run)
-
-    source_dir = str(Path(args.source_dir).resolve())
-
-    # Determine file list
-    skipped = []
-    generated = ()
-    if args.single_file:
-        # Naming a file explicitly beats a config default — no scope filtering.
-        files = [str(Path(args.single_file).resolve())]
-        if is_generated_target(get_phase(args.phase), files[0]):
-            files, generated = [], (files[0],)
-    elif args.resume:
-        pending = state_manager.get_files_by_status("PENDING")
-        files = [fs["file_path"] for fs in pending]
-        if not files:
-            print("No PENDING files found in DynamoDB. Nothing to resume.")
-            sys.exit(0)
-    else:
-        # Scope filtering happens here, before any model call, so an out-of-scope
-        # file costs nothing rather than being discovered mid-pipeline.
-        scan = scan_java_files(source_dir, args.phase, config.get("scope_package_prefix", ""))
-        files, skipped, generated = scan.files, scan.skipped, scan.generated
-        if skipped:
-            print(f"Skipped {len(skipped)} file(s) outside scope prefix "
-                  f"'{config.get('scope_package_prefix', '')}'")
-        if not files and not generated:
-            print(f"No eligible files found in {source_dir}")
-            sys.exit(0)
-        if not args.dry_run and files:
-            state_manager.mark_pending(files, args.phase)
-
-    # Generated targets run after the real files so the descriptors they are
-    # built from have already been migrated in this run.
-    units = [(f, False) for f in files] + [(g, True) for g in generated]
-    total = len(units)
-    gen_str = f" (+{len(generated)} generated)" if generated else ""
-    print(f"FORGE — phase: {args.phase} | files: {len(files)}{gen_str} | dry-run: {args.dry_run}")
-
-    all_statuses = []
-    total_bedrock_calls = 0
-    total_cost = 0.0
-
-    for i, (file_path, generate) in enumerate(units, start=1):
-        final = run_file(
-            app, config, state_manager, metrics,
-            file_path=file_path,
-            index=i,
-            total=total,
-            phase=args.phase,
-            dry_run=args.dry_run,
-            source_dir=source_dir,
-            output_dir=args.output_dir,
-            generate=generate,
-        )
-        all_statuses.append(final["current_file"])
-        total_bedrock_calls += final.get("bedrock_calls", 0)
-        total_cost += final.get("estimated_cost_usd", 0.0) or 0.0
-
-    output_root = Path(args.output_dir)
-    output_root.mkdir(parents=True, exist_ok=True)
-
-    # The full extracted context, for the reviewer of last resort and for the
-    # acceptance checks that diff pre- against post-migration facts. Written in
-    # dry-run too: it is an audit artifact, like the report.
-    _write_snapshot(args.phase, source_dir, str(output_root), [u for u, _ in units], get_extractor, write_context_snapshot)
-
-    # The review queue: what the pipeline could not settle — and, in a dry run,
-    # everything it would have done, since a first trial exists to look at that.
-    from forge.review_queue import QUEUE_NAME, write_queue, write_review_page
-
-    manual = [fs for fs in all_statuses if fs.get("status") == "MANUAL_REVIEW"]
-    queue = write_queue(str(output_root), all_statuses, source_dir, phase=args.phase, dry_run=args.dry_run)
-    if queue["entries"]:
-        page = write_review_page(str(output_root), queue)
-        print(f"\nReview queue: {output_root / QUEUE_NAME} ({len(queue['entries'])} files)")
-        print(f"Review page:  {page}")
-
-    report_path = output_root / "migration-report.md"
-    generate_report(
-        output_path=str(report_path),
-        phase=args.phase,
-        source_dir=source_dir,
-        file_statuses=all_statuses,
-        bedrock_calls=total_bedrock_calls,
-        estimated_cost_usd=total_cost,
-        skipped=skipped,
-    )
-
-    if args.acceptance:
-        deleted = [d for fs in all_statuses for d in (fs.get("deleted_files") or [])]
-        _run_acceptance(args.phase, source_dir, str(output_root), config, deleted=deleted,
-                        run_build=args.acceptance_build, dry_run=args.dry_run)
-
-    passed = sum(1 for fs in all_statuses if fs.get("status") == "DONE")
-    blocked = sum(1 for fs in all_statuses if fs.get("status") == "BLOCKED")
-    manual_count = len(manual)
-
-    held = sum(1 for fs in all_statuses if fs.get("status") == "HELD")
-    held_str = f" | {held} held" if held else ""
-    print(f"\nSummary: {passed} passed | {manual_count} manual | {blocked} blocked{held_str} | {total_bedrock_calls} Bedrock calls")
-    print(f"Report: {report_path}")
+    return _migrate(args)
 
 
 if __name__ == "__main__":
