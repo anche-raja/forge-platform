@@ -263,6 +263,15 @@ def _entry_html(i: int, e: dict) -> str:
     return "\n".join(parts)
 
 
+REVIEW_CSS = _CSS
+
+
+def render_entries(queue: dict) -> str:
+    """The entry sections alone — what the live UI embeds. The static page wraps the same HTML."""
+    entries = queue.get("entries", [])
+    return "\n".join(_entry_html(i, e) for i, e in enumerate(entries)) or "<p>Nothing to review.</p>"
+
+
 def render_review_page(queue: dict) -> str:
     entries = queue.get("entries", [])
     by_status: Dict[str, int] = {}
@@ -277,7 +286,7 @@ def render_review_page(queue: dict) -> str:
              f"<div class=\"meta\">run {_esc(queue.get('run'))}"
              + (" · <strong>dry run</strong> — nothing was written; approve to write from the transformed text" if queue.get("dry_run") else "")
              + f" · {len(entries)} file(s): {_esc(counts) or 'none'}<br>source {_esc(queue.get('source_dir'))} · output {_esc(queue.get('output_dir'))}</div>")
-    body = "\n".join(_entry_html(i, e) for i, e in enumerate(entries)) or "<p>Nothing to review.</p>"
+    body = render_entries(queue)
     foot = ("</main><footer><button type=\"button\" onclick=\"copyOut()\">Copy decisions JSON</button>"
             "<button type=\"button\" onclick=\"download()\">Download decisions.json</button>"
             "<span class=\"count\" id=\"count\">0 decision(s)</span>"
