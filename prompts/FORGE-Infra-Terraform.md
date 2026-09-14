@@ -8,15 +8,18 @@ Infrastructure is split into modules — deploy only what each phase needs.
 Each module outputs the values (ARNs, URLs, table names, IDs) that feed directly into FORGE agents.yaml and .env files.
 
 ## How to use this prompt
-Send this to Claude Code. It will scaffold the full Terraform project.
-Then deploy phase by phase — only deploy the module for the phase you are about to run.
+This is the specification the `forge-terraform/` project was built from, kept current with
+what is implemented. Deploy phase by phase — the Phase 6 and future modules are behind flags,
+so a plain apply only creates what Phase 0 needs.
 
 ## Deployment sequence
-terraform apply -target=module.foundation    # before Phase 0 MVP
-terraform apply -target=module.observability # before Phase 0 MVP
-terraform apply -target=module.sqs          # before Phase 6
-terraform apply -target=module.rag          # before Phase 6
-terraform apply -target=module.sagemaker    # future — internal LLM only
+terraform apply                                  # Phase 0: foundation + observability (flags default false)
+enable_sqs = true      → terraform apply         # before Phase 6 — manual review queue
+enable_rag = true      → terraform apply         # before Phase 6 — knowledge base (OpenSearch always-on, ~$175/mo)
+enable_sagemaker = true → terraform apply        # future — internal LLM only
+
+After every apply: scripts/generate-agents-yaml.sh {env} > ../forge-mvp/agents.yaml
+(a guardrail change publishes a new version; agents.yaml pins the number).
 
 ---
 
@@ -82,14 +85,18 @@ AWS provider. Region from variable. Default tags applied to every resource:
 
 ## variables.tf — root module
 
-environment         string   — dev, staging, prod
+environment         string   — dev, staging, prod (validated)
 aws_region          string   — default us-east-1
-aws_account_id      string   — your AWS account ID
+aws_account_id      string   — your AWS account ID (no default)
 app_name            string   — default "forge"
 team_name           string   — your team name for tagging
-scope_package_prefix string  — Java package prefix for scope validation (e.g. com.corp)
-target_java_version string   — default "21"
-target_spring_version string — default "6"
+alerts_email        string   — CloudWatch alarm e-mail (needs SNS confirmation)
+enable_sqs          bool     — default false
+enable_rag          bool     — default false
+enable_sagemaker    bool     — default false
+
+The Java package scope (scope_package_prefix) is a pipeline setting, not infrastructure:
+generate-agents-yaml.sh reads it from $FORGE_SCOPE_PACKAGE_PREFIX.
 
 ---
 
@@ -129,7 +136,7 @@ Range key: checkpoint_id (S)
 
 No GSI needed. No TTL. This is managed entirely by LangGraph's DynamoDB checkpointer.
 
-### DynamoDB — Migration Manifest Table
+### DynamoDB — Migration Manifest Table (NOT IMPLEMENTED — Phase 0 uses the two tables above; the manifest is the per-run migration-report.md / manual-review-queue.json on disk)
 Resource: aws_dynamodb_table
 Name: {app_name}-migration-manifest-{environment}
 Billing mode: PAY_PER_REQUEST
@@ -147,10 +154,13 @@ Sensitive information policy — enable these entity types:
   AWS_SECRET_KEY — action BLOCK
   CREDIT_DEBIT_CARD_NUMBER — action BLOCK
   US_SOCIAL_SECURITY_NUMBER — action BLOCK
-  PASSWORD — action ANONYMIZE
-  IP_ADDRESS — action ANONYMIZE
-  EMAIL — action ANONYMIZE
+  PASSWORD — action BLOCK
   US_BANK_ACCOUNT_NUMBER — action BLOCK
+
+Do NOT list EMAIL or IP_ADDRESS (and do not use ANONYMIZE for anything). The pipeline treats
+any GUARDRAIL_INTERVENED on INPUT as BLOCKED, and ANONYMIZE is an intervention — an @author
+e-mail or a 127.0.0.1 literal would block the file. Only entity types that are genuinely
+secrets belong here.
 
 Content policy filters — set threshold HIGH for:
   HATE
@@ -163,12 +173,15 @@ Content policy filters — set threshold HIGH for:
 Word policy — blocked phrases:
   "ignore previous instructions"
   "disregard your system prompt"
-  "you are now"
-  These block the most common prompt injection patterns that could appear in malicious source code comments.
+  These block the most common prompt injection patterns that could appear in malicious source
+  code comments. Only phrases that never occur in application code or UI strings — "you are now"
+  was removed because it appears in login pages.
 
 Description: "FORGE migration pipeline guardrail — blocks secrets and prompt injection in source code"
 
-Create a guardrail version resource: aws_bedrock_guardrail_version pointing at the guardrail. Output the guardrail_id and version.
+Create a guardrail version resource: aws_bedrock_guardrail_version pointing at the guardrail, with
+lifecycle { replace_triggered_by = [aws_bedrock_guardrail.forge] } so every guardrail edit publishes
+a new numbered version (the pipeline pins the number). Output the guardrail_id and version.
 
 ### IAM — FORGE Execution Role
 Resource: aws_iam_role
@@ -180,23 +193,25 @@ This is the role FORGE runs as — attach it to your EC2 instance or ECS task or
 Inline policies:
 
 Bedrock policy:
-  bedrock:InvokeModel — on all Bedrock models in the region
+  bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream — on
+    arn:aws:bedrock:*::foundation-model/*                                 (every region)
+    arn:aws:bedrock:{region}:{account}:inference-profile/*                (this account)
+  agents.yaml names cross-region inference profiles (us.anthropic.…, us.amazon.nova-pro…);
+  invoking one needs the profile ARN AND the foundation model in every region it routes to.
+  An in-region foundation-model/* grant alone is AccessDenied.
   bedrock:ApplyGuardrail — on the guardrail ARN created above
   bedrock:Retrieve — on the knowledge base ARN (output from rag module, use data source if module not deployed yet)
 
 DynamoDB policy:
-  dynamodb:PutItem, GetItem, UpdateItem, DeleteItem, Query, Scan — on all three DynamoDB table ARNs
-  dynamodb:DescribeTable — on all three DynamoDB table ARNs
+  dynamodb:PutItem, GetItem, UpdateItem, DeleteItem, Query, Scan, DescribeTable — on both table ARNs and their /index/*
 
 CloudWatch policy:
   cloudwatch:PutMetricData — resource *
   logs:CreateLogGroup, CreateLogStream, PutLogEvents — resource *
 
-SQS policy (conditional — only if sqs module is deployed):
-  sqs:SendMessage, ReceiveMessage, DeleteMessage, GetQueueAttributes — on the SQS queue ARN
-
-S3 policy (conditional — only if rag module is deployed):
-  s3:GetObject, PutObject, ListBucket — on the RAG S3 bucket ARN
+SQS and S3 access are granted by resource policies inside the sqs and rag modules (queue policy,
+bucket policy) naming the execution role — same-account, so no identity policy is needed and the
+foundation module has no dependency on modules that may not be deployed.
 
 ### IAM — Instance Profile (for EC2 local dev)
 Resource: aws_iam_instance_profile
@@ -473,8 +488,11 @@ module "observability" {
   alerts_email = var.alerts_email
 }
 
+# Phase 6 and future modules are opt-in. A plain apply must never create the
+# always-on OpenSearch Serverless collection by accident.
 module "sqs" {
   source      = "./modules/sqs"
+  count       = var.enable_sqs ? 1 : 0
   environment = var.environment
   app_name    = var.app_name
   execution_role_arn = module.foundation.execution_role_arn
@@ -482,6 +500,8 @@ module "sqs" {
 
 module "rag" {
   source      = "./modules/rag"
+  count       = var.enable_rag ? 1 : 0
+  providers   = { aws = aws, awscc = awscc }   # awscc for the OpenSearch Serverless collection
   environment = var.environment
   app_name    = var.app_name
   aws_account_id = var.aws_account_id
@@ -494,6 +514,7 @@ module "sagemaker" {
   count       = var.enable_sagemaker ? 1 : 0
   environment = var.environment
   app_name    = var.app_name
+  aws_region  = var.aws_region
 }
 
 ---
@@ -506,14 +527,13 @@ group "AGENTS_YAML — paste these into agents.yaml":
   aws_region                    = var.aws_region
   dynamodb_table                = module.foundation.dynamodb_state_table_name
   dynamodb_checkpoint_table     = module.foundation.dynamodb_checkpoint_table_name
-  dynamodb_manifest_table       = module.foundation.dynamodb_manifest_table_name
   guardrail_id                  = module.foundation.guardrail_id
   guardrail_version             = module.foundation.guardrail_version
   cloudwatch_namespace          = "FORGE/Migration"
   cloudwatch_log_group          = module.observability.cloudwatch_log_group_name
-  sqs_queue_url                 = module.sqs.queue_url (null if sqs not deployed)
-  knowledge_base_id             = module.rag.knowledge_base_id (null if rag not deployed)
-  sagemaker_endpoint_name       = module.sagemaker[0].endpoint_name (null if not deployed)
+  sqs_queue_url                 = try(module.sqs[0].queue_url, null)
+  knowledge_base_id             = try(module.rag[0].knowledge_base_id, null)
+  sagemaker_endpoint_name       = try(module.sagemaker[0].endpoint_name, null)
 
 group "ENV FILE — paste these into .env":
   execution_role_arn            = module.foundation.execution_role_arn
@@ -529,10 +549,9 @@ variable "aws_account_id"       description "Your AWS account ID — no default,
 variable "app_name"             default "forge"
 variable "team_name"            default "platform"
 variable "alerts_email"         description "Email for CloudWatch alarm notifications"
-variable "scope_package_prefix" description "Java package prefix for scope validation e.g. com.corp"
+variable "enable_sqs"           default false
+variable "enable_rag"           default false
 variable "enable_sagemaker"     default false
-variable "target_java_version"  default "21"
-variable "target_spring_version" default "6"
 
 ---
 
@@ -544,8 +563,9 @@ aws_account_id       = "123456789012"
 app_name             = "forge"
 team_name            = "platform-engineering"
 alerts_email         = "your-team@corp.com"
-scope_package_prefix = "com.corp"
-enable_sagemaker     = false
+enable_sqs           = false   # Phase 6
+enable_rag           = false   # Phase 6 — OpenSearch Serverless is always-on (~$175/mo)
+enable_sagemaker     = false   # future
 
 ---
 
@@ -605,10 +625,12 @@ docs/liberty_config_standards.md:
 
 1. bash scripts/bootstrap-state.sh completes and prints "State backend ready"
 2. terraform init succeeds with the S3 backend
-3. terraform plan -target=module.foundation shows no errors and plans 8-12 resources
-4. terraform apply -target=module.foundation completes and outputs guardrail_id, dynamodb table names, execution_role_arn
-5. terraform plan -target=module.observability shows CloudWatch dashboard and 4 alarms
-6. terraform apply -target=module.observability completes
+3. terraform plan (flags default false) shows no errors and plans only foundation + observability:
+   2 DynamoDB tables, guardrail + version, execution role + 3 inline policies + instance profile,
+   log group, SNS topic + subscription, 4 alarms, dashboard
+4. terraform apply completes and outputs guardrail_id, guardrail_version, dynamodb table names, execution_role_arn
+5. scripts/generate-agents-yaml.sh dev produces an agents.yaml that ForgeConfig loads
+6. The execution role can invoke the us.* inference profiles (test: aws bedrock converse via assume-role)
 7. ./scripts/generate-agents-yaml.sh dev produces a valid agents.yaml with all values filled in
 8. Pasting that agents.yaml into the FORGE MVP directory: python migrate.py ./myapp --phase java21 --file any_file.java runs without configuration errors
 
@@ -620,11 +642,11 @@ docs/liberty_config_standards.md:
 |---|---|---|
 | 1 | bash scripts/bootstrap-state.sh | Once, before anything |
 | 2 | terraform init | Once |
-| 3 | terraform apply -target=module.foundation | Phase 0 MVP |
-| 4 | terraform apply -target=module.observability | Phase 0 MVP |
-| 5 | terraform apply -target=module.sqs | Phase 6 |
-| 6 | terraform apply -target=module.rag | Phase 6 |
-| 7 | terraform apply -target=module.sagemaker | Future — internal LLM |
+| 3 | terraform apply (foundation + observability; flags off) | Phase 0 MVP |
+| 4 | scripts/generate-agents-yaml.sh dev > ../forge-mvp/agents.yaml | Phase 0 MVP |
+| 5 | enable_sqs = true → terraform apply | Phase 6 |
+| 6 | enable_rag = true → terraform apply (re-run if the collection is not yet ACTIVE) | Phase 6 |
+| 7 | enable_sagemaker = true → terraform apply | Future — internal LLM |
 
 ---
 

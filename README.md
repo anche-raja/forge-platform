@@ -1,6 +1,14 @@
 # FORGE
 
-**F**ile-by-file, AI-powered Java migration pipeline. Upgrades legacy Java codebases (`javax.*` → `jakarta.*`, deprecated APIs, Spring Boot versions) using AWS Bedrock, with every file validated by Bedrock Guardrails and cross-reviewed by a second model before it's written.
+AI-powered **J2EE → Java 21** migration platform. It takes a legacy enterprise application —
+Java 8, `javax.*`, Struts 1/2, Spring 5, Spring Security 5, JSP/JSTL, JUnit 4, vendor
+descriptors — and moves it to **Java 21 · Jakarta EE 10 · Spring Framework 6 · a WAR on
+WebSphere/Open Liberty**, one *pack* (technology transition) at a time. Every file goes through
+Bedrock Guardrails, a transform model, a cross-model review, a deterministic risk score and an
+optional compile gate before it is written; risky units are held for a human. No Spring Boot.
+
+Drive it from the CLI (`migrate.py`, for CI) or from a local web UI (`migrate.py --ui`) — both
+call the same service layer.
 
 ---
 
@@ -8,43 +16,47 @@
 
 ```mermaid
 flowchart LR
-    subgraph Client["Developer / CI"]
-        CLI["migrate.py<br/>LangGraph runner"]
+    subgraph Client["Engineer's machine / CI"]
+        UI["Local web UI<br/>migrate.py --ui<br/>127.0.0.1 only"]
+        CLI["CLI<br/>migrate.py"]
+        SVC["forge/service.py<br/>discover · run · review · accept"]
+        UI --> SVC
+        CLI --> SVC
     end
 
     subgraph AWS["AWS — us-east-1"]
         subgraph Bedrock["Amazon Bedrock"]
             CLAUDE["Claude Sonnet 4.5<br/>transform"]
             NOVA["Amazon Nova Pro<br/>review"]
-            GR["Bedrock Guardrail<br/>forge-guardrail-dev"]
+            GR["Bedrock Guardrail<br/>forge-guardrail-{env}"]
         end
 
         subgraph State["State & checkpoints"]
-            DDB1[("DynamoDB<br/>forge-migration-state-dev")]
-            DDB2[("DynamoDB<br/>forge-langgraph-checkpoints-dev")]
+            DDB1[("DynamoDB<br/>forge-migration-state-{env}")]
+            DDB2[("DynamoDB<br/>forge-langgraph-checkpoints-{env}")]
         end
 
         subgraph Obs["Observability"]
             CW["CloudWatch<br/>logs + dashboard"]
-            SNS["SNS topic<br/>forge-alerts-dev"]
+            SNS["SNS topic<br/>forge-alerts-{env}"]
             ALARMS["4 alarms<br/>retry / manual /<br/>stalled / cost"]
         end
 
-        subgraph Phase6["Phase 6+ (not deployed)"]
+        subgraph Phase6["Phase 6+ — opt-in (enable_sqs / enable_rag / enable_sagemaker)"]
             SQS["SQS<br/>manual-review"]
-            KB["Bedrock KB<br/>+ OpenSearch"]
+            KB["Bedrock KB<br/>+ OpenSearch Serverless"]
             SM["SageMaker<br/>TGI endpoint"]
         end
     end
 
-    CLI -->|InvokeModel| CLAUDE
-    CLI -->|InvokeModel| NOVA
-    CLI -->|ApplyGuardrail| GR
-    CLI -->|PutItem / GetItem| DDB1
-    CLI -->|checkpoint| DDB2
-    CLI -->|PutMetricData / logs| CW
+    SVC -->|Converse via us.* inference profiles| CLAUDE
+    SVC -->|Converse via us.* inference profiles| NOVA
+    SVC -->|ApplyGuardrail INPUT / OUTPUT| GR
+    SVC -->|PutItem / Query status-index| DDB1
+    SVC -->|checkpoint per file| DDB2
+    SVC -->|PutMetricData| CW
     ALARMS -->|alert| SNS
-    SNS -->|email| USER["ancheraja.ai@gmail.com"]
+    SNS -->|email| USER["alerts_email"]
 
     style Phase6 stroke-dasharray: 5 5
 ```
@@ -53,22 +65,25 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    S([file_path]) --> PRE[guardrails_pre<br/>ApplyGuardrail INPUT]
-    PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Sonnet]
-    PRE -->|BLOCKED| BLK[blocked]
-    UPGRADE --> REV[java_reviewer<br/>Nova Pro]
-    REV -->|score ≥ 80| POST[guardrails_post<br/>ApplyGuardrail OUTPUT]
+    S(["unit: file or generated target"]) --> PRE[guardrails_pre<br/>risk score · ApplyGuardrail INPUT]
+    PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Sonnet + pack prompt + context]
+    PRE -->|intervened| BLK[BLOCKED]
+    UPGRADE --> REV[java_reviewer<br/>Nova Pro + pack rubric]
+    REV -->|score ≥ 80| POST[guardrails_post<br/>ApplyGuardrail OUTPUT · zero javax.*]
     REV -->|50 ≤ score < 80<br/>retry < 2| UPGRADE
-    REV -->|score < 50<br/>or retries exhausted| MQ[manual_queue]
-    POST -->|PASS| WRITE[write_file]
-    POST -->|BLOCKED| MQ
+    REV -->|score < 50<br/>or retries exhausted| MQ[MANUAL_REVIEW]
+    POST -->|PASS, risk under ceiling| WRITE[write_file]
+    POST -->|PASS, risk over ceiling| HOLD[hold_for_review<br/>staged as HELD]
+    POST -->|intervened| MQ
     WRITE --> VB[verify_build<br/>javac / mvn]
     VB -->|PASS or SKIPPED| UPD[update_state]
     VB -->|FAIL, retries left| UPGRADE
     VB -->|FAIL, exhausted| MQ
+    HOLD --> UPD
     MQ --> UPD
     BLK --> UPD
-    UPD --> E([DynamoDB + report])
+    UPD --> E(["DynamoDB · report · review queue"])
+    E -.->|human: approve / reject / retry| HOLD
 ```
 
 ---
@@ -79,46 +94,54 @@ flowchart TD
 forge-platform/
 ├── forge-terraform/       AWS infra as Terraform modules
 │   ├── modules/
-│   │   ├── foundation/    DynamoDB, Bedrock Guardrail, IAM
-│   │   ├── observability/ CloudWatch logs/dashboard/alarms, SNS
-│   │   ├── sqs/           Phase 6 — manual review queue
-│   │   ├── rag/           Phase 6 — OpenSearch + Bedrock KB
-│   │   └── sagemaker/     Future — TGI endpoint
+│   │   ├── foundation/    DynamoDB ×2, Bedrock Guardrail (+ auto-published version), IAM execution role
+│   │   ├── observability/ CloudWatch log group / dashboard / 4 alarms, SNS
+│   │   ├── sqs/           Phase 6 — manual review queue + DLQ        (enable_sqs)
+│   │   ├── rag/           Phase 6 — S3 + OpenSearch Serverless + Bedrock KB (enable_rag)
+│   │   └── sagemaker/     Future — TGI endpoint                      (enable_sagemaker)
 │   └── scripts/
-│       ├── bootstrap-state.sh         Creates TF state bucket
-│       └── generate-agents-yaml.sh    Generates MVP config
+│       ├── bootstrap-state.sh         Creates the TF state bucket + lock table
+│       └── generate-agents-yaml.sh    Writes agents.yaml from terraform output
 │
 ├── forge-mvp/             Python pipeline (LangGraph + Bedrock)
-│   ├── migrate.py         CLI entrypoint (also --ui)
-│   ├── agents.yaml        Resource IDs, model IDs, thresholds, pricing
+│   ├── migrate.py         CLI — a printer over forge/service.py; --ui starts the web UI
+│   ├── agents.yaml        Resource IDs, model IDs, thresholds, decisions, pricing (generated)
 │   ├── forge/
-│   │   ├── graph.py       LangGraph wiring
+│   │   ├── service.py     The one implementation of packs / discover / run / acceptance / apply / feedback
+│   │   ├── ui/            Local web UI: FastAPI routes, job registry (SSE), launcher, static page
+│   │   ├── graph.py       LangGraph wiring incl. the hold gate
 │   │   ├── state.py       TypedDict state + FileStatus
-│   │   ├── phases.py      Phase registry — transform prompt + reviewer rubric
+│   │   ├── phases.py      Phase registry — built-ins + every pack, by name
+│   │   ├── packs/         Pack loader: parses prompts/packs/*.pack.md, validates, orders
+│   │   ├── discover/      Stack profile, BOM-aware version resolution, pack activation → forge-profile.yaml
+│   │   ├── extract/       Deterministic context extractors (web_bootstrap: web.xml, vendor descriptors, server.xml)
+│   │   ├── context/       Renders extracted context into prompts under a size cap; snapshot
+│   │   ├── risk/          Deterministic risk score → LOW / MEDIUM / HIGH
+│   │   ├── review_queue.py  decisions.py  feedback_report.py   Human in the loop
 │   │   ├── agents/        guardrails_pre/post, java_upgrade
 │   │   ├── review/        java_reviewer
 │   │   ├── guardrails/    Bedrock ApplyGuardrail wrapper
-│   │   ├── verify/        build_verifier — javac / mvn compile gate
+│   │   ├── verify/        build_verifier (javac / mvn) · acceptance checks over the merged tree
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
-│   │   └── utils/         scanner, writer, report, java_checks,
-│   │                      telemetry (CloudWatch), cost (token pricing)
-│   └── tests/             300+ tests, fully mocked
+│   │   └── utils/         scanner, writer, report, java_checks, telemetry, cost
+│   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI
+│   └── tests/             470 tests, fully mocked — no AWS needed
 │
 └── prompts/               Specifications and the pack library
-    ├── FORGE-Infra-Terraform.md
-    ├── FORGE-Phase0-MVP.md
-    ├── FORGE-Platform-Requirements.md   Phase 1 — pack contract, invariants, decisions
-    └── packs/                           one technology transition per *.pack.md
+    ├── FORGE-Infra-Terraform.md         Infrastructure spec
+    ├── FORGE-Phase0-MVP.md              Engine spec
+    ├── FORGE-Platform-Requirements.md   Pack contract, invariants, platform decisions
+    └── packs/                           20 packs — one technology transition per *.pack.md
 ```
 
 ---
 
-## Quick start
+## Deployment
 
-### 1. Deploy Phase 0 infra
+### 1. Deploy the infrastructure (Phase 0)
 
 ```bash
-# One-time bootstrap — creates TF state bucket + lock table
+# One-time bootstrap — creates the TF state bucket + lock table
 bash forge-terraform/scripts/bootstrap-state.sh <aws_account_id>
 
 cd forge-terraform
@@ -127,15 +150,39 @@ terraform init \
   -backend-config="key=forge/dev/terraform.tfstate" \
   -backend-config="region=us-east-1"
 
-cp terraform.tfvars.example terraform.tfvars   # fill in vars; Phase 6 modules stay off unless enable_* = true
+cp terraform.tfvars.example terraform.tfvars   # account id, alerts e-mail; Phase 6 modules stay off
+terraform plan                                 # foundation + observability only
 terraform apply
 ```
 
-### 2. Generate pipeline config
+What this creates: two DynamoDB tables, the Bedrock Guardrail with a published version, the
+`forge-execution-role-{env}` IAM role (Bedrock via inference profiles, DynamoDB, CloudWatch), a
+log group, a dashboard, four alarms and an SNS topic. Idle cost ≈ $5/month.
+
+Before the first live run, also:
+
+- **Enable model access** in the Bedrock console for Claude Sonnet 4.5 and Amazon Nova Pro. The
+  pipeline calls them through `us.*` cross-region inference profiles, so enable them in every
+  region the profile can route to (`us-east-1`, `us-east-2`, `us-west-2`).
+- **Confirm the SNS subscription** — AWS e-mails `alerts_email` after the first apply; alarms
+  are silent until the link is clicked.
+- **Run as the execution role** (`aws sts assume-role`, or an instance profile) or make sure
+  your own identity has the same Bedrock / DynamoDB / CloudWatch permissions.
+
+Phase 6 (manual-review SQS, RAG knowledge base) and the SageMaker endpoint are opt-in: set
+`enable_sqs`, `enable_rag` or `enable_sagemaker` to `true` in `terraform.tfvars` and apply
+again. The OpenSearch Serverless collection behind `enable_rag` is always-on (~$175/month) and
+takes 5–10 minutes to become ACTIVE — re-run apply if the Knowledge Base fails on the first pass.
+
+### 2. Generate the pipeline config
 
 ```bash
 ./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
 ```
+
+`agents.yaml` carries every resource ID the pipeline needs plus the thresholds, platform
+decisions and model pricing. **Re-run this after any Terraform change** — a guardrail edit
+publishes a new guardrail version, and the pipeline pins the version number.
 
 ### 3. Run the pipeline
 
@@ -161,9 +208,17 @@ python migrate.py /path/to/java/project --phase java21 --dry-run --file /path/to
 # Full run, then the pack's acceptance checks over the merged tree (exit code is the gate)
 python migrate.py /path/to/java/project --phase java21 --output-dir ./migrated --acceptance
 
-# Struts 1/2 + Spring 4 + Jackson 1.x codebase (also picks up struts-config.xml)
-python migrate.py /path/to/legacy/app --phase struts-spring6 --output-dir ./migrated
+# Re-check an existing output tree without re-running the models
+python migrate.py /path/to/app --phase javax-to-jakarta --acceptance-only --output-dir ./migrated
+
+# Human in the loop: approve / reject / retry what the run held, then roll the notes up
+python migrate.py /path/to/app --apply-decisions decisions.json --output-dir ./migrated
+python migrate.py --feedback-report --output-dir ./migrated
 ```
+
+A typical project: `--discover` → run the packs in the order the profile lists (each pack is one
+`--phase`) → review what was held → `--acceptance`. From the web UI the same sequence is the
+seven numbered steps.
 
 ### Migration phases
 
@@ -196,8 +251,8 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 
 ## Status
 
-- ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`
-- ✅ **Phase 0 pipeline** — complete, 300+ tests passing (`cd forge-mvp && pytest`, no AWS required)
+- ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`; Terraform reviewed end to end (IAM covers inference profiles, guardrail tuned for source code, Phase 6 modules opt-in) — re-apply to pick the fixes up
+- ✅ **Phase 0 pipeline** — complete, 470 tests passing (`cd forge-mvp && pytest`, no AWS required)
 - ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
 - ✅ **Phases** — `java21` and `struts-spring6` built in; 10 runnable packs on top
@@ -206,18 +261,21 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 - ✅ **Human in the loop** — risky units are held for review; `migration-review.html` → `decisions.json` → `--apply-decisions`; notes roll up into `pack-feedback.md`
 - ✅ **Local web UI** — `python migrate.py --ui`: the same pipeline driven from a browser on your own machine, with live progress and one-click approve / reject / retry
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
-- ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
+- ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform, off by default (`enable_*`), not deployed
 
 ## Cost profile
 
 | Scope | Idle | Active migration |
 |---|---|---|
 | Phase 0 only (foundation + observability) | ~$5/mo | ~$20–40/mo |
-| + `rag` module | +$175/mo (OpenSearch always-on) | same |
-| + `sagemaker` (ml.g5.2xlarge) | +$1,093/mo | stop endpoint when idle |
+| + `enable_rag` | +$175/mo (OpenSearch Serverless always-on) | same |
+| + `enable_sqs` | ~$0 | pennies per million messages |
+| + `enable_sagemaker` (ml.g5.2xlarge) | +$1,093/mo | stop the endpoint when idle |
 
 ## Specs
 
 - [prompts/FORGE-Infra-Terraform.md](prompts/FORGE-Infra-Terraform.md) — full infrastructure spec
 - [prompts/FORGE-Phase0-MVP.md](prompts/FORGE-Phase0-MVP.md) — MVP pipeline spec
+- [prompts/FORGE-Platform-Requirements.md](prompts/FORGE-Platform-Requirements.md) — pack contract and platform decisions
+- [forge-mvp/ARCHITECTURE.md](forge-mvp/ARCHITECTURE.md) — engine architecture, packs, web UI
 - [CLAUDE.md](CLAUDE.md) — working notes for Claude Code sessions

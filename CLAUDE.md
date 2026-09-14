@@ -70,7 +70,7 @@ terraform apply
 
 **The guardrail must not intervene on ordinary code.** `guardrails_pre` turns *any* `GUARDRAIL_INTERVENED` on INPUT into `BLOCKED`, and `ANONYMIZE` is an intervention. So the guardrail lists only entity types that are genuinely secrets (AWS keys, card numbers, SSNs, passwords) — never `EMAIL` or `IP_ADDRESS`, which appear in `@author` tags and config literals. A guardrail edit is published as a new version automatically (`replace_triggered_by`); regenerate `agents.yaml` afterwards so `guardrail_version` moves with it.
 
-**OpenSearch Serverless timing.** The collection takes 5–10 minutes to become ACTIVE after creation. If `terraform apply -target=module.rag` fails with "collection not active", wait and re-run. Do not add sleep provisioners — just re-run.
+**OpenSearch Serverless timing.** The collection takes 5–10 minutes to become ACTIVE after creation. If the apply with `enable_rag = true` fails with "collection not active", wait and re-run. Do not add sleep provisioners — just re-run.
 
 **IAM execution role trust policy** includes `data.aws_caller_identity.current.arn` so the developer/CI identity that runs Terraform can also assume the role via `aws sts assume-role` for local development. No long-lived access keys needed.
 

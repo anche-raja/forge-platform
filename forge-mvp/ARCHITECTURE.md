@@ -3,7 +3,8 @@
 > **Scope note.** This document describes the Phase 0 engine in `forge-mvp/`. Phase 1 — the
 > pack library and context extractors that make it a generic J2EE migration platform — is
 > summarised in §12 and specified in
-> [prompts/FORGE-Platform-Requirements.md](../prompts/FORGE-Platform-Requirements.md).
+> [prompts/FORGE-Platform-Requirements.md](../prompts/FORGE-Platform-Requirements.md); the
+> local web UI and the service layer under both front ends are in §13.
 > The engine started as a single-phase **Java 8 → 21 upgrade** pipeline. It is *not* the 15-agent vision in
 > `FORGE-AgentDeepDive.pptx`. Per [prompts/FORGE-Phase0-MVP.md](../prompts/FORGE-Phase0-MVP.md),
 > Phase 0 is deliberately *"one transform agent, one review agent, nothing else — no RAG, no SQS,
@@ -23,6 +24,10 @@ The single transformation it performs (Java 8 → 21):
 - Date/Time modernisation (`new Date()` → `Instant.now()`, `Calendar` → `LocalDateTime`, …)
 - Conservative `var` inference
 - Flags `sun.misc.Unsafe` / reflective access for manual review (does not change them)
+
+That is the built-in `java21` phase. Every other transition — Jakarta namespace, Spring 5 → 6,
+Spring Security, Struts 2 → 7, JSP/JSTL, JUnit 5, the WAR bootstrap, the Liberty `server.xml` —
+is a **pack** loaded from `prompts/packs/` and selected with `--phase <pack-id>` (§12).
 
 The transformation rules live in an **external prompt file**,
 [prompts/java_upgrade.md](prompts/java_upgrade.md), loaded at runtime by
@@ -46,15 +51,18 @@ Override the prompt directory with the `FORGE_PROMPTS_DIR` environment variable.
 | Config | **PyYAML** — single `agents.yaml` read at startup ([forge/config.py](forge/config.py)) |
 | Secrets / env | **python-dotenv** (`.env`) |
 | Observability | **LangSmith** (env-var driven, no code change) |
-| Infra (provisioning) | **Terraform** in `forge-terraform/` (DynamoDB, Guardrails, IAM, CloudWatch) — or `infrastructure/create_dynamodb.py` for local dev |
+| Packs | Markdown + YAML front matter in `prompts/packs/`, parsed by `forge/packs/loader.py` |
+| Web UI | **FastAPI + uvicorn** on loopback, vanilla JS front end, no build step (§13) |
+| Infra (provisioning) | **Terraform** in `forge-terraform/` (DynamoDB, Guardrails + published version, IAM incl. inference profiles, CloudWatch; Phase 6 modules behind `enable_*` flags) — or `infrastructure/create_dynamodb.py` for local dev |
 
 > The spec pins `langgraph>=0.2 / langchain>=0.3`; the graph also compiles and tests pass under
 > the current `langgraph 1.x / langchain 1.x` line.
 
 **Not in the MVP** (despite being in the deck): RAG / Bedrock Knowledge Base, Strands Agents,
-SQS, the Discovery / Risk-Scorer / Spring / Struts / Containerize / Test-Gen agents, the 5-agent
-review board, the review portal, and `@tool` function-calling. Agents use plain
-system-prompt + `invoke`.
+SQS, the Containerize and Test-Gen agents, the 5-agent review board, and `@tool`
+function-calling. Agents use plain system-prompt + `invoke`. The deck's Discovery agent,
+Risk-Scorer and review portal exist in deterministic form — `--discover`, `forge/risk/` and the
+review page + web UI — rather than as model-driven agents.
 
 ---
 
@@ -232,12 +240,21 @@ and turns its events into the lines above. The web UI calls the same functions.
 
 ## 9. Prerequisites to run a live migration
 
-1. `pip install -r requirements.txt`
-2. AWS credentials with Bedrock + DynamoDB access (`AWS_PROFILE` or env vars)
-3. **Bedrock model access** enabled for Claude Sonnet 4.5 + Amazon Nova Pro in `us-east-1`
-4. Both DynamoDB tables created
-5. A real **Bedrock Guardrail** — set `guardrail_id` in `agents.yaml` (the checked-in value is a
-   `REPLACE_WITH_GUARDRAIL_ID` placeholder; the first node will fail without a valid ID)
+1. `pip install -r requirements.txt` (includes `fastapi` / `uvicorn` for `--ui`).
+2. The Phase 0 infrastructure applied from `forge-terraform/` — two DynamoDB tables, the
+   guardrail and its published version, the execution role, the log group and alarms.
+3. `agents.yaml` generated from the Terraform outputs
+   (`forge-terraform/scripts/generate-agents-yaml.sh dev > agents.yaml`). The checked-in
+   `agents.yaml.example` carries a `REPLACE_WITH_GUARDRAIL_ID` placeholder and is not runnable.
+   Regenerate after any Terraform change: a guardrail edit publishes a new version number.
+4. AWS credentials (`AWS_PROFILE` or env vars) that can call Bedrock, DynamoDB and CloudWatch —
+   the execution role via `aws sts assume-role`, or your own identity with equivalent rights.
+   Bedrock permissions must cover the **inference profile** (`inference-profile/*` in the
+   account) *and* `foundation-model/*` in every region the `us.*` profile routes to; the
+   Terraform role does.
+5. **Bedrock model access** enabled for Claude Sonnet 4.5 and Amazon Nova Pro in `us-east-1`,
+   `us-east-2` and `us-west-2` (the cross-region profile's destinations).
+6. Optional: a Java toolchain on the path if `build_verification.enabled` or `--acceptance-build`.
 
 ---
 
@@ -245,8 +262,9 @@ and turns its events into the lines above. The web UI calls the same functions.
 
 ```
 forge-mvp/
-  migrate.py                       # CLI entry point — a printer over forge/service.py
-  agents.yaml                      # single config file
+  migrate.py                       # CLI entry point — a printer over forge/service.py; --ui
+  agents.yaml                      # single config file (generated from Terraform outputs)
+  agents.yaml.example              # documented template incl. decisions / risk / context blocks
   prompts/
     java_upgrade.md                # externalised agent system prompt (editable, no code change)
   forge/
@@ -254,25 +272,37 @@ forge-mvp/
     ui/                            # local web UI: app.py (FastAPI routes), jobs.py (job registry), server.py, static/
     config.py                      # YAML loader; with_overrides() for per-run decisions
     state.py                       # ForgeState / FileStatus / state machine
-    graph.py                       # LangGraph wiring (the pipeline)
+    graph.py                       # LangGraph wiring (the pipeline) incl. the hold gate
+    phases.py                      # built-in phases + every pack, resolved by name
+    packs/                         # spec.py, loader.py, glob.py — parse and validate prompts/packs/*.pack.md
+    discover/                      # profile.py, resolve.py, emit.py — stack profile → pack activation
+    extract/                       # web_bootstrap.py, selectors.py — deterministic context extractors
+    context/                       # render.py, inject.py, snapshot.py — context into prompts, bounded
+    risk/score.py                  # deterministic risk score and tier
+    review_queue.py                # manual-review-queue.json v2 + migration-review.html
+    decisions.py                   # approve / reject / retry from a decisions file or the UI
+    feedback_report.py             # reviewers' notes grouped by pack and rule
     agents/
       base.py
-      guardrails_pre.py            # Bedrock Guardrails (INPUT) + Sonnet pre-flight
-      java_upgrade.py              # the one transform agent (Sonnet 4.5)
-      guardrails_post.py           # Bedrock Guardrails (OUTPUT) + Sonnet post-check
+      guardrails_pre.py            # risk score, Bedrock Guardrails (INPUT), Sonnet pre-flight
+      java_upgrade.py              # the one transform agent (Sonnet 4.5) + pack prompt + context
+      guardrails_post.py           # Bedrock Guardrails (OUTPUT), zero-javax check, Sonnet post-check
     review/
       base_reviewer.py
-      java_reviewer.py             # the one review agent (Nova Pro)
+      java_reviewer.py             # the one review agent (Nova Pro) + pack rubric
     guardrails/
       bedrock_guardrails.py        # ApplyGuardrail wrapper
+    verify/
+      build_verifier.py            # javac / mvn / command compile gate
+      acceptance.py  merged_tree.py  # pack acceptance checks over source ⊕ migrated
     state_store/
       dynamodb.py                  # state manager + LangGraph checkpointer
     utils/
       prompts.py                   # external prompt loader (FORGE_PROMPTS_DIR)
-      file_scanner.py  file_writer.py  report.py
+      file_scanner.py  file_writer.py  report.py  java_checks.py  telemetry.py  cost.py
   infrastructure/
     create_dynamodb.py             # dev table creation (non-Terraform)
-  tests/                           # test_graph, test_guardrails, test_java_upgrade
+  tests/                           # 470 tests, fully mocked (conftest.mocked_aws) — no AWS needed
 ```
 
 ---
@@ -292,9 +322,12 @@ These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives
 - **The profile is written but not yet consumed.** `--discover` produces `forge-profile.yaml`;
   a run still takes one `--phase` at a time.
 - **`routing_parity` is skipped** until the `struts_routing_table` extractor exists.
-- **Review is page + file, not a service.** `migration-review.html` and `--apply-decisions` replace the
-  deck's `review_portal.py`; there is no long-lived process and no interactive mode.
-- **Placeholder guardrail.** `agents.yaml` ships `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"`.
+- **Review is single-user.** The web UI (§13) runs on loopback for one engineer with one job at
+  a time; the static review page + `--apply-decisions` is the CI-friendly form. There is no
+  shared, multi-user review service.
+- **The guardrail is only as good as its entity list.** Any intervention on INPUT blocks the
+  file, so the Terraform guardrail lists secrets only (never `EMAIL` / `IP_ADDRESS`); an
+  operator who adds entity types in the console can block ordinary code.
 
 ---
 
