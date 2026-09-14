@@ -43,7 +43,7 @@ Override the prompt directory with the `FORGE_PROMPTS_DIR` environment variable.
 | Language / runtime | **Python 3.11+** (tested on 3.12) |
 | Orchestration | **LangGraph** — `StateGraph` state machine ([forge/graph.py](forge/graph.py)) |
 | LLM client | **LangChain** `langchain-aws` → `ChatBedrockConverse` |
-| Transform model | **Claude Sonnet 4.5** (`us.anthropic.claude-sonnet-4-5-20251001-v1:0`) on AWS Bedrock |
+| Transform model | **Claude Opus 4.8** (`us.anthropic.claude-opus-4-8`, 1M context, 128K output) on AWS Bedrock — reachable only through the `us.` cross-region inference profile |
 | Review model | **Amazon Nova Pro** (`us.amazon.nova-pro-v1:0`) on AWS Bedrock — *different model family, deliberate cross-validation* |
 | Safety | **AWS Bedrock Guardrails** — standalone `ApplyGuardrail` API ([forge/guardrails/bedrock_guardrails.py](forge/guardrails/bedrock_guardrails.py)) |
 | State + checkpoints | **AWS DynamoDB** — 2 tables (app state + LangGraph checkpointer) ([forge/state_store/dynamodb.py](forge/state_store/dynamodb.py)) |
@@ -70,13 +70,13 @@ The pipeline is a LangGraph `StateGraph` invoked **once per file** (`thread_id =
 
 ```
                          ┌──────────────────┐
-            entry ──────▶│  guardrails_pre  │  Bedrock Guardrails (INPUT) + Sonnet 4.5
+            entry ──────▶│  guardrails_pre  │  Bedrock Guardrails (INPUT) + Opus 4.8
                          └────────┬─────────┘  secrets / scope / PII / complexity
                                   │
                      BLOCK ◀──────┤──────▶ PASS
                         │                  │
                   ┌─────▼────┐       ┌─────▼────────┐
-                  │ blocked  │       │ java_upgrade │  Sonnet 4.5 — transform
+                  │ blocked  │       │ java_upgrade │  Opus 4.8 — transform
                   └─────┬────┘       └─────┬────────┘  (injects review feedback on retry)
                         │                  │
                         │           ┌──────▼────────┐
@@ -114,10 +114,10 @@ Source of truth: [forge/graph.py](forge/graph.py). Routing functions: `route_pre
 
 | Node | Model / service | Role | Outcome |
 |---|---|---|---|
-| `guardrails_pre` | Bedrock Guardrails (INPUT) + **Sonnet 4.5** | Secrets, package-scope, PII, complexity (LOC) pre-flight | `BLOCK` → `blocked`; else `TRANSFORMING` |
-| `java_upgrade` | **Sonnet 4.5** | Transform Java per 5 rules; on retry, injects prior review feedback into the prompt | `transform_output` (JSON: files + manual_flags) |
+| `guardrails_pre` | Bedrock Guardrails (INPUT) + **Opus 4.8** | Secrets, package-scope, PII, complexity (LOC) pre-flight | `BLOCK` → `blocked`; else `TRANSFORMING` |
+| `java_upgrade` | **Opus 4.8** | Transform Java per 5 rules; on retry, injects prior review feedback into the prompt | `transform_output` (JSON: files + manual_flags) |
 | `java_reviewer` | **Nova Pro** | Score 0–100 across 5 weighted checks; emit verdict + feedback | `PASS≥80` / `RETRY 50–79` / `MANUAL<50` |
-| `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Sonnet 4.5** | Verify zero `javax.*` left, no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
+| `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Opus 4.8** | Verify zero `javax.*` left, no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
 | `hold_for_review` | local FS | Stage transformed files under `./migrated/.forge-staging/` when `decisions.risk_ceiling` says a human decides first | status `HELD` |
 | `write_file` | local FS | Write transformed files to `./migrated/` preserving package path (no-op on `--dry-run`) | status `DONE` |
 | `manual_queue` | — | Mark file for human review | status `MANUAL_REVIEW` |
@@ -131,8 +131,8 @@ routes back to `java_upgrade`. The transform agent reads `review_feedback` from 
 it to its prompt ([java_upgrade.py:68](forge/agents/java_upgrade.py#L68)). Exhausted retries →
 `manual_queue`.
 
-> **Cross-model validation:** the transform is written by Claude Sonnet 4.5 and graded by Amazon
-> Nova Pro — two different model families. The two guardrail nodes also use Sonnet 4.5 as a
+> **Cross-model validation:** the transform is written by Claude Opus 4.8 and graded by Amazon
+> Nova Pro — two different model families. The two guardrail nodes also use Opus 4.8 as a
 > second-pass reasoning check *in addition to* the deterministic Bedrock Guardrails policy.
 
 > **Build verification is opt-in.** `verify_build` runs `javac` (per file) or `mvn compile`
@@ -191,7 +191,7 @@ Single file [agents.yaml](agents.yaml), loaded by `ForgeConfig`. Key knobs:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `transform_model` | `…claude-sonnet-4-5…` | Transform + guardrail-reasoning model |
+| `transform_model` | `us.anthropic.claude-opus-4-8` | Transform + guardrail-reasoning model |
 | `review_model` | `…amazon.nova-pro…` | Reviewer model |
 | `pass_threshold` | `80` | Score ≥ → PASS |
 | `retry_threshold` | `50` | Score ≥ (and < pass) → RETRY |
@@ -250,7 +250,7 @@ and turns its events into the lines above. The web UI calls the same functions.
    Bedrock permissions must cover the **inference profile** (`inference-profile/*` in the
    account) *and* `foundation-model/*` in every region the `us.*` profile routes to; the
    Terraform role does.
-5. **Bedrock model access** enabled for Claude Sonnet 4.5 and Amazon Nova Pro in `us-east-1`,
+5. **Bedrock model access** enabled for Claude Opus 4.8 and Amazon Nova Pro in `us-east-1`,
    `us-east-2` and `us-west-2` (the cross-region profile's destinations).
 6. Optional: a Java toolchain on the path if `build_verification.enabled` or `--acceptance-build`.
 
@@ -282,9 +282,9 @@ forge-mvp/
     feedback_report.py             # reviewers' notes grouped by pack and rule
     agents/
       base.py
-      guardrails_pre.py            # risk score, Bedrock Guardrails (INPUT), Sonnet pre-flight
-      java_upgrade.py              # the one transform agent (Sonnet 4.5) + pack prompt + context
-      guardrails_post.py           # Bedrock Guardrails (OUTPUT), zero-javax check, Sonnet post-check
+      guardrails_pre.py            # risk score, Bedrock Guardrails (INPUT), Opus pre-flight
+      java_upgrade.py              # the one transform agent (Opus 4.8) + pack prompt + context
+      guardrails_post.py           # Bedrock Guardrails (OUTPUT), zero-javax check, Opus post-check
     review/
       base_reviewer.py
       java_reviewer.py             # the one review agent (Nova Pro) + pack rubric

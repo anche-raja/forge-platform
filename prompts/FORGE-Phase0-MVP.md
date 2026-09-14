@@ -11,7 +11,7 @@ Run this command against a real Java 8 codebase:
 
 And see:
 - Bedrock Guardrails evaluated the file (INPUT check)
-- Claude Sonnet 4.5 replaced javax.* with jakarta.* and modernised Date/Time/deprecated APIs
+- Claude Opus 4.8 replaced javax.* with jakarta.* and modernised Date/Time/deprecated APIs
 - Amazon Nova Pro reviewed the output and returned a score 0-100
 - If score >= 80: file written to ./migrated/myapp/ with correct package path
 - If score 50-79: Claude retried with Nova Pro feedback injected (max 2 retries)
@@ -23,8 +23,8 @@ And see:
 ## Tech stack (do not add anything not listed here)
 - Python 3.11+
 - LangGraph for the pipeline graph
-- LangChain (ChatBedrockConverse for Claude Sonnet 4.5, ChatBedrockConverse for Nova Pro)
-- AWS Bedrock — Claude Sonnet 4.5 (transform), Amazon Nova Pro (review)
+- LangChain (ChatBedrockConverse for Claude Opus 4.8, ChatBedrockConverse for Nova Pro)
+- AWS Bedrock — Claude Opus 4.8 (transform), Amazon Nova Pro (review)
 - AWS Bedrock Guardrails — standalone ApplyGuardrail API (not inline)
 - AWS DynamoDB — one table: forge-migration-state
 - LangSmith — enabled via environment variables only, no code change needed
@@ -101,12 +101,12 @@ Wrap the standalone ApplyGuardrail API. Method: evaluate(text, source). source i
 ## Guardrails Pre Agent — forge/agents/guardrails_pre.py
 Two steps in sequence:
 Step 1 — Call Bedrock Guardrails (ApplyGuardrail, source=INPUT). If GUARDRAIL_INTERVENED: set status=BLOCKED, return state immediately.
-Step 2 — Call Claude Sonnet 4.5 with a short prompt. Ask it to check: secrets/credentials in code, PII in comments/strings, file size vs complexity threshold. Return JSON verdict (PASS/WARN/BLOCK) and findings list. If BLOCK: set status=BLOCKED. If WARN: add to findings but continue.
+Step 2 — Call Claude Opus 4.8 with a short prompt. Ask it to check: secrets/credentials in code, PII in comments/strings, file size vs complexity threshold. Return JSON verdict (PASS/WARN/BLOCK) and findings list. If BLOCK: set status=BLOCKED. If WARN: add to findings but continue.
 
 Scope is NOT checked here. "Is this file ours to migrate?" is a string comparison against the file's package declaration, handled by the file scanner before any model is called.
 
 ## Java Upgrade Agent — forge/agents/java_upgrade.py
-System prompt instructs Claude Sonnet 4.5 to apply these rules in order:
+System prompt instructs Claude Opus 4.8 to apply these rules in order:
 Rule 1 — Namespace migration (highest priority): every javax.servlet.* → jakarta.servlet.*, javax.persistence.* → jakarta.persistence.*, javax.validation.* → jakarta.validation.*, javax.transaction.* → jakarta.transaction.*. Zero javax.* allowed in output.
 Rule 2 — Deprecated API replacement: Thread.stop() → throw InterruptedException. finalize() → flag with comment. StringBuffer in loops → StringBuilder. System.runFinalizersOnExit() → remove.
 Rule 3 — Date/Time modernisation: new Date() for current time → Instant.now(). Calendar → LocalDateTime. SimpleDateFormat → DateTimeFormatter. java.sql.Date → java.time equivalent.
@@ -131,7 +131,7 @@ PASS >= 80. RETRY 50-79. MANUAL < 50. Return JSON: score, verdict, feedback (spe
 Two steps:
 Step 1 — Call Bedrock Guardrails (ApplyGuardrail, source=OUTPUT). If GUARDRAIL_INTERVENED: BLOCK.
 Step 2 — Enforce "zero javax.* in output" deterministically in code (regex over imports, excluding the JDK's own javax packages — javax.crypto, javax.sql, javax.net, javax.naming, javax.security.auth, javax.xml.parsers/transform/stream). Do NOT ask the model to do this; it is a mechanical invariant.
-Step 3 — Call Claude Sonnet 4.5 for the qualitative checks only: no deprecated patterns remain, no security issues introduced, business logic preserved. Return JSON verdict and findings.
+Step 3 — Call Claude Opus 4.8 for the qualitative checks only: no deprecated patterns remain, no security issues introduced, business logic preserved. Return JSON verdict and findings.
 
 Do NOT check package naming here. A migration never renames a package — doing so breaks every import, component-scan base package, and reflective lookup in the codebase. Whether a file is in scope at all is decided by the file scanner before any model call (see File Scanner below).
 

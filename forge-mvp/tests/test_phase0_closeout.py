@@ -162,7 +162,7 @@ def test_cost_accrues_across_the_run(tmp_path, java_file):
             config={"configurable": {"thread_id": java_file}},
         )
 
-    # 4 calls at 1000 in / 500 out: 3 Sonnet (0.003/0.015) + 1 Nova (0.0008/0.0032)
-    expected = 3 * (0.003 + 0.5 * 0.015) + (0.0008 + 0.5 * 0.0032)
+    # 4 calls at 1000 in / 500 out: 3 Opus 4.8 (0.005/0.025) + 1 Nova (0.0008/0.0032)
+    expected = 3 * (0.005 + 0.5 * 0.025) + (0.0008 + 0.5 * 0.0032)
     assert result["bedrock_calls"] == 4
     assert result["estimated_cost_usd"] == pytest.approx(expected, rel=1e-6)

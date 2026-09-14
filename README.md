@@ -26,7 +26,7 @@ flowchart LR
 
     subgraph AWS["AWS — us-east-1"]
         subgraph Bedrock["Amazon Bedrock"]
-            CLAUDE["Claude Sonnet 4.5<br/>transform"]
+            CLAUDE["Claude Opus 4.8<br/>transform"]
             NOVA["Amazon Nova Pro<br/>review"]
             GR["Bedrock Guardrail<br/>forge-guardrail-{env}"]
         end
@@ -65,7 +65,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     S(["unit: file or generated target"]) --> PRE[guardrails_pre<br/>risk score · ApplyGuardrail INPUT]
-    PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Sonnet + pack prompt + context]
+    PRE -->|PASS| UPGRADE[java_upgrade<br/>Claude Opus 4.8 + pack prompt + context]
     PRE -->|intervened| BLK[BLOCKED]
     UPGRADE --> REV[java_reviewer<br/>Nova Pro + pack rubric]
     REV -->|score ≥ 80| POST[guardrails_post<br/>ApplyGuardrail OUTPUT · zero javax.*]
@@ -159,8 +159,9 @@ log group, a dashboard, four alarms and an SNS topic. Idle cost ≈ $5/month.
 
 Before the first live run, also:
 
-- **Enable model access** in the Bedrock console for Claude Sonnet 4.5 and Amazon Nova Pro. The
-  pipeline calls them through `us.*` cross-region inference profiles, so enable them in every
+- **Enable model access** in the Bedrock console for Claude Opus 4.8 and Amazon Nova Pro. The
+  pipeline calls them through `us.*` cross-region inference profiles (Opus 4.8 has no in-region
+  option in `us-east-1` — the profile is the only way to reach it), so enable them in every
   region the profile can route to (`us-east-1`, `us-east-2`, `us-west-2`).
 - **Confirm the SNS subscription** — AWS e-mails `alerts_email` after the first apply; alarms
   are silent until the link is clicked.

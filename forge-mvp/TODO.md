@@ -35,7 +35,7 @@ Actionable backlog for the next development cycle. Context for each item lives i
 
 - [ ] **Add `--estimate-cost` dry-run** to [migrate.py](migrate.py) — it already counts
       `bedrock_calls`; project spend before a real run (~$0.07/avg file; see cost analysis).
-- [ ] **Cheaper guardrail checks.** `guardrails_pre` / `guardrails_post` use Sonnet 4.5 for their LLM
+- [ ] **Cheaper guardrail checks.** `guardrails_pre` / `guardrails_post` use Opus 4.8 (the transform model) for their LLM
       pass (~$0.017/file). Switching those two to Haiku 4.5 cuts per-file cost ~25% with little quality
       loss on a yes/no safety check.
 - [ ] **Resolve the placeholder guardrail.** `agents.yaml` ships

@@ -16,7 +16,7 @@ from forge.config import ForgeConfig
 from forge.state import make_file_status
 
 _BASE_YAML = """\
-transform_model: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+transform_model: us.anthropic.claude-opus-4-8
 review_model: us.amazon.nova-pro-v1:0
 aws_region: us-east-1
 dynamodb_table: forge-migration-state-test
@@ -31,9 +31,9 @@ max_retries: 2
 scope_package_prefix: ''
 complexity_block_threshold: 2000
 model_pricing:
-  us.anthropic.claude-sonnet-4-5-20250929-v1:0:
-    input_per_1k: 0.003
-    output_per_1k: 0.015
+  us.anthropic.claude-opus-4-8:
+    input_per_1k: 0.005
+    output_per_1k: 0.025
   us.amazon.nova-pro-v1:0:
     input_per_1k: 0.0008
     output_per_1k: 0.0032

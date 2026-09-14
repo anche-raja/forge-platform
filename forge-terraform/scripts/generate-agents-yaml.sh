@@ -46,7 +46,7 @@ cat <<EOF
 #   ./scripts/generate-agents-yaml.sh ${ENV} > ../forge-mvp/agents.yaml
 
 # ─── Models ───────────────────────────────────────────────────────────────────
-transform_model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+transform_model: "us.anthropic.claude-opus-4-8"
 review_model: "us.amazon.nova-pro-v1:0"
 
 # ─── AWS ──────────────────────────────────────────────────────────────────────
@@ -88,9 +88,9 @@ complexity_block_threshold: 2000
 # ─── Cost model (drives estimated_cost_usd + the FORGE-CostSpike alarm) ──────
 # USD per 1,000 tokens. Update when Bedrock pricing changes — no code change needed.
 model_pricing:
-  "us.anthropic.claude-sonnet-4-5-20250929-v1:0":
-    input_per_1k: 0.003
-    output_per_1k: 0.015
+  "us.anthropic.claude-opus-4-8":
+    input_per_1k: 0.005
+    output_per_1k: 0.025
   "us.amazon.nova-pro-v1:0":
     input_per_1k: 0.0008
     output_per_1k: 0.0032

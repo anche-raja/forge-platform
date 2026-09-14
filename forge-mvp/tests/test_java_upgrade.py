@@ -15,7 +15,7 @@ from forge.state import make_file_status
 def config(tmp_path):
     agents_yaml = tmp_path / "agents.yaml"
     agents_yaml.write_text(
-        "transform_model: us.anthropic.claude-sonnet-4-5-20250929-v1:0\n"
+        "transform_model: us.anthropic.claude-opus-4-8\n"
         "review_model: us.amazon.nova-pro-v1:0\n"
         "aws_region: us-east-1\n"
         "dynamodb_table: forge-migration-state-test\n"
