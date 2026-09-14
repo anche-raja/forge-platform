@@ -49,6 +49,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "knowledge_base" {
     id     = "archive-old-documents"
     status = "Enabled"
 
+    filter {} # whole bucket
+
     transition {
       days          = 90
       storage_class = "INTELLIGENT_TIERING"
@@ -70,6 +72,11 @@ resource "aws_iam_role" "bedrock_kb" {
           Service = "bedrock.amazonaws.com"
         }
         Action = "sts:AssumeRole"
+        # Only a Knowledge Base in this account may assume the role.
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = var.aws_account_id }
+          ArnLike      = { "aws:SourceArn" = "arn:aws:bedrock:${var.aws_region}:${var.aws_account_id}:knowledge-base/*" }
+        }
       }
     ]
   })
@@ -232,7 +239,7 @@ resource "aws_bedrockagent_knowledge_base" "forge" {
 }
 
 resource "aws_bedrockagent_data_source" "s3_docs" {
-  name             = "forge-s3-docs-${var.environment}"
+  name              = "forge-s3-docs-${var.environment}"
   knowledge_base_id = aws_bedrockagent_knowledge_base.forge.id
 
   data_source_configuration {

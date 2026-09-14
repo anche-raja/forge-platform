@@ -116,6 +116,37 @@ build_verification:
   classpath: ""
   timeout_seconds: 300
 
+# ─── Decisions ────────────────────────────────────────────────────────────────
+# Project-level choices that packs read (see prompts/FORGE-Platform-Requirements.md
+# §4). An acceptance check guarded by `when:` is skipped — never passed — while
+# the decision it names is unset.
+decisions:
+  web_framework: modernize-in-place     # modernize-in-place | migrate-to-spring
+  runtime: war-xml-bootstrap            # war-xml-bootstrap | war-programmatic-bootstrap
+  container: liberty                    # liberty | wildfly | tomcat | jetty
+  views: in-place                       # in-place | thymeleaf | defer
+  url_compat: preserve-with-redirect
+
+# ─── Risk ─────────────────────────────────────────────────────────────────────
+# Every unit is scored deterministically before any model call (LOC, descriptor
+# fan-out, security constraints, Spring-proxied actions, OGNL density, Unsafe).
+# The score sets a tier; `decisions.risk_ceiling` decides what the tier means:
+#   auto         nothing is held for a human
+#   review-high  HIGH-tier units are staged and held until approved   (default)
+#   review-all   every unit is held
+risk:
+  high_at: 60
+  medium_at: 30
+
+# ─── Context extraction ──────────────────────────────────────────────────────
+# A pack that declares `context:` gets the extracted descriptor set (web.xml,
+# vendor descriptors, datasources, ...) appended to its transform and review
+# prompts, rendered section by section up to this many characters. Sections
+# that do not fit are listed as omitted; the full context is written to
+# migration-context.json in the output directory.
+context:
+  max_chars: 60000
+
 # ─── LangSmith observability ─────────────────────────────────────────────────
 langsmith_project: "forge-migration"
 EOF

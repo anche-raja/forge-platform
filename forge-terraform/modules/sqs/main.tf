@@ -6,9 +6,9 @@ resource "aws_sqs_queue" "dlq" {
 
 resource "aws_sqs_queue" "main" {
   name                       = "${var.app_name}-manual-review-${var.environment}"
-  visibility_timeout_seconds = 1800 # 30 minutes — gives engineer time to review
+  visibility_timeout_seconds = 1800   # 30 minutes — gives engineer time to review
   message_retention_seconds  = 604800 # 7 days
-  receive_wait_time_seconds  = 20 # long polling
+  receive_wait_time_seconds  = 20     # long polling
   kms_master_key_id          = "alias/aws/sqs"
 
   # After 3 failed receives, the message is moved to the DLQ for investigation

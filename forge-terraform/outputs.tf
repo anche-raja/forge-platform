@@ -37,13 +37,13 @@ output "cloudwatch_log_group" {
 
 output "sqs_queue_url" {
   description = "Manual review SQS queue URL — agents.yaml: sqs_queue_url (null if sqs not deployed)"
-  value       = try(module.sqs.queue_url, null)
+  value       = try(module.sqs[0].queue_url, null)
   sensitive   = true
 }
 
 output "knowledge_base_id" {
   description = "Bedrock Knowledge Base ID — agents.yaml: knowledge_base_id (null if rag not deployed)"
-  value       = try(module.rag.knowledge_base_id, null)
+  value       = try(module.rag[0].knowledge_base_id, null)
 }
 
 output "sagemaker_endpoint_name" {
@@ -67,11 +67,11 @@ output "sns_topic_arn" {
 
 output "sqs_queue_arn" {
   description = "Manual review SQS queue ARN — .env: FORGE_SQS_QUEUE_ARN"
-  value       = try(module.sqs.queue_arn, null)
+  value       = try(module.sqs[0].queue_arn, null)
   sensitive   = true
 }
 
 output "s3_knowledge_base_bucket" {
   description = "Knowledge Base S3 bucket name — .env: FORGE_KB_BUCKET"
-  value       = try(module.rag.s3_bucket_name, null)
+  value       = try(module.rag[0].s3_bucket_name, null)
 }

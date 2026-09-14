@@ -127,9 +127,8 @@ terraform init \
   -backend-config="key=forge/dev/terraform.tfstate" \
   -backend-config="region=us-east-1"
 
-cp terraform.tfvars.example terraform.tfvars   # fill in vars
-terraform apply -target=module.foundation
-terraform apply -target=module.observability
+cp terraform.tfvars.example terraform.tfvars   # fill in vars; Phase 6 modules stay off unless enable_* = true
+terraform apply
 ```
 
 ### 2. Generate pipeline config

@@ -29,10 +29,10 @@ resource "aws_sagemaker_model" "forge_llm" {
     model_data_url = var.model_artifact_s3_uri
 
     environment = {
-      HF_MODEL_ID        = var.hf_model_id
-      SM_NUM_GPUS        = "1"
-      MAX_INPUT_LENGTH   = "8192"
-      MAX_TOTAL_TOKENS   = "16384"
+      HF_MODEL_ID      = var.hf_model_id
+      SM_NUM_GPUS      = "1"
+      MAX_INPUT_LENGTH = "8192"
+      MAX_TOTAL_TOKENS = "16384"
     }
   }
 }

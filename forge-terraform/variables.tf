@@ -37,20 +37,20 @@ variable "alerts_email" {
   type        = string
 }
 
-variable "enable_sagemaker" {
-  description = "Set to true to deploy the SageMaker internal LLM endpoint. Only enable when a trained model artifact is ready in S3."
+variable "enable_sqs" {
+  description = "Deploy the Phase 6 manual-review SQS queue + DLQ."
   type        = bool
   default     = false
 }
 
-variable "target_java_version" {
-  description = "Target Java version for FORGE migration agents"
-  type        = string
-  default     = "21"
+variable "enable_rag" {
+  description = "Deploy the Phase 6 RAG stack (S3 + OpenSearch Serverless + Bedrock Knowledge Base). The collection is always-on and billed hourly."
+  type        = bool
+  default     = false
 }
 
-variable "target_spring_version" {
-  description = "Target Spring Boot version for FORGE migration agents"
-  type        = string
-  default     = "6"
+variable "enable_sagemaker" {
+  description = "Set to true to deploy the SageMaker internal LLM endpoint. Only enable when a trained model artifact is ready in S3."
+  type        = bool
+  default     = false
 }

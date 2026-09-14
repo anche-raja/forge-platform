@@ -16,8 +16,11 @@ module "observability" {
   aws_region   = var.aws_region
 }
 
+# The Phase 6 modules are opt-in. A plain `terraform apply` must not create an
+# always-on OpenSearch Serverless collection (~$175/mo) by accident.
 module "sqs" {
   source = "./modules/sqs"
+  count  = var.enable_sqs ? 1 : 0
 
   environment        = var.environment
   app_name           = var.app_name
@@ -26,6 +29,7 @@ module "sqs" {
 
 module "rag" {
   source = "./modules/rag"
+  count  = var.enable_rag ? 1 : 0
 
   providers = {
     aws   = aws

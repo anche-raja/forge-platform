@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 5.31.0"
+      version = ">= 5.31.0, < 7.0.0" # 6.x deprecates hash_key (warning only); 7.x is untested
     }
     awscc = {
       source  = "hashicorp/awscc"

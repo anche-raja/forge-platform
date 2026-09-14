@@ -32,17 +32,14 @@ cp terraform.tfvars.example terraform.tfvars
 
 ### Deploy by phase
 ```bash
-# MVP (Phase 0) — deploy these two only
-terraform apply -target=module.foundation
-terraform apply -target=module.observability
+# MVP (Phase 0) — foundation + observability; the other modules are off by default
+terraform apply
 
-# Phase 6 — add when RAG and manual review queue are needed
-terraform apply -target=module.sqs
-terraform apply -target=module.rag
+# Phase 6 — set enable_sqs = true and/or enable_rag = true in terraform.tfvars, then
+terraform apply
 
-# Future — only when a trained model artifact is in S3
-# Set enable_sagemaker = true in terraform.tfvars first
-terraform apply -target=module.sagemaker
+# Future — only when a trained model artifact is in S3: enable_sagemaker = true, then
+terraform apply
 ```
 
 ### Generate agents.yaml after apply
@@ -55,9 +52,9 @@ terraform apply -target=module.sagemaker
 |---|---|---|
 | `foundation` | 2 DynamoDB tables, Bedrock Guardrails, IAM execution role | Phase 0 |
 | `observability` | CloudWatch log group, dashboard, 4 alarms, SNS topic | Phase 0 |
-| `sqs` | Manual review queue + DLQ | Phase 6 |
-| `rag` | S3 bucket, OpenSearch Serverless, Bedrock Knowledge Base | Phase 6 |
-| `sagemaker` | TGI endpoint, SSM parameter | Future only |
+| `sqs` | Manual review queue + DLQ | Phase 6 (`enable_sqs`) |
+| `rag` | S3 bucket, OpenSearch Serverless, Bedrock Knowledge Base | Phase 6 (`enable_rag`) |
+| `sagemaker` | TGI endpoint, SSM parameter | Future only (`enable_sagemaker`) |
 
 ### Architecture decisions baked into the Terraform
 
@@ -67,7 +64,11 @@ terraform apply -target=module.sagemaker
 
 **`try()` for optional module outputs.** The root `outputs.tf` wraps `sagemaker`, `sqs`, and `rag` outputs in `try(..., null)`. This prevents index-out-of-range errors when `count = 0` modules are not deployed.
 
-**Conditional SageMaker.** `count = var.enable_sagemaker ? 1 : 0` is on the module call in root `main.tf`, not on individual resources inside the sagemaker module. All resources inside the module are unconditional — the gate is purely at the root level.
+**Conditional Phase 6 modules.** `count = var.enable_* ? 1 : 0` is on the module calls in root `main.tf` (`sqs`, `rag`, `sagemaker`), not on individual resources inside the modules. All resources inside a module are unconditional — the gate is purely at the root level, so a plain `terraform apply` never creates the always-on OpenSearch collection by accident.
+
+**Bedrock IAM must cover inference profiles.** `agents.yaml` names cross-region profiles (`us.anthropic.…`), which need `bedrock:InvokeModel` on the account's `inference-profile/*` *and* on `foundation-model/*` in every region the profile can route to. An in-region `foundation-model/*` grant alone is `AccessDenied`.
+
+**The guardrail must not intervene on ordinary code.** `guardrails_pre` turns *any* `GUARDRAIL_INTERVENED` on INPUT into `BLOCKED`, and `ANONYMIZE` is an intervention. So the guardrail lists only entity types that are genuinely secrets (AWS keys, card numbers, SSNs, passwords) — never `EMAIL` or `IP_ADDRESS`, which appear in `@author` tags and config literals. A guardrail edit is published as a new version automatically (`replace_triggered_by`); regenerate `agents.yaml` afterwards so `guardrail_version` moves with it.
 
 **OpenSearch Serverless timing.** The collection takes 5–10 minutes to become ACTIVE after creation. If `terraform apply -target=module.rag` fails with "collection not active", wait and re-run. Do not add sleep provisioners — just re-run.
 

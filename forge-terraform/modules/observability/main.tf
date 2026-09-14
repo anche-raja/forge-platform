@@ -94,11 +94,11 @@ resource "aws_cloudwatch_dashboard" "forge" {
         width  = 8
         height = 6
         properties = {
-          title   = "Files Processed"
-          view    = "timeSeries"
-          stat    = "Sum"
-          period  = 60
-          region  = var.aws_region
+          title  = "Files Processed"
+          view   = "timeSeries"
+          stat   = "Sum"
+          period = 60
+          region = var.aws_region
           metrics = [
             ["FORGE/Migration", "files_processed"]
           ]
@@ -111,11 +111,11 @@ resource "aws_cloudwatch_dashboard" "forge" {
         width  = 8
         height = 6
         properties = {
-          title   = "Files Passed"
-          view    = "timeSeries"
-          stat    = "Sum"
-          period  = 60
-          region  = var.aws_region
+          title  = "Files Passed"
+          view   = "timeSeries"
+          stat   = "Sum"
+          period = 60
+          region = var.aws_region
           metrics = [
             ["FORGE/Migration", "files_passed"]
           ]
@@ -128,11 +128,11 @@ resource "aws_cloudwatch_dashboard" "forge" {
         width  = 8
         height = 6
         properties = {
-          title   = "Files Escalated to Manual Review"
-          view    = "timeSeries"
-          stat    = "Sum"
-          period  = 60
-          region  = var.aws_region
+          title  = "Files Escalated to Manual Review"
+          view   = "timeSeries"
+          stat   = "Sum"
+          period = 60
+          region = var.aws_region
           metrics = [
             ["FORGE/Migration", "files_manual"]
           ]
@@ -146,11 +146,11 @@ resource "aws_cloudwatch_dashboard" "forge" {
         width  = 12
         height = 6
         properties = {
-          title   = "Review Score (Average)"
-          view    = "timeSeries"
-          stat    = "Average"
-          period  = 300
-          region  = var.aws_region
+          title  = "Review Score (Average)"
+          view   = "timeSeries"
+          stat   = "Average"
+          period = 300
+          region = var.aws_region
           metrics = [
             ["FORGE/Migration", "review_score"]
           ]
@@ -163,10 +163,10 @@ resource "aws_cloudwatch_dashboard" "forge" {
         width  = 12
         height = 6
         properties = {
-          title   = "Retry Rate %"
-          view    = "timeSeries"
-          period  = 300
-          region  = var.aws_region
+          title  = "Retry Rate %"
+          view   = "timeSeries"
+          period = 300
+          region = var.aws_region
           metrics = [
             ["FORGE/Migration", "files_retried", { id = "m1", visible = false }],
             ["FORGE/Migration", "files_processed", { id = "m2", visible = false }],
@@ -182,11 +182,11 @@ resource "aws_cloudwatch_dashboard" "forge" {
         width  = 12
         height = 6
         properties = {
-          title   = "Estimated Cost USD (Sum)"
-          view    = "timeSeries"
-          stat    = "Sum"
-          period  = 3600
-          region  = var.aws_region
+          title  = "Estimated Cost USD (Sum)"
+          view   = "timeSeries"
+          stat   = "Sum"
+          period = 3600
+          region = var.aws_region
           metrics = [
             ["FORGE/Migration", "estimated_cost_usd"]
           ]
@@ -199,11 +199,11 @@ resource "aws_cloudwatch_dashboard" "forge" {
         width  = 12
         height = 6
         properties = {
-          title   = "Bedrock Calls per Hour"
-          view    = "timeSeries"
-          stat    = "Sum"
-          period  = 3600
-          region  = var.aws_region
+          title  = "Bedrock Calls per Hour"
+          view   = "timeSeries"
+          stat   = "Sum"
+          period = 3600
+          region = var.aws_region
           metrics = [
             ["FORGE/Migration", "bedrock_calls"]
           ]
