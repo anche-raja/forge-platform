@@ -103,6 +103,17 @@ python migrate.py ./myapp --apply-decisions decisions.json --output-dir ./migrat
 python migrate.py --feedback-report --output-dir ./migrated                                    # notes grouped by pack and rule
 ```
 
+**Local web UI.** `python migrate.py --ui` starts a FastAPI app on `127.0.0.1` (port 8765 or the
+next free one; `--port` to fix it, `--no-browser` to just print the URL) and opens a page that walks
+the same flow as steps: Project → Discover → Run → Review → Accept → Feedback → Artifacts. It is
+for one engineer on their own machine: loopback only, no auth, one job at a time (a second run is
+refused with 409 because the extract cache and boto3 clients are process-global). **The UI and the
+CLI call the same functions** — `forge/service.py` holds the one implementation of a run, and
+`migrate.py` is a printer over its events (`tests/test_service.py` pins the CLI's exact stdout).
+Add behaviour to the service, never to a route or a CLI branch. Per-run decisions (`risk_ceiling`
+from the page) reach the hold gate through `ForgeConfig.with_overrides`, not a temp file.
+`/api/files` serves artifacts only from inside the chosen output directory.
+
 **Discovery** (`forge/discover/`) profiles a repository with no model — build system, Java level,
 resolved dependency versions (through `${properties}`, `dependencyManagement` and the well-known
 imported BOMs), imports, descriptors — and evaluates every pack's `detect` rules against it.

@@ -89,7 +89,7 @@ forge-platform/
 │       └── generate-agents-yaml.sh    Generates MVP config
 │
 ├── forge-mvp/             Python pipeline (LangGraph + Bedrock)
-│   ├── migrate.py         CLI entrypoint
+│   ├── migrate.py         CLI entrypoint (also --ui)
 │   ├── agents.yaml        Resource IDs, model IDs, thresholds, pricing
 │   ├── forge/
 │   │   ├── graph.py       LangGraph wiring
@@ -147,6 +147,9 @@ pip install -r requirements.txt
 # Run the test suite first — fully mocked, needs no AWS credentials
 pytest
 
+# The whole flow from a browser — Project → Discover → Run → Review → Accept → Feedback
+python migrate.py --ui
+
 # The pack library, in dependency order (no AWS needed)
 python migrate.py --list-packs
 
@@ -202,6 +205,7 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 - ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml`, vendor descriptors and Liberty `server.xml` migrate with full descriptor context
 - ✅ **Discovery + acceptance** — `--discover` profiles any repo and selects packs; `--acceptance` gates the project on mechanical checks
 - ✅ **Human in the loop** — risky units are held for review; `migration-review.html` → `decisions.json` → `--apply-decisions`; notes roll up into `pack-feedback.md`
+- ✅ **Local web UI** — `python migrate.py --ui`: the same pipeline driven from a browser on your own machine, with live progress and one-click approve / reject / retry
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
 - ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform but not deployed
 

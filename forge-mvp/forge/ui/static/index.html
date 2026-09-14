@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FORGE</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">FORGE <span class="sub">J2EE → Java 21 · Jakarta EE 10 · Liberty</span></div>
+  <div id="jobbar" class="jobbar" hidden></div>
+  <div class="cwd" id="cwd" title="Relative paths resolve against this directory"></div>
+</header>
+
+<nav class="steps" id="nav">
+  <a href="#/project" data-step="project"><span class="n">1</span>Project</a>
+  <a href="#/discover" data-step="discover"><span class="n">2</span>Discover</a>
+  <a href="#/run" data-step="run"><span class="n">3</span>Run</a>
+  <a href="#/review" data-step="review"><span class="n">4</span>Review</a>
+  <a href="#/accept" data-step="accept"><span class="n">5</span>Accept</a>
+  <a href="#/feedback" data-step="feedback"><span class="n">6</span>Feedback</a>
+  <a href="#/artifacts" data-step="artifacts"><span class="n">7</span>Artifacts</a>
+</nav>
+
+<main id="main">
+  <div id="flash" class="flash" hidden></div>
+
+  <section id="step-project" class="step" hidden>
+    <h1>Project</h1>
+    <p class="lead">Which repository to migrate, where the output goes, and which <code>agents.yaml</code> to use.
+      Paths may be relative to the directory the UI was started from.</p>
+    <form id="project-form" class="form" autocomplete="off">
+      <label>Source directory <input id="p-source" name="source_dir" placeholder="/path/to/your/webapp" required></label>
+      <label>Output directory <input id="p-output" name="output_dir" placeholder="./migrated"></label>
+      <label>Config (agents.yaml) <input id="p-config" name="config" placeholder="agents.yaml"></label>
+      <div class="row">
+        <button type="submit" class="primary">Save and check</button>
+        <span id="p-status" class="hint"></span>
+      </div>
+    </form>
+    <div id="p-summary" class="card" hidden></div>
+  </section>
+
+  <section id="step-discover" class="step" hidden>
+    <h1>Discover</h1>
+    <p class="lead">Profile the repository without a model call: build system, Java level, resolved framework
+      versions, descriptors — and which packs apply, on what evidence.</p>
+    <div class="row">
+      <button id="d-run" class="primary">Discover</button>
+      <span id="d-status" class="hint"></span>
+    </div>
+    <div id="d-result" hidden>
+      <div class="cols">
+        <div>
+          <h2>Packs that apply</h2>
+          <table class="tbl" id="d-packs"></table>
+          <h2>Run order</h2>
+          <ol class="chips" id="d-order"></ol>
+          <p class="hint">Runnable packs form the plan; the Run step suggests the next one. Blocked packs need a
+            context extractor that is not built yet; detect-only packs are recognised but not migrated.</p>
+        </div>
+        <div>
+          <h2>Decisions</h2>
+          <p class="hint">Platform decisions for this project. They reach the packs, the hold gate and the
+            acceptance checks on every run.</p>
+          <div id="d-decisions" class="form"></div>
+        </div>
+      </div>
+      <details><summary>Discovery summary (as the CLI prints it)</summary><pre id="d-summary"></pre></details>
+      <div class="row"><a class="button" href="#/run">Next: Run →</a></div>
+    </div>
+  </section>
+
+  <section id="step-run" class="step" hidden>
+    <h1>Run</h1>
+    <p class="lead">One pack over the project. Every file goes through pre-flight guardrails, transform, cross-model
+      review, post guardrails, the hold gate and the build check; risky units are held for you.</p>
+    <form id="run-form" class="form" autocomplete="off">
+      <label>Pack <select id="r-phase"></select></label>
+      <div class="checks">
+        <label><input type="checkbox" id="r-dry"> Dry run — write nothing, list every transform for review</label>
+        <label><input type="checkbox" id="r-acc"> Run acceptance checks afterwards</label>
+        <label><input type="checkbox" id="r-accbuild"> …including the build check (needs the toolchain; slow)</label>
+        <label><input type="checkbox" id="r-nometrics"> Skip CloudWatch metrics</label>
+      </div>
+      <div class="row">
+        <button type="submit" class="primary" id="r-start">Start</button>
+        <button type="button" id="r-cancel" hidden>Cancel after the current file</button>
+        <span id="r-status" class="hint"></span>
+      </div>
+    </form>
+    <div id="r-live" hidden>
+      <div class="progress"><div id="r-bar"></div></div>
+      <div id="r-head" class="runhead"></div>
+      <ol id="r-files" class="files"></ol>
+      <div id="r-done" class="card" hidden></div>
+      <details id="r-log-wrap"><summary>Event log</summary><pre id="r-log"></pre></details>
+    </div>
+    <details id="r-history-wrap"><summary>Earlier jobs this session</summary><table class="tbl" id="r-history"></table></details>
+  </section>
+
+  <section id="step-review" class="step" hidden>
+    <h1>Review</h1>
+    <p class="lead">What the pipeline could not settle on its own. Approve writes the staged file; reject discards
+      it with your reason; retry re-runs the unit with your note in its prompt.</p>
+    <div class="row">
+      <button id="v-reload">Reload queue</button>
+      <span id="v-status" class="hint"></span>
+      <a id="v-static" class="hint" target="_blank" rel="noopener" hidden>open the static review page</a>
+    </div>
+    <div id="v-meta" class="card" hidden></div>
+    <iframe id="v-frame" class="reviewframe" title="Review entries" hidden></iframe>
+    <div id="v-footer" class="applybar" hidden>
+      <button id="v-apply" class="primary">Apply 0 decisions</button>
+      <label><input type="checkbox" id="v-dry"> dry run</label>
+      <span id="v-apply-status" class="hint"></span>
+    </div>
+    <table class="tbl" id="v-outcomes" hidden></table>
+  </section>
+
+  <section id="step-accept" class="step" hidden>
+    <h1>Accept</h1>
+    <p class="lead">A pack's acceptance checks over the merged tree — the source with the output overlaid. The verdict
+      is INCOMPLETE, never PASS, while any check was skipped.</p>
+    <form id="acc-form" class="form" autocomplete="off">
+      <label>Pack <select id="a-phase"></select></label>
+      <label><input type="checkbox" id="a-build"> Run the build check too (this blocks the page while Maven runs)</label>
+      <div class="row">
+        <button type="submit" class="primary">Run acceptance</button>
+        <span id="a-status" class="hint"></span>
+      </div>
+    </form>
+    <div id="a-result" hidden>
+      <div id="a-verdict" class="verdict"></div>
+      <table class="tbl" id="a-table"></table>
+    </div>
+  </section>
+
+  <section id="step-feedback" class="step" hidden>
+    <h1>Feedback</h1>
+    <p class="lead">Reviewers' notes grouped by pack and rule. A correction that repeats across files is a pack edit
+      waiting to happen — the path to edit is shown under each pack.</p>
+    <div class="row"><button id="f-reload">Reload</button><span id="f-status" class="hint"></span></div>
+    <div id="f-result"></div>
+  </section>
+
+  <section id="step-artifacts" class="step" hidden>
+    <h1>Artifacts</h1>
+    <p class="lead">Everything a run leaves in the output directory. Each opens in a new tab.</p>
+    <div class="row"><button id="x-reload">Reload</button><span id="x-status" class="hint"></span></div>
+    <table class="tbl" id="x-table"></table>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

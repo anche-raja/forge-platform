@@ -16,6 +16,9 @@ Actionable backlog for the next development cycle. Context for each item lives i
       with evidence, `forge-profile.yaml`.
 - [x] Human in the loop — risk scorer, `risk_ceiling` hold gate, review queue v2 + static review
       page, `--apply-decisions`, `--feedback-report`.
+- [x] Local web UI — `migrate.py --ui`; `forge/service.py` shared by CLI and UI, FastAPI routes,
+      one-at-a-time job registry with SSE progress, live review with Apply, acceptance, feedback
+      and artifact views (`forge/ui/`).
 
 ## P1 — Verification quality
 

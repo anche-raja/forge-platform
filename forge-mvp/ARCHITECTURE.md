@@ -217,7 +217,12 @@ python migrate.py ./myapp --phase java21 --resume
 ```
 
 Flags: `--phase` (a built-in phase or any complete pack — see §12), `--dry-run`, `--resume`,
-`--file`, `--output-dir` (default `./migrated`), `--config`, `--no-metrics`, `--list-packs`.
+`--file`, `--output-dir` (default `./migrated`), `--config`, `--no-metrics`, `--list-packs`,
+`--discover`, `--acceptance` / `--acceptance-only` / `--acceptance-build`, `--apply-decisions`,
+`--feedback-report`, and `--ui` / `--port` / `--no-browser` for the local web UI (§13).
+
+`migrate.py` is a thin printer: every command calls a function in [forge/service.py](forge/service.py)
+and turns its events into the lines above. The web UI calls the same functions.
 
 > **Note:** `--dry-run` skips file writes and the DynamoDB *state* update, but the graph still
 > calls **Bedrock** (guardrails + both models) and the **checkpointer still writes** to DynamoDB.
@@ -240,12 +245,14 @@ Flags: `--phase` (a built-in phase or any complete pack — see §12), `--dry-ru
 
 ```
 forge-mvp/
-  migrate.py                       # CLI entry point
+  migrate.py                       # CLI entry point — a printer over forge/service.py
   agents.yaml                      # single config file
   prompts/
     java_upgrade.md                # externalised agent system prompt (editable, no code change)
   forge/
-    config.py                      # YAML loader
+    service.py                     # the one implementation of packs/discover/run/acceptance/apply/feedback
+    ui/                            # local web UI: app.py (FastAPI routes), jobs.py (job registry), server.py, static/
+    config.py                      # YAML loader; with_overrides() for per-run decisions
     state.py                       # ForgeState / FileStatus / state machine
     graph.py                       # LangGraph wiring (the pipeline)
     agents/
@@ -316,3 +323,50 @@ The engine above is unchanged. What Phase 1 adds is *what it runs* and *what it 
 WebSphere/Open Liberty at Jakarta EE 10, Spring Framework 6.2, no Spring Boot**; and
 `web_framework: modernize-in-place` (Struts → Struts 7) is the first route, with
 `migrate-to-spring` as the later one.
+
+---
+
+## 13. Local web UI
+
+`python migrate.py --ui` serves [forge/ui/app.py](forge/ui/app.py) with uvicorn on `127.0.0.1`
+and opens the browser. It replaces nothing: the CLI stays for CI, and both sit on the same
+service layer.
+
+**Service contract** ([forge/service.py](forge/service.py)). Plain functions, no argparse, no
+`print`, no `sys.exit`: `packs()`, `discover()`, `run_migration()`, `acceptance()`, `apply()`,
+`feedback()`. Progress is an `on_event(dict)` callback with a `type` key — `start`, `skipped`,
+`file`, `snapshot`, `queue`, `acceptance`, `summary`, `cancelled`, `nothing`, `apply_outcome`,
+`apply_done`. The CLI's `_print_event` reproduces its historical stdout from those events;
+`tests/test_service.py::test_cli_prints_exactly_the_historical_lines` pins it. "Nothing to do" is
+`NoEligibleFiles`, which the CLI turns into exit 0. `run_migration` takes a `threading.Event` for
+cancellation, checked between units; on cancel the report and queue are still written, because held
+files are already staged and must not be orphaned.
+
+**Job model** ([forge/ui/jobs.py](forge/ui/jobs.py)). A run or an apply is a `Job` on a daemon
+thread. Events get a sequence number and are kept for the job's lifetime, so `/api/runs/{id}/events`
+(Server-Sent Events, keep-alive comment every 15 s) can replay from `Last-Event-ID` after a reload
+or a dropped connection. The terminal event is always `done` or `error`. **One job at a time**: the
+registry raises `JobBusy` → HTTP 409 while any job is unfinished. That rule is what makes the rest
+safe — the extract cache is process-global and cleared per run, and boto3 resources are not
+thread-safe, so only the job thread ever touches the graph, DynamoDB, metrics or the cache.
+
+**Routes.** `GET /api/packs` · `POST /api/discover` · `POST /api/runs` (202 + job id; 400 for a
+phase that is not runnable or a bad path; 409 when busy) · `GET /api/runs/{id}` · `POST
+/api/runs/{id}/cancel` · `GET /api/runs/{id}/events` · `GET /api/jobs` · `GET /api/review` (queue
+metadata + the entry HTML from `review_queue.render_entries`, embedded in an iframe with the same
+CSS as the static page, so the decision widget is one DOM contract) · `POST /api/review/decisions`
+(validated by `decisions_from`, the same function `--apply-decisions` uses; runs as an `apply` job)
+· `POST /api/acceptance` (synchronous; the page warns that `run_build` blocks) · `GET /api/feedback`
+· `GET /api/artifacts` · `GET /api/files?output_dir=&name=`.
+
+**Per-run decisions.** The Discover step offers every platform decision; the values go in the run
+body and reach the packs, the hold gate and the acceptance checks through
+`ForgeConfig.with_overrides({"decisions": ...})` — a deep-copied config, nested mappings merged, no
+temp YAML and no environment variable.
+
+**Boundaries.** Loopback only (there is no `--host`); no authentication because there is no network;
+`/api/files` refuses absolute names, `..` and symlink escapes (403) and serves nothing outside the
+chosen output directory. The front end is three static files (`forge/ui/static/`), vanilla JS with
+`fetch` + `EventSource`, no build step and no CDN — it must work on a machine with no internet.
+Stopping the server kills a job mid-unit; *Cancel* is the clean stop and `--resume` recovers as
+before.

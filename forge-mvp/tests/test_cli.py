@@ -256,3 +256,12 @@ def test_liberty_generated_unit_is_held_by_default(tmp_path, capsys):
     assert entry["status"] == "HELD" and entry["held_paths"] == [str(staged)]
     assert "risk_ceiling=review-high" in entry["hold_reason"]
     assert (out / "migration-review.html").exists()
+
+
+def test_ui_flag_dispatches_to_serve_without_a_source_dir():
+    with patch("forge.ui.server.serve", return_value=0) as serve:
+        _run(["--ui", "--no-browser", "--port", "9999"])
+    serve.assert_called_once_with(port=9999, open_browser=False, strict_port=True)
+    with patch("forge.ui.server.serve", return_value=0) as serve:
+        _run(["--ui"])
+    serve.assert_called_once_with(port=8765, open_browser=True, strict_port=False)

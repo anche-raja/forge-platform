@@ -204,8 +204,15 @@ def main():
     parser.add_argument("--feedback-report", action="store_true",
                         help="Group reviewers' notes by pack and rule into pack-feedback.md in --output-dir")
     parser.add_argument("--log-level", default=None, help="Logging level (default: INFO, or $FORGE_LOG_LEVEL)")
+    parser.add_argument("--ui", action="store_true",
+                        help="Start the local web UI (loopback only) and open it in a browser; no other arguments needed")
+    parser.add_argument("--port", type=int, default=None, help="Port for --ui (default: 8765, or the next free one)")
+    parser.add_argument("--no-browser", action="store_true", help="With --ui: print the URL instead of opening a browser")
     args = parser.parse_args()
 
+    if args.ui:
+        from forge.ui.server import DEFAULT_PORT, serve
+        return serve(port=args.port or DEFAULT_PORT, open_browser=not args.no_browser, strict_port=args.port is not None)
     if args.list_packs:
         return _list_packs()
     if args.feedback_report:
