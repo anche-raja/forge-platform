@@ -41,11 +41,6 @@ output "sqs_queue_url" {
   sensitive   = true
 }
 
-output "knowledge_base_id" {
-  description = "Bedrock Knowledge Base ID — agents.yaml: knowledge_base_id (null if rag not deployed)"
-  value       = try(module.rag[0].knowledge_base_id, null)
-}
-
 output "sagemaker_endpoint_name" {
   description = "SageMaker endpoint name — agents.yaml: sagemaker_endpoint_name (null if not deployed)"
   value       = try(module.sagemaker[0].endpoint_name, null)
@@ -69,9 +64,4 @@ output "sqs_queue_arn" {
   description = "Manual review SQS queue ARN — .env: FORGE_SQS_QUEUE_ARN"
   value       = try(module.sqs[0].queue_arn, null)
   sensitive   = true
-}
-
-output "s3_knowledge_base_bucket" {
-  description = "Knowledge Base S3 bucket name — .env: FORGE_KB_BUCKET"
-  value       = try(module.rag[0].s3_bucket_name, null)
 }

@@ -31,9 +31,6 @@ Actionable backlog for the next development cycle. Context for each item lives i
       `struts_routing_table` extractor exists to diff pre/post action tables.
 - [ ] **Run from the profile.** `--discover` writes `forge-profile.yaml`; nothing reads it yet. A
       `--profile` run should iterate the activated packs in order, applying each pack's checks.
-- [ ] **Wire RAG.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB. Hook the
-      transform/review agents to the KB so enterprise standards actually ground the output.
-
 ## P2 — Cost & config hardening
 
 - [ ] **Add `--estimate-cost` dry-run** to [migrate.py](migrate.py) — it already counts

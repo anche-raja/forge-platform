@@ -42,9 +42,8 @@ flowchart LR
             ALARMS["4 alarms<br/>retry / manual /<br/>stalled / cost"]
         end
 
-        subgraph Phase6["Phase 6+ — opt-in (enable_sqs / enable_rag / enable_sagemaker)"]
+        subgraph Phase6["Phase 6+ — opt-in (enable_sqs / enable_sagemaker)"]
             SQS["SQS<br/>manual-review"]
-            KB["Bedrock KB<br/>+ OpenSearch Serverless"]
             SM["SageMaker<br/>TGI endpoint"]
         end
     end
@@ -97,7 +96,6 @@ forge-platform/
 │   │   ├── foundation/    DynamoDB ×2, Bedrock Guardrail (+ auto-published version), IAM execution role
 │   │   ├── observability/ CloudWatch log group / dashboard / 4 alarms, SNS
 │   │   ├── sqs/           Phase 6 — manual review queue + DLQ        (enable_sqs)
-│   │   ├── rag/           Phase 6 — S3 + OpenSearch Serverless + Bedrock KB (enable_rag)
 │   │   └── sagemaker/     Future — TGI endpoint                      (enable_sagemaker)
 │   └── scripts/
 │       ├── bootstrap-state.sh         Creates the TF state bucket + lock table
@@ -169,10 +167,8 @@ Before the first live run, also:
 - **Run as the execution role** (`aws sts assume-role`, or an instance profile) or make sure
   your own identity has the same Bedrock / DynamoDB / CloudWatch permissions.
 
-Phase 6 (manual-review SQS, RAG knowledge base) and the SageMaker endpoint are opt-in: set
-`enable_sqs`, `enable_rag` or `enable_sagemaker` to `true` in `terraform.tfvars` and apply
-again. The OpenSearch Serverless collection behind `enable_rag` is always-on (~$175/month) and
-takes 5–10 minutes to become ACTIVE — re-run apply if the Knowledge Base fails on the first pass.
+The Phase 6 manual-review queue and the SageMaker endpoint are opt-in: set `enable_sqs` or
+`enable_sagemaker` to `true` in `terraform.tfvars` and apply again.
 
 ### 2. Generate the pipeline config
 
@@ -261,14 +257,13 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 - ✅ **Human in the loop** — risky units are held for review; `migration-review.html` → `decisions.json` → `--apply-decisions`; notes roll up into `pack-feedback.md`
 - ✅ **Local web UI** — `python migrate.py --ui`: the same pipeline driven from a browser on your own machine, with live progress and one-click approve / reject / retry
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
-- ⏳ **Phase 6+** — SQS, RAG, SageMaker modules exist in Terraform, off by default (`enable_*`), not deployed
+- ⏳ **Phase 6+** — SQS and SageMaker modules exist in Terraform, off by default (`enable_*`), not deployed
 
 ## Cost profile
 
 | Scope | Idle | Active migration |
 |---|---|---|
 | Phase 0 only (foundation + observability) | ~$5/mo | ~$20–40/mo |
-| + `enable_rag` | +$175/mo (OpenSearch Serverless always-on) | same |
 | + `enable_sqs` | ~$0 | pennies per million messages |
 | + `enable_sagemaker` (ml.g5.2xlarge) | +$1,093/mo | stop the endpoint when idle |
 

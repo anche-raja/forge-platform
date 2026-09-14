@@ -15,7 +15,6 @@ so a plain apply only creates what Phase 0 needs.
 ## Deployment sequence
 terraform apply                                  # Phase 0: foundation + observability (flags default false)
 enable_sqs = true      → terraform apply         # before Phase 6 — manual review queue
-enable_rag = true      → terraform apply         # before Phase 6 — knowledge base (OpenSearch always-on, ~$175/mo)
 enable_sagemaker = true → terraform apply        # future — internal LLM only
 
 After every apply: scripts/generate-agents-yaml.sh {env} > ../forge-mvp/agents.yaml
@@ -43,10 +42,6 @@ forge-terraform/
       variables.tf
       outputs.tf
     sqs/                    # SQS manual review queue + DLQ (Phase 6)
-      main.tf
-      variables.tf
-      outputs.tf
-    rag/                    # S3 bucket + Bedrock Knowledge Base (Phase 6)
       main.tf
       variables.tf
       outputs.tf
@@ -92,7 +87,6 @@ app_name            string   — default "forge"
 team_name           string   — your team name for tagging
 alerts_email        string   — CloudWatch alarm e-mail (needs SNS confirmation)
 enable_sqs          bool     — default false
-enable_rag          bool     — default false
 enable_sagemaker    bool     — default false
 
 The Java package scope (scope_package_prefix) is a pipeline setting, not infrastructure:
@@ -200,7 +194,6 @@ Bedrock policy:
   invoking one needs the profile ARN AND the foundation model in every region it routes to.
   An in-region foundation-model/* grant alone is AccessDenied.
   bedrock:ApplyGuardrail — on the guardrail ARN created above
-  bedrock:Retrieve — on the knowledge base ARN (output from rag module, use data source if module not deployed yet)
 
 DynamoDB policy:
   dynamodb:PutItem, GetItem, UpdateItem, DeleteItem, Query, Scan, DescribeTable — on both table ARNs and their /index/*
@@ -209,9 +202,9 @@ CloudWatch policy:
   cloudwatch:PutMetricData — resource *
   logs:CreateLogGroup, CreateLogStream, PutLogEvents — resource *
 
-SQS and S3 access are granted by resource policies inside the sqs and rag modules (queue policy,
-bucket policy) naming the execution role — same-account, so no identity policy is needed and the
-foundation module has no dependency on modules that may not be deployed.
+SQS access is granted by a queue policy inside the sqs module naming the execution role —
+same-account, so no identity policy is needed and the foundation module has no dependency on a
+module that may not be deployed.
 
 ### IAM — Instance Profile (for EC2 local dev)
 Resource: aws_iam_instance_profile
@@ -342,89 +335,7 @@ Output:
 
 ---
 
-## MODULE 4 — rag
-Path: modules/rag/
-Deploy before: Phase 6
-
-### S3 Bucket — Knowledge Base Documents
-Resource: aws_s3_bucket
-Name: {app_name}-knowledge-base-{account_id}-{environment}
-Versioning: enabled
-Server side encryption: AES256
-Block all public access: true
-
-Lifecycle rule: transition objects older than 90 days to S3 Intelligent-Tiering
-
-### S3 Bucket Policy
-Allow the Bedrock service principal to GetObject from this bucket.
-Allow the FORGE execution role to PutObject, GetObject, DeleteObject.
-
-### S3 Bucket Objects — Seed Documents
-Resource: aws_s3_object
-Upload these placeholder files from a local docs/ directory:
-  docs/coding_standards.md → s3://{bucket}/coding_standards.md
-  docs/spring_migration_patterns.md → s3://{bucket}/spring_migration_patterns.md
-  docs/struts2_to_mvc_rules.md → s3://{bucket}/struts2_to_mvc_rules.md
-  docs/arch_decisions.md → s3://{bucket}/arch_decisions.md
-  docs/liberty_config_standards.md → s3://{bucket}/liberty_config_standards.md
-
-Create a docs/ directory with placeholder markdown files. Each file has a header comment explaining what the team should fill in.
-
-### IAM Role — Bedrock Knowledge Base Service Role
-Resource: aws_iam_role
-Name: forge-bedrock-kb-role-{environment}
-Trust policy: allow bedrock.amazonaws.com to assume this role
-
-Permissions:
-  s3:GetObject, ListBucket on the knowledge base S3 bucket
-  bedrock:InvokeModel on the embedding model (amazon.titan-embed-text-v2:0)
-
-### Bedrock Knowledge Base
-Resource: aws_bedrockagent_knowledge_base
-Name: forge-knowledge-base-{environment}
-Role ARN: the KB service role above
-Embedding model ARN: arn:aws:bedrock:{region}::foundation-model/amazon.titan-embed-text-v2:0
-
-Knowledge base configuration:
-  type: VECTOR
-  vector knowledge base configuration:
-    embedding model ARN: amazon.titan-embed-text-v2:0
-
-Storage configuration:
-  type: OPENSEARCH_SERVERLESS
-  This requires an OpenSearch Serverless collection — create it:
-
-### OpenSearch Serverless Collection
-Resource: awscc_opensearchserverless_collection
-Name: forge-kb-{environment}
-Type: VECTORSEARCH
-
-Security policies required for OpenSearch Serverless:
-  aws_opensearchserverless_security_policy — encryption: AWS managed key, resource pattern: collection/forge-kb-{environment}
-  aws_opensearchserverless_security_policy — network: allow public access (or VPC policy if private)
-  aws_opensearchserverless_access_policy — allow the KB role to: aoss:CreateIndex, DeleteIndex, UpdateIndex, DescribeIndex, ReadDocument, WriteDocument — on collection/forge-kb-{environment} and index/forge-kb-{environment}/*
-
-### Bedrock Knowledge Base Data Source
-Resource: aws_bedrockagent_data_source
-Name: forge-s3-docs-{environment}
-Knowledge base ID: from the knowledge base above
-Data source configuration:
-  type: S3
-  S3 bucket ARN: the knowledge base bucket
-  Inclusion prefixes: none (include all files)
-Chunking strategy: FIXED_SIZE, max tokens 512, overlap 50 tokens
-
-### outputs.tf — rag module
-Output:
-  knowledge_base_id
-  knowledge_base_arn
-  s3_bucket_name
-  s3_bucket_arn
-  opensearch_collection_endpoint
-
----
-
-## MODULE 5 — sagemaker (future — deploy only when internal LLM is ready)
+## MODULE 4 — sagemaker (future — deploy only when internal LLM is ready)
 Path: modules/sagemaker/
 Deploy when: internal LLM model is ready to host
 
@@ -488,24 +399,12 @@ module "observability" {
   alerts_email = var.alerts_email
 }
 
-# Phase 6 and future modules are opt-in. A plain apply must never create the
-# always-on OpenSearch Serverless collection by accident.
+# Phase 6 and future modules are opt-in.
 module "sqs" {
   source      = "./modules/sqs"
   count       = var.enable_sqs ? 1 : 0
   environment = var.environment
   app_name    = var.app_name
-  execution_role_arn = module.foundation.execution_role_arn
-}
-
-module "rag" {
-  source      = "./modules/rag"
-  count       = var.enable_rag ? 1 : 0
-  providers   = { aws = aws, awscc = awscc }   # awscc for the OpenSearch Serverless collection
-  environment = var.environment
-  app_name    = var.app_name
-  aws_account_id = var.aws_account_id
-  aws_region  = var.aws_region
   execution_role_arn = module.foundation.execution_role_arn
 }
 
@@ -532,7 +431,6 @@ group "AGENTS_YAML — paste these into agents.yaml":
   cloudwatch_namespace          = "FORGE/Migration"
   cloudwatch_log_group          = module.observability.cloudwatch_log_group_name
   sqs_queue_url                 = try(module.sqs[0].queue_url, null)
-  knowledge_base_id             = try(module.rag[0].knowledge_base_id, null)
   sagemaker_endpoint_name       = try(module.sagemaker[0].endpoint_name, null)
 
 group "ENV FILE — paste these into .env":
@@ -550,7 +448,6 @@ variable "app_name"             default "forge"
 variable "team_name"            default "platform"
 variable "alerts_email"         description "Email for CloudWatch alarm notifications"
 variable "enable_sqs"           default false
-variable "enable_rag"           default false
 variable "enable_sagemaker"     default false
 
 ---
@@ -564,7 +461,6 @@ app_name             = "forge"
 team_name            = "platform-engineering"
 alerts_email         = "your-team@corp.com"
 enable_sqs           = false   # Phase 6
-enable_rag           = false   # Phase 6 — OpenSearch Serverless is always-on (~$175/mo)
 enable_sagemaker     = false   # future
 
 ---
@@ -594,33 +490,6 @@ Script logic:
 
 ---
 
-## docs/ — Knowledge Base seed documents
-
-Create these placeholder markdown files in docs/. Each has a header explaining what content the team should add. They are uploaded to S3 by the rag module.
-
-docs/coding_standards.md:
-  Header: "# Enterprise Java Coding Standards"
-  Placeholder sections: package naming conventions, class naming rules, method naming rules, annotation usage standards, logging standards, exception handling patterns
-  Note: "Fill in your enterprise standards here. FORGE transform agents will use these to generate code that matches your conventions."
-
-docs/spring_migration_patterns.md:
-  Header: "# Approved Spring MVC Migration Patterns"
-  Placeholder sections: approved @Controller patterns, approved security config patterns, approved data access patterns, approved exception handling, approved validation patterns
-
-docs/struts2_to_mvc_rules.md:
-  Header: "# Struts 2 to Spring MVC Migration Rules — Project Specific"
-  Placeholder sections: known edge cases in this codebase, custom interceptors that exist and how they should map, custom result types, known OGNL patterns and their Spring equivalents
-
-docs/arch_decisions.md:
-  Header: "# Architecture Decisions (ADRs)"
-  Placeholder: paste your ADRs here, particularly those relevant to the target architecture
-
-docs/liberty_config_standards.md:
-  Header: "# Open Liberty Configuration Standards"
-  Placeholder sections: approved feature sets per application type, datasource configuration patterns, ECS resource allocation guidelines
-
----
-
 ## Acceptance criteria — infrastructure is ready when
 
 1. bash scripts/bootstrap-state.sh completes and prints "State backend ready"
@@ -645,19 +514,16 @@ docs/liberty_config_standards.md:
 | 3 | terraform apply (foundation + observability; flags off) | Phase 0 MVP |
 | 4 | scripts/generate-agents-yaml.sh dev > ../forge-mvp/agents.yaml | Phase 0 MVP |
 | 5 | enable_sqs = true → terraform apply | Phase 6 |
-| 6 | enable_rag = true → terraform apply (re-run if the collection is not yet ACTIVE) | Phase 6 |
-| 7 | enable_sagemaker = true → terraform apply | Future — internal LLM |
+| 6 | enable_sagemaker = true → terraform apply | Future — internal LLM |
 
 ---
 
 ## Cost estimate (us-east-1, dev environment, idle)
 
-DynamoDB (3 tables, PAY_PER_REQUEST): ~$0/month at rest, ~$1-5/month during active migration
+DynamoDB (2 tables, PAY_PER_REQUEST): ~$0/month at rest, ~$1-5/month during active migration
 Bedrock Guardrails: charged per API call — ~$0.01 per 1000 text units
 CloudWatch (dashboard + alarms): ~$3/month for 1 dashboard + 4 alarms + log group
 SQS (when deployed): ~$0/month at low volume (first 1M requests free)
-OpenSearch Serverless (when deployed): ~$0.24/OCU/hour — minimum 2 OCU = ~$175/month
-  Note: OpenSearch Serverless has a minimum cost. If RAG is not urgent, delay this module.
 SageMaker endpoint (when deployed): ml.g5.2xlarge ~$1.41/hour — stop endpoint when not in use
 
 Total before Phase 6: < $10/month
@@ -666,16 +532,10 @@ Total before Phase 6: < $10/month
 
 ## Notes for Claude Code
 
-1. Use the awscc provider for OpenSearch Serverless resources — the standard aws provider does not support all OpenSearch Serverless resource types.
+1. For the Bedrock Guardrails resource, check the current AWS provider version for aws_bedrock_guardrail support — it was added in provider version 5.26.0.
 
-2. The Bedrock Knowledge Base resource (aws_bedrockagent_knowledge_base) requires the awscc provider or the aws provider version >= 5.31.0.
+2. The sagemaker module should only be applied when the team has a trained model artifact in S3. The count = var.enable_sagemaker ? 1 : 0 pattern ensures it is never accidentally deployed.
 
-3. For the Bedrock Guardrails resource, check the current AWS provider version for aws_bedrock_guardrail support — it was added in provider version 5.26.0.
+3. All sensitive outputs (role ARNs, queue URLs) should be marked sensitive = true in outputs.tf so they do not print to console during terraform apply.
 
-4. The sagemaker module should only be applied when the team has a trained model artifact in S3. The count = var.enable_sagemaker ? 1 : 0 pattern ensures it is never accidentally deployed.
-
-5. All sensitive outputs (role ARNs, queue URLs) should be marked sensitive = true in outputs.tf so they do not print to console during terraform apply.
-
-6. Add a locals.tf to each module that computes the resource name suffix: locals { suffix = "${var.app_name}-${var.environment}" } — use this consistently across all resource names.
-
-7. The OpenSearch Serverless collection takes 5-10 minutes to become active after creation. Add a depends_on from the Bedrock Knowledge Base resource to the collection, and add a note in the README that the first apply may need to be run twice if the collection is not ready.
+4. Add a locals.tf to each module that computes the resource name suffix: locals { suffix = "${var.app_name}-${var.environment}" } — use this consistently across all resource names.

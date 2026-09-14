@@ -31,7 +31,7 @@ And see:
 - PyYAML for agents.yaml config
 - python-dotenv for .env
 
-No LiteLLM yet. No SQS yet. No OpenHands yet. No RAG yet. No Discovery agent yet.
+No LiteLLM yet. No SQS yet. No OpenHands yet. No Discovery agent yet.
 
 ## Folder structure to build
 

@@ -7,8 +7,7 @@
 > local web UI and the service layer under both front ends are in §13.
 > The engine started as a single-phase **Java 8 → 21 upgrade** pipeline. It is *not* the 15-agent vision in
 > `FORGE-AgentDeepDive.pptx`. Per [prompts/FORGE-Phase0-MVP.md](../prompts/FORGE-Phase0-MVP.md),
-> Phase 0 is deliberately *"one transform agent, one review agent, nothing else — no RAG, no SQS,
-> no Discovery agent yet."* The deck is the target end-state; this is the foundation.
+> Phase 0 is deliberately *"one transform agent, one review agent, nothing else."* The deck is the target end-state; this is the foundation.
 
 ---
 
@@ -58,8 +57,7 @@ Override the prompt directory with the `FORGE_PROMPTS_DIR` environment variable.
 > The spec pins `langgraph>=0.2 / langchain>=0.3`; the graph also compiles and tests pass under
 > the current `langgraph 1.x / langchain 1.x` line.
 
-**Not in the MVP** (despite being in the deck): RAG / Bedrock Knowledge Base, Strands Agents,
-SQS, the Containerize and Test-Gen agents, the 5-agent review board, and `@tool`
+**Not in the MVP** (despite being in the deck): Strands Agents, SQS, the Containerize and Test-Gen agents, the 5-agent review board, and `@tool`
 function-calling. Agents use plain system-prompt + `invoke`. The deck's Discovery agent,
 Risk-Scorer and review portal exist in deterministic form — `--discover`, `forge/risk/` and the
 review page + web UI — rather than as model-driven agents.
@@ -318,7 +316,6 @@ These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives
   full descriptor set (§12). Packs naming an unbuilt extractor (`struts_routing_table`,
   `spring_bean_graph`, `view_bindings`, `reactor`, `test_subject`) either run without context or
   are refused if they need a selector.
-- **RAG not wired.** `knowledge_base_id` is empty; no agent retrieves from the Bedrock KB.
 - **The profile is written but not yet consumed.** `--discover` produces `forge-profile.yaml`;
   a run still takes one `--phase` at a time.
 - **`routing_parity` is skipped** until the `struts_routing_table` extractor exists.

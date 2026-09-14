@@ -8,5 +8,4 @@ app_name              = "forge"
 team_name             = "platform-engineering"
 alerts_email          = "your-team@corp.com"
 enable_sqs            = false # Phase 6
-enable_rag            = false # Phase 6 — OpenSearch Serverless is always-on (~$175/mo)
 enable_sagemaker      = false # future

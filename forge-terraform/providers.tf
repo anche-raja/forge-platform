@@ -6,10 +6,6 @@ terraform {
       source  = "hashicorp/aws"
       version = ">= 5.31.0, < 7.0.0" # 6.x deprecates hash_key (warning only); 7.x is untested
     }
-    awscc = {
-      source  = "hashicorp/awscc"
-      version = ">= 0.70.0"
-    }
   }
 }
 
@@ -24,10 +20,4 @@ provider "aws" {
       Team        = var.team_name
     }
   }
-}
-
-# awscc provider is required for OpenSearch Serverless collection (awscc_opensearchserverless_collection).
-# It does not support default_tags — tag each awscc resource manually using list-of-{key,value} format.
-provider "awscc" {
-  region = var.aws_region
 }

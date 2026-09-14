@@ -37,7 +37,6 @@ GUARDRAIL_ID="$(echo "$TF_OUTPUT" | jq -r '.guardrail_id.value // ""')"
 GUARDRAIL_VERSION="$(echo "$TF_OUTPUT" | jq -r '.guardrail_version.value // ""')"
 LOG_GROUP="$(echo "$TF_OUTPUT" | jq -r '.cloudwatch_log_group.value // ""')"
 SQS_URL="$(echo "$TF_OUTPUT" | jq -r '.sqs_queue_url.value // ""')"
-KB_ID="$(echo "$TF_OUTPUT" | jq -r '.knowledge_base_id.value // ""')"
 SM_ENDPOINT="$(echo "$TF_OUTPUT" | jq -r '.sagemaker_endpoint_name.value // ""')"
 
 # Emit agents.yaml to stdout — caller redirects with >
@@ -67,9 +66,6 @@ cloudwatch_log_group: "${LOG_GROUP}"
 
 # ─── Optional: SQS (deploy module.sqs before Phase 6) ────────────────────────
 sqs_queue_url: "${SQS_URL}"
-
-# ─── Optional: RAG (deploy module.rag before Phase 6) ────────────────────────
-knowledge_base_id: "${KB_ID}"
 
 # ─── Optional: SageMaker internal LLM (future) ───────────────────────────────
 sagemaker_endpoint_name: "${SM_ENDPOINT}"

@@ -35,7 +35,7 @@ cp terraform.tfvars.example terraform.tfvars
 # MVP (Phase 0) — foundation + observability; the other modules are off by default
 terraform apply
 
-# Phase 6 — set enable_sqs = true and/or enable_rag = true in terraform.tfvars, then
+# Phase 6 — set enable_sqs = true in terraform.tfvars, then
 terraform apply
 
 # Future — only when a trained model artifact is in S3: enable_sagemaker = true, then
@@ -53,30 +53,24 @@ terraform apply
 | `foundation` | 2 DynamoDB tables, Bedrock Guardrails, IAM execution role | Phase 0 |
 | `observability` | CloudWatch log group, dashboard, 4 alarms, SNS topic | Phase 0 |
 | `sqs` | Manual review queue + DLQ | Phase 6 (`enable_sqs`) |
-| `rag` | S3 bucket, OpenSearch Serverless, Bedrock Knowledge Base | Phase 6 (`enable_rag`) |
 | `sagemaker` | TGI endpoint, SSM parameter | Future only (`enable_sagemaker`) |
 
 ### Architecture decisions baked into the Terraform
 
-**Two providers in the `rag` module.** The `awscc` provider is required for `awscc_opensearchserverless_collection` — the standard `aws` provider does not support it. The root `main.tf` passes both providers explicitly to the `rag` module via `providers = { aws = aws, awscc = awscc }`. Any future change to the rag module that adds awscc resources must keep this in place.
-
 **Backend variables are literals.** Terraform does not allow variable interpolation inside `backend {}` blocks. The bucket name in `backend.tf` is a placeholder — always pass the real values via `-backend-config` flags at `terraform init` time. Do not attempt to use `var.*` inside the backend block.
 
-**`try()` for optional module outputs.** The root `outputs.tf` wraps `sagemaker`, `sqs`, and `rag` outputs in `try(..., null)`. This prevents index-out-of-range errors when `count = 0` modules are not deployed.
+**`try()` for optional module outputs.** The root `outputs.tf` wraps `sagemaker` and `sqs` outputs in `try(..., null)`. This prevents index-out-of-range errors when `count = 0` modules are not deployed.
 
-**Conditional Phase 6 modules.** `count = var.enable_* ? 1 : 0` is on the module calls in root `main.tf` (`sqs`, `rag`, `sagemaker`), not on individual resources inside the modules. All resources inside a module are unconditional — the gate is purely at the root level, so a plain `terraform apply` never creates the always-on OpenSearch collection by accident.
+**Conditional Phase 6 modules.** `count = var.enable_* ? 1 : 0` is on the module calls in root `main.tf` (`sqs`, `sagemaker`), not on individual resources inside the modules. All resources inside a module are unconditional — the gate is purely at the root level.
 
 **Bedrock IAM must cover inference profiles.** `agents.yaml` names cross-region profiles (`us.anthropic.…`), which need `bedrock:InvokeModel` on the account's `inference-profile/*` *and* on `foundation-model/*` in every region the profile can route to. An in-region `foundation-model/*` grant alone is `AccessDenied`.
 
 **The guardrail must not intervene on ordinary code.** `guardrails_pre` turns *any* `GUARDRAIL_INTERVENED` on INPUT into `BLOCKED`, and `ANONYMIZE` is an intervention. So the guardrail lists only entity types that are genuinely secrets (AWS keys, card numbers, SSNs, passwords) — never `EMAIL` or `IP_ADDRESS`, which appear in `@author` tags and config literals. A guardrail edit is published as a new version automatically (`replace_triggered_by`); regenerate `agents.yaml` afterwards so `guardrail_version` moves with it.
 
-**OpenSearch Serverless timing.** The collection takes 5–10 minutes to become ACTIVE after creation. If the apply with `enable_rag = true` fails with "collection not active", wait and re-run. Do not add sleep provisioners — just re-run.
-
 **IAM execution role trust policy** includes `data.aws_caller_identity.current.arn` so the developer/CI identity that runs Terraform can also assume the role via `aws sts assume-role` for local development. No long-lived access keys needed.
 
 ### Cost profile
 - MVP only (foundation + observability): ~$5/mo idle, ~$20–40/mo during active migration
-- Adding `rag` module: +~$175/mo (OpenSearch Serverless minimum, always-on)
 - Adding `sagemaker`: +~$1,093/mo for ml.g5.2xlarge always-on — stop endpoint when not in use
 
 ## FORGE pipeline — forge-mvp/

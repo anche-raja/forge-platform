@@ -238,13 +238,6 @@ resource "aws_iam_role_policy" "bedrock" {
         Effect   = "Allow"
         Action   = "bedrock:ApplyGuardrail"
         Resource = aws_bedrock_guardrail.forge.guardrail_arn
-      },
-      {
-        # Wildcard because the rag module Knowledge Base ARN is not known at foundation apply time
-        Sid      = "RetrieveFromKB"
-        Effect   = "Allow"
-        Action   = "bedrock:Retrieve"
-        Resource = "arn:aws:bedrock:${var.aws_region}:${var.aws_account_id}:knowledge-base/*"
       }
     ]
   })

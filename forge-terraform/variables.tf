@@ -43,12 +43,6 @@ variable "enable_sqs" {
   default     = false
 }
 
-variable "enable_rag" {
-  description = "Deploy the Phase 6 RAG stack (S3 + OpenSearch Serverless + Bedrock Knowledge Base). The collection is always-on and billed hourly."
-  type        = bool
-  default     = false
-}
-
 variable "enable_sagemaker" {
   description = "Set to true to deploy the SageMaker internal LLM endpoint. Only enable when a trained model artifact is ready in S3."
   type        = bool
