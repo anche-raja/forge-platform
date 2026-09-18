@@ -231,6 +231,24 @@ MANUAL_REVIEW, the second at a *passing* score of 80. The clause that caused it 
 how the bug gets reimplemented. Regression tests: `tests/test_scope.py` (including a guard that
 the pre-flight prompt never asks about packages again) and `tests/test_phase0_closeout.py`.
 
+**Orchestration is code, not an agent.** `FORGE-AgentDeepDive.pptx` puts a **Leader Agent** at the
+centre of the architecture — "The Conductor", on Sonnet 4.5, one of its 15 agents. It is not built,
+and that is the decision, not a gap: the LangGraph `StateGraph` in `forge/graph.py` *is* the Leader.
+Each of the deck's six Leader duties is a static edge or a plain Python function — unit order and
+`PENDING` selection in `forge/service.py`, specialist selection in `file_scanner` plus the pack's
+`applies_to`, retry and feedback injection on the `increment_retry → java_upgrade` edge, verdict
+reading and escalation in `route_reviewer` / `route_post` / `must_hold`, bookkeeping in
+`update_state`. No node returns a node name; there is no `bind_tools`, `@tool`, `ToolNode` or
+`create_react_agent` anywhere in the tree.
+
+**Do not add a model-driven leader.** It is the package-scope mistake one layer up: a mechanical
+question handed to a model, this time at the layer where a wrong answer is hardest to debug. It would
+also make the order of a run non-reproducible and add a fifth model call per file. The reviewer's
+influence is bounded on both sides on purpose — it returns an integer, `route_reviewer` picks the
+branch, and `max_retries` caps the loop; the model's own `review_verdict` string is recorded and never
+routed on. The deck is the target end-state for *agents*, not for the control plane; §3 of
+`forge-mvp/ARCHITECTURE.md` carries the duty-by-duty mapping.
+
 **Prompts live in `forge/phases.py`, not in the agents.** Each `PhaseSpec` pairs a transform
 prompt with the reviewer rubric that grades it. They must be changed together — a rubric whose
 checks no longer total 100 makes `pass_threshold` meaningless, and `test_phases.py` asserts the

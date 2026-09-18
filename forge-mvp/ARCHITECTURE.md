@@ -58,8 +58,9 @@ come from its `.pack.md` file instead.
 
 **Not in the MVP** (despite being in the deck): Strands Agents, SQS, the Containerize and Test-Gen agents, the 5-agent review board, and `@tool`
 function-calling. Agents use plain system-prompt + `invoke`. The deck's Discovery agent,
-Risk-Scorer and review portal exist in deterministic form — `--discover`, `forge/risk/` and the
-review page + web UI — rather than as model-driven agents.
+Risk-Scorer, review portal and **Leader Agent** exist in deterministic form — `--discover`,
+`forge/risk/`, the review page + web UI, and the LangGraph state machine itself — rather than as
+model-driven agents. The Leader's six duties map onto the graph one for one; see §3.
 
 ---
 
@@ -69,8 +70,8 @@ The pipeline is a LangGraph `StateGraph` invoked **once per file** (`thread_id =
 
 ```
                          ┌──────────────────┐
-            entry ──────▶│  guardrails_pre  │  Bedrock Guardrails (INPUT) + Opus 4.8
-                         └────────┬─────────┘  secrets / scope / PII / complexity
+            entry ──────▶│  guardrails_pre  │  secret gate (local) · size (local)
+                         └────────┬─────────┘  Guardrails INPUT · model check opt-in
                                   │
                      BLOCK ◀──────┤──────▶ PASS
                         │                  │
@@ -105,7 +106,35 @@ The pipeline is a LangGraph `StateGraph` invoked **once per file** (`thread_id =
 ```
 
 Source of truth: [forge/graph.py](forge/graph.py). Routing functions: `route_pre`,
-`route_reviewer`, `route_post`.
+`route_reviewer`, `route_post`, `route_verify`.
+
+### The deck's Leader Agent
+
+`FORGE-AgentDeepDive.pptx` puts a **Leader Agent** at the centre of this picture — "The Conductor",
+on Sonnet 4.5, one of the deck's 15 agents. There is no such node here, and its absence is a
+substitution rather than an omission: the graph above *is* the Leader. Every duty the deck gives it
+is a static edge or a plain Python function, and no model ever names the next step.
+
+| Leader duty (deck slide 7) | Implementation |
+|---|---|
+| Read the project log, find the next `PENDING` | [forge/service.py](forge/service.py) `run_migration()` — unit order is the scanner's `sorted()` output, generated targets last; `--resume` reads `get_files_by_status("PENDING")` |
+| Select the right specialist | [forge/utils/file_scanner.py](forge/utils/file_scanner.py) `scan_java_files()` plus the pack's `applies_to` and `--phase` — globs, content regexes and a package-prefix compare |
+| Send the file to the transform agent, injecting retry feedback | the `increment_retry → java_upgrade` edge; the feedback blocks are assembled in [forge/agents/java_upgrade.py](forge/agents/java_upgrade.py) |
+| Read the review verdict | `route_reviewer` — reads the integer `review_score`, *not* the reviewer's own `review_verdict` string, which is recorded but never routed on |
+| Decide: approve, retry, or escalate | `route_reviewer`, `route_post`, and the `must_hold` risk gate, all against `agents.yaml` thresholds |
+| Update the project log | the `update_state` node |
+
+Why it stays this way: orchestration decisions are mechanical, and this repo has already paid for
+handing a mechanical question to a model — asking one whether a file was in scope sent both early
+live runs to `MANUAL_REVIEW`, the second at a *passing* score of 80 — guarded now by
+[tests/test_scope.py](tests/test_scope.py) and recorded in `../CLAUDE.md`. A
+model-driven leader would reintroduce that failure mode at the layer where it is hardest to debug,
+and make the order of a run non-reproducible. The model's influence is deliberately bounded on both
+sides: it returns a score, code picks the branch, and `max_retries` caps the loop.
+
+One deliberate drift from the deck while we are here: it specifies **Sonnet 4.5** for the transform,
+leader and guardrails roles. This implementation uses **Opus 4.8** for transform and guardrails (§2);
+review is Nova Pro, which matches.
 
 ---
 
@@ -113,7 +142,7 @@ Source of truth: [forge/graph.py](forge/graph.py). Routing functions: `route_pre
 
 | Node | Model / service | Role | Outcome |
 |---|---|---|---|
-| `guardrails_pre` | Bedrock Guardrails (INPUT) + **Opus 4.8** | Secrets, package-scope, PII, complexity (LOC) pre-flight | `BLOCK` → `blocked`; else `TRANSFORMING` |
+| `guardrails_pre` | local code, then Bedrock Guardrails (INPUT); **Opus 4.8** only if `preflight_model_check` | Four ordered steps: the local secret gate, a local LOC ceiling, the guardrail policy on INPUT, and an opt-in model check that is **off by default** and asks nothing about secrets, PII or packages. Detail in [GUARDRAILS.md](GUARDRAILS.md) | `SECRET_BLOCKED_LOCALLY` / `TOO_LARGE` / guardrail intervention → `blocked`; else `TRANSFORMING` |
 | `java_upgrade` | **Opus 4.8** | Transform Java per 5 rules; on retry, injects prior review feedback into the prompt | `transform_output` (JSON: files + manual_flags) |
 | `java_reviewer` | **Nova Pro** | Score 0–100 across 5 weighted checks; emit verdict + feedback | `PASS≥80` / `RETRY 50–79` / `MANUAL<50` |
 | `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Opus 4.8** | Verify zero `javax.*` left, no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
@@ -124,7 +153,7 @@ Source of truth: [forge/graph.py](forge/graph.py). Routing functions: `route_pre
 | `update_state` | — | Increment run counters (processed/passed/retried/manual/blocked) | → `END` |
 
 ### Retry + feedback loop
-`route_reviewer` ([graph.py:71](forge/graph.py#L71)): a `RETRY` verdict (score 50–79) with
+`route_reviewer` ([graph.py:126](forge/graph.py#L126)): a `RETRY` verdict (score 50–79) with
 `retry_count < max_retries` (default **2**) increments the counter, stamps status `RETRY_n`, and
 routes back to `java_upgrade`. The transform agent reads `review_feedback` from state and appends
 it to its prompt ([java_upgrade.py:68](forge/agents/java_upgrade.py#L68)). Exhausted retries →
