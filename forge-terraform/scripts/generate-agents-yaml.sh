@@ -85,6 +85,33 @@ max_retries: 2
 scope_package_prefix: "${SCOPE_PACKAGE_PREFIX}"
 complexity_block_threshold: 2000
 
+# ─── The secret gate ──────────────────────────────────────────────────────────
+# Local, deterministic, and ahead of EVERY remote call — ApplyGuardrail included.
+# A file carrying a credential is refused while its bytes are still in the
+# process, for zero Bedrock calls. Nothing downstream can substitute for this:
+# the Bedrock guardrail is itself a network call and covers only six entity
+# types, and a model asked "does this file contain secrets?" has already been
+# shown the secret.
+#   action: block -> BLOCKED. warn -> a finding only, and the file IS then sent.
+#   entropy      -> catches base64-shaped credentials with no vendor prefix.
+#   allow        -> regexes for literals the team has cleared (test vectors,
+#                   sample tokens); a matching line is dropped from findings.
+secret_scan:
+  enabled: true
+  action: block
+  entropy:
+    enabled: true
+    min_length: 20
+    min_bits: 4.0
+  allow: []
+
+# ─── Optional qualitative pre-flight ─────────────────────────────────────────
+# OFF: sending source to a model to look for secrets is the disclosure a secret
+# policy forbids, and every other question the check used to ask is now answered
+# locally. Enable only for the migration-safety questions in guardrails_pre, and
+# only if your policy permits source to reach a model before the gate clears it.
+preflight_model_check: false
+
 # ─── Cost model (drives estimated_cost_usd + the FORGE-CostSpike alarm) ──────
 # USD per 1,000 tokens. Update when Bedrock pricing changes — no code change needed.
 model_pricing:
@@ -104,7 +131,7 @@ emit_cloudwatch_metrics: true
 # compiled and a failure is fed back to the transform agent as review feedback.
 #   mode: javac   — fast syntax/symbol check of the single file
 #         maven   — mvn -q compile at the output project root (needs a pom.xml)
-#         command — run `command` verbatim; {file} and {output_dir} are substituted
+#         command — run \`command\` verbatim; {file} and {output_dir} are substituted
 build_verification:
   enabled: false
   mode: "javac"
@@ -114,7 +141,7 @@ build_verification:
 
 # ─── Decisions ────────────────────────────────────────────────────────────────
 # Project-level choices that packs read (see prompts/FORGE-Platform-Requirements.md
-# §4). An acceptance check guarded by `when:` is skipped — never passed — while
+# §4). An acceptance check guarded by \`when:\` is skipped — never passed — while
 # the decision it names is unset.
 decisions:
   web_framework: modernize-in-place     # modernize-in-place | migrate-to-spring
@@ -126,7 +153,7 @@ decisions:
 # ─── Risk ─────────────────────────────────────────────────────────────────────
 # Every unit is scored deterministically before any model call (LOC, descriptor
 # fan-out, security constraints, Spring-proxied actions, OGNL density, Unsafe).
-# The score sets a tier; `decisions.risk_ceiling` decides what the tier means:
+# The score sets a tier; \`decisions.risk_ceiling\` decides what the tier means:
 #   auto         nothing is held for a human
 #   review-high  HIGH-tier units are staged and held until approved   (default)
 #   review-all   every unit is held
@@ -135,7 +162,7 @@ risk:
   medium_at: 30
 
 # ─── Context extraction ──────────────────────────────────────────────────────
-# A pack that declares `context:` gets the extracted descriptor set (web.xml,
+# A pack that declares \`context:\` gets the extracted descriptor set (web.xml,
 # vendor descriptors, datasources, ...) appended to its transform and review
 # prompts, rendered section by section up to this many characters. Sections
 # that do not fit are listed as omitted; the full context is written to

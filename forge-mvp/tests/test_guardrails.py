@@ -35,9 +35,11 @@ def config(tmp_path):
 def java_file(tmp_path):
     src = tmp_path / "Secrets.java"
     src.write_text(
+        # Deliberately carries nothing the local secret gate would catch: this
+        # test is about Bedrock's own verdict, so the file has to reach Bedrock.
         "package com.corp;\n"
         "public class Secrets {\n"
-        "    private static final String KEY = \"AKIAIOSFODNN7EXAMPLE\";\n"
+        "    private static final String LABEL = \"account\";\n"
         "}\n"
     )
     return str(src)

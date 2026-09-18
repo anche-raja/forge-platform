@@ -129,8 +129,11 @@ def test_out_of_scope_file_costs_zero_bedrock_calls(project):
 
 def test_preflight_prompt_never_mentions_packages(tmp_path):
     """Regression guard: scope was removed from the model's job. If it comes
-    back, both recorded failures come back with it."""
-    config = write_config(tmp_path, scope_package_prefix=SCOPE)
+    back, both recorded failures come back with it.
+
+    The pre-flight model call is opt-in now, so the guard has to enable it to
+    see the prompt at all."""
+    config = write_config(tmp_path, scope_package_prefix=SCOPE, preflight_model_check=True)
     src = tmp_path / "A.java"
     src.write_text("package com.vendor.lib;\npublic class A {}\n", encoding="utf-8")
 
@@ -166,8 +169,12 @@ def test_preflight_prompt_never_mentions_packages(tmp_path):
         assert "scope" not in line.lower()
         assert "convention" not in line.lower()
 
-    # And the prohibition itself must stay put.
-    assert "do not comment on package names" in system.content.lower()
+    # And the prohibition itself must stay put. Matched on the two halves rather
+    # than one contiguous phrase, because the list it sits in now names secrets
+    # and PII too and wraps across lines.
+    prohibition = " ".join(system.content.lower().split())
+    assert "do not comment on" in prohibition
+    assert "package names" in prohibition
 
 
 # ─── explicit file selection overrides the filter ────────────────────────────

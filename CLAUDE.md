@@ -187,6 +187,32 @@ distinguishes JDK `javax.*` (`javax.crypto`, `javax.sql`, `javax.xml.parsers`) f
 (`javax.xml.bind` **is** Jakarta) — a blanket `javax.xml` carve-out would silently pass
 unmigrated JAXB imports, and rewriting `javax.crypto` would break the build.
 
+**No model is asked anything before the transform, and secrets never leave the machine.**
+A model cannot be the control that decides what a model may see, and the pipeline used to ask Claude
+*"does this file contain secrets?"* — the disclosure it claimed to prevent. `ApplyGuardrail` cannot
+clear a file either: it is a network call of its own, and its policy has no entity type for key
+material and no custom regex. So `forge/utils/secret_scan.py` is the gate, and it runs **first** in
+`guardrails_pre` — ahead of `ApplyGuardrail`, for zero Bedrock calls. Every question the old
+pre-flight call asked is now local: secrets to the scan, file size to an integer comparison, package
+scope to `file_scanner`. The model call survives as `preflight_model_check`, **off by default**, with
+a prompt that asks only about migration safety; turning it on is a policy decision. The happy path is
+now **3** model calls per file, not 4 — `test_phase0_closeout` and `test_service` pin that.
+
+The scan covers key material, vendor-prefixed tokens, credentials in URLs and connection strings,
+credential-named assignments in Java/Spring/XML/properties/YAML, and high-entropy literals. **Recall
+is weighted over precision on purpose**: a false positive blocks one file and names it in the report,
+which a human clears with `secret_scan.allow`; a false negative ships a credential to a third party.
+Four rules keep it usable, and each one was a real bug first: identifiers are **tokenised** not
+substring-matched (`monkeyCount` is not a key); **`key` alone is not a credential** (`sortKey`,
+`primaryKey`), so it needs a qualifier like `apiKey` or `encryptionKey` — the key-material rules keep
+the looser reading only because they also require key *shape*; placeholders are suppressed
+(`${...}`, `@...@`, `changeme`, `ENC(...)`) or the gate blocks most of a real config tree; and dense
+is not secret, so UUIDs, checksums, FQCNs and paths are out of the entropy rule. Findings carry a
+kind and a line number and **never the matched bytes** — `guardrail_findings` reaches DynamoDB, the
+CloudWatch log group and `migration-review.html`, so quoting a secret would copy it into three more
+places. Note none of this covers `.jks` / `.p12` / `.pem` files: no phase or pack glob matches those
+extensions, so they never enter the pipeline. Full detail in `forge-mvp/GUARDRAILS.md`.
+
 **A migration never renames a package, and no model is asked about one.** Renaming would break
 every import, `component-scan` base package, and reflective lookup in the codebase — the struts
 spec's own rule is *"Do not auto-rename; flag."* `scope_package_prefix` answers one question

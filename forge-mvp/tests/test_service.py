@@ -44,7 +44,7 @@ def test_run_writes_the_same_artifacts_as_the_cli_and_returns_totals(tmp_path, p
     out = tmp_path / "out"
     assert (out / "migration-report.md").exists() and (out / "manual-review-queue.json").exists()
     assert (out / "src/main/java/com/corp/user/UserAction.java").exists()
-    assert {k: v for k, v in result.totals.items() if k != "cost_usd"} == {"total": 2, "passed": 2, "manual": 0, "blocked": 0, "held": 0, "bedrock_calls": 8}
+    assert {k: v for k, v in result.totals.items() if k != "cost_usd"} == {"total": 2, "passed": 2, "manual": 0, "blocked": 0, "held": 0, "bedrock_calls": 6}
     assert result.totals["cost_usd"] > 0
     assert result.paths["report"] == str(out / "migration-report.md")
     assert result.paths["page"] is None, "nothing needed review"
@@ -209,6 +209,6 @@ def test_cli_prints_exactly_the_historical_lines(tmp_path, project, capsys):
         "FORGE — phase: javax-to-jakarta | files: 2 | dry-run: False",
         "[1/2] Other.java → DONE, score: 95",
         "[2/2] UserAction.java → DONE, score: 95",
-        "Summary: 2 passed | 0 manual | 0 blocked | 8 Bedrock calls",
+        "Summary: 2 passed | 0 manual | 0 blocked | 6 Bedrock calls",
         f"Report: {out / 'migration-report.md'}",
     ]

@@ -162,7 +162,10 @@ def test_cost_accrues_across_the_run(tmp_path, java_file):
             config={"configurable": {"thread_id": java_file}},
         )
 
-    # 4 calls at 1000 in / 500 out: 3 Opus 4.8 (0.005/0.025) + 1 Nova (0.0008/0.0032)
-    expected = 3 * (0.005 + 0.5 * 0.025) + (0.0008 + 0.5 * 0.0032)
-    assert result["bedrock_calls"] == 4
+    # 3 calls at 1000 in / 500 out: 2 Opus 4.8 (0.005/0.025) + 1 Nova (0.0008/0.0032).
+    # The pre-flight model call is opt-in and off by default — secrets and file
+    # size are decided locally now, so nothing is asked of a model before the
+    # transform runs.
+    expected = 2 * (0.005 + 0.5 * 0.025) + (0.0008 + 0.5 * 0.0032)
+    assert result["bedrock_calls"] == 3
     assert result["estimated_cost_usd"] == pytest.approx(expected, rel=1e-6)
