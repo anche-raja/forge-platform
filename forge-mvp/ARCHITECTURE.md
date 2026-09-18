@@ -28,11 +28,10 @@ That is the built-in `java21` phase. Every other transition — Jakarta namespac
 Spring Security, Struts 2 → 7, JSP/JSTL, JUnit 5, the WAR bootstrap, the Liberty `server.xml` —
 is a **pack** loaded from `prompts/packs/` and selected with `--phase <pack-id>` (§12).
 
-The transformation rules live in an **external prompt file**,
-[prompts/java_upgrade.md](prompts/java_upgrade.md), loaded at runtime by
-[forge/agents/java_upgrade.py](forge/agents/java_upgrade.py) via
-[forge/utils/prompts.py](forge/utils/prompts.py) — so prompts can be tuned without code changes.
-Override the prompt directory with the `FORGE_PROMPTS_DIR` environment variable.
+The transformation rules live in [forge/phases.py](forge/phases.py), paired with the reviewer
+rubric that grades them in one `PhaseSpec`; [forge/agents/java_upgrade.py](forge/agents/java_upgrade.py)
+reads the transform prompt from there. Change a prompt and its rubric together. A pack's rules
+come from its `.pack.md` file instead.
 
 ---
 
@@ -263,8 +262,6 @@ forge-mvp/
   migrate.py                       # CLI entry point — a printer over forge/service.py; --ui
   agents.yaml                      # single config file (generated from Terraform outputs)
   agents.yaml.example              # documented template incl. decisions / risk / context blocks
-  prompts/
-    java_upgrade.md                # externalised agent system prompt (editable, no code change)
   forge/
     service.py                     # the one implementation of packs/discover/run/acceptance/apply/feedback
     ui/                            # local web UI: app.py (FastAPI routes), jobs.py (job registry), server.py, static/
@@ -296,7 +293,6 @@ forge-mvp/
     state_store/
       dynamodb.py                  # state manager + LangGraph checkpointer
     utils/
-      prompts.py                   # external prompt loader (FORGE_PROMPTS_DIR)
       file_scanner.py  file_writer.py  report.py  java_checks.py  telemetry.py  cost.py
   infrastructure/
     create_dynamodb.py             # dev table creation (non-Terraform)

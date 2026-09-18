@@ -41,9 +41,6 @@ Actionable backlog for the next development cycle. Context for each item lives i
 - [ ] **Resolve the placeholder guardrail.** `agents.yaml` ships
       `guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"` — the first node fails without a real ID. Document
       creating the Guardrail (Terraform `foundation` module) and generating `agents.yaml` from outputs.
-- [ ] **Externalize the remaining prompts** the same way as `java_upgrade.md` — `java_reviewer`,
-      `guardrails_pre`, `guardrails_post` still have inline `_SYSTEM` strings. Loader already exists
-      ([forge/utils/prompts.py](forge/utils/prompts.py)); each is a ~3-line change.
 
 ## P3 — Roadmap (beyond Phase 0, from the deck)
 
