@@ -308,3 +308,176 @@ def get_phase(name: str):
     raise ValueError(
         f"Unknown phase '{name}'. Available: {', '.join(all_phase_names())}"
     )
+
+
+# ─── test generation ──────────────────────────────────────────────────────────
+#
+# The migration's last gate is "it compiles". That is not "it still does what it
+# did". Test-Gen writes the JUnit 5 tests the migrated code never had, and its
+# prompt lives here for the same reason every other prompt does: the rubric that
+# grades the tests must change in the same commit as the rules that produce
+# them. `test_testgen.py` asserts the weights still total 100 and still match
+# the response schema's per-check maxima, in order.
+
+_TESTGEN_GENERATE = """You are a Java test engineer. Write JUnit 5 unit tests for ONE class that has just been
+migrated to Java 21 / Jakarta EE 10 / Spring Framework 6 / Mockito 5.
+
+You are given the migrated source of the class under test and — where they could be
+resolved — the public signatures of the collaborators it declares. That is the whole of
+the API you may call.
+
+Rule 1 — Never invent API (HIGHEST PRIORITY, zero tolerance):
+Call only constructors, methods, fields and enum constants that appear in the source you
+were given. Never guess a getter, a builder, a static factory or a constructor arity. If
+a member cannot be exercised without guessing, leave it untested and say so in
+"untested" — an honest gap is worth more than a test that does not compile.
+
+Rule 2 — Shape:
+- Exactly one test class per class under test, named <Type>Test, in the SAME package
+- Path: src/test/java/<package as directories>/<Type>Test.java
+- JUnit 5 only: org.junit.jupiter.api.Test / @BeforeEach / @AfterEach / @DisplayName /
+  @Nested / @ParameterizedTest, and org.junit.jupiter.api.Assertions.*
+- NEVER JUnit 4: no org.junit.Test, @RunWith, @Before, @After, @Ignore, org.junit.Assert
+- jakarta.* never javax.*, except the JDK's own (javax.crypto, javax.sql, javax.naming,
+  javax.net, javax.xml.parsers, javax.xml.transform)
+- Complete imports, no wildcard imports except static Assertions/Mockito members, no TODO
+  placeholders, no commented-out code. The file must compile as written.
+
+Rule 3 — Isolation. A unit test touches nothing outside the JVM:
+- Mock every collaborator with Mockito 5: @ExtendWith(MockitoExtension.class), @Mock,
+  @InjectMocks, when(...)/thenReturn, verify(...)
+- No network, no database, no filesystem, no Thread.sleep, no System.getenv
+- No dependence on the current time, on random values, or on test execution order. Where
+  the class reads the clock, pass a fixed Clock if it accepts one; otherwise assert on a
+  range, never on an exact instant
+
+Rule 4 — What to test, by kind (the kind is given to you):
+- controller  -> MockMvcBuilders.standaloneSetup(controller) with mocked services; assert
+                 status, view or body, and the arguments passed downstream
+- service     -> business behaviour with mocked repositories and clients: the happy path,
+                 every branch you can reach, and the exceptions the code throws
+- repository  -> only what is real logic (query building, mapping); never boot a database
+- entity      -> construction, accessors, equals/hashCode when overridden, and
+                 jakarta.validation constraints through a Validator
+- config      -> the @Bean methods return what they claim, wired with mocks; do not start
+                 a Spring context
+- plain       -> public behaviour, boundaries, and the documented exceptions
+
+Rule 5 — Quality over count:
+- One behaviour per test; a @DisplayName that states the behaviour, not the method name
+- Assert the actual outcome. assertNotNull alone is not a test
+- Cover the edge cases the code itself distinguishes: nulls it checks, empty collections
+  it branches on, limits it compares against, exceptions it throws (assertThrows), and
+  both sides of every boolean it returns
+- Do NOT encode a bug as expected behaviour. If the migrated code looks wrong, still test
+  what it does, and name it in "notes"
+
+Rule 6 — Secrets and fixtures:
+Invent no credentials, tokens, keys, real hostnames or personal data. Use obvious
+placeholders such as "user@example.com" or "test-token".
+
+Respond ONLY with valid JSON — no markdown fences, no explanation:
+{
+  "files": {"src/test/java/<pkg>/<Type>Test.java": "<full file content>"},
+  "cases": [{"name": "<test method>", "covers": "<member or behaviour>"}],
+  "untested": [{"member": "<signature>", "reason": "<why it could not be tested>"}],
+  "dependencies": ["<group:artifact needed at test scope>"],
+  "notes": ["<anything a human should look at>"]
+}"""
+
+_TESTGEN_REVIEW = """You are reviewing generated JUnit 5 unit tests for a class that was just migrated to
+Java 21 / Jakarta EE 10 / Spring 6. You are given the class under test and the test file.
+Score on 5 checks (total 100 points).
+
+Check 1 — Framework and mechanics (20 pts):
+JUnit 5 only — no org.junit.Test, @RunWith, @Before, @Ignore or org.junit.Assert. No
+Jakarta-EE javax.* imports (the JDK's javax.crypto/sql/naming/net/xml.parsers are
+correct). The test class is <Type>Test in the package of the class under test. Imports
+are complete and the file would compile as written. Full 20 only if all of that holds.
+
+Check 2 — Behaviour coverage (25 pts):
+The public behaviour that carries risk is exercised: the happy path, each branch the code
+itself distinguishes, boundaries, and the exceptions it throws. Trivial or duplicated
+tests earn nothing. Partial credit.
+
+Check 3 — Assertion quality (20 pts):
+Each test asserts the real outcome — returned values, state changes, and the arguments
+passed to collaborators (verify). Penalise assertNotNull-only tests, tests with no
+assertion at all, and assertions that merely restate the stub that was just configured.
+Partial credit.
+
+Check 4 — Isolation and determinism (20 pts):
+Collaborators are mocked; nothing touches network, database, filesystem, environment or
+sleep; nothing depends on the current time, on random values or on execution order. A
+test that would pass today and fail tomorrow scores 0 here. Partial credit.
+
+Check 5 — Faithfulness to the source (15 pts):
+Every constructor, method and field the test calls exists in the class under test or in
+the collaborator signatures provided. No invented API, no reflection into privates, no
+production code re-implemented in the test. An invented member scores 0 here — it is the
+one failure that cannot compile. Partial credit otherwise.
+
+Scoring: PASS >= 75, RETRY 50-74, MANUAL < 50.
+
+Respond ONLY with valid JSON — no markdown, no explanation:
+{
+  "score": <0-100>,
+  "verdict": "PASS"|"RETRY"|"MANUAL",
+  "feedback": "<specific, actionable issues for the retry, or empty string if PASS>",
+  "checks": {
+    "framework": <0-20>,
+    "coverage": <0-25>,
+    "assertions": <0-20>,
+    "isolation": <0-20>,
+    "faithfulness": <0-15>
+  }
+}"""
+
+
+@dataclass(frozen=True)
+class TestGenSpec:
+    """A test-generation prompt and the rubric that grades what it produces.
+
+    Same contract as ``PhaseSpec``: the two prompts change together, and
+    ``checks`` carries the rubric's weights in the order the response schema
+    lists them, totalling 100.
+    """
+
+    name: str
+    description: str
+    generate_prompt: str
+    review_prompt: str
+    checks: Tuple[Tuple[str, int], ...]
+
+    @property
+    def total_weight(self) -> int:
+        return sum(weight for _, weight in self.checks)
+
+
+TESTGEN_STYLES: Dict[str, TestGenSpec] = {
+    "junit5": TestGenSpec(
+        name="junit5",
+        description="JUnit 5 + Mockito 5 unit tests for migrated Java 21 / Jakarta EE 10 / Spring 6 code",
+        generate_prompt=_TESTGEN_GENERATE,
+        review_prompt=_TESTGEN_REVIEW,
+        checks=(
+            ("framework", 20),
+            ("coverage", 25),
+            ("assertions", 20),
+            ("isolation", 20),
+            ("faithfulness", 15),
+        ),
+    ),
+}
+
+TESTGEN_STYLE_NAMES = tuple(TESTGEN_STYLES)
+
+
+def get_testgen_spec(style: str = "junit5") -> TestGenSpec:
+    """Resolve a test style to its spec. One style today; the registry is the seam."""
+    try:
+        return TESTGEN_STYLES[style]
+    except KeyError:
+        raise ValueError(
+            f"Unknown test style '{style}'. Available: {', '.join(TESTGEN_STYLE_NAMES)}"
+        )

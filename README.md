@@ -116,14 +116,15 @@ forge-platform/
 │   │   ├── context/       Renders extracted context into prompts under a size cap; snapshot
 │   │   ├── risk/          Deterministic risk score → LOW / MEDIUM / HIGH
 │   │   ├── review_queue.py  decisions.py  feedback_report.py   Human in the loop
-│   │   ├── agents/        guardrails_pre/post, java_upgrade
-│   │   ├── review/        java_reviewer
+│   │   ├── testgen/       Test-Gen: which classes, what a test must satisfy, where it lands, running it
+│   │   ├── agents/        guardrails_pre/post, java_upgrade, test_gen
+│   │   ├── review/        java_reviewer, test_reviewer
 │   │   ├── guardrails/    Bedrock ApplyGuardrail wrapper
 │   │   ├── verify/        build_verifier (javac / mvn) · acceptance checks over the merged tree
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
 │   │   └── utils/         scanner, writer, report, java_checks, telemetry, cost
-│   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI
-│   └── tests/             470 tests, fully mocked — no AWS needed
+│   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI, §14 test generation
+│   └── tests/             580+ tests, fully mocked — no AWS needed
 │
 └── prompts/               Specifications and the pack library
     ├── FORGE-Infra-Terraform.md         Infrastructure spec
@@ -211,11 +212,17 @@ python migrate.py /path/to/app --phase javax-to-jakarta --acceptance-only --outp
 # Human in the loop: approve / reject / retry what the run held, then roll the notes up
 python migrate.py /path/to/app --apply-decisions decisions.json --output-dir ./migrated
 python migrate.py --feedback-report --output-dir ./migrated
+
+# Write the JUnit 5 tests the legacy code never had, for the classes the run wrote
+python migrate.py /path/to/app --phase javax-to-jakarta --output-dir ./migrated --generate-tests
+
+# ...or over an earlier run's output, executing each test and holding the ones that fail
+python migrate.py /path/to/app --generate-tests-only --output-dir ./migrated --run-tests
 ```
 
 A typical project: `--discover` → run the packs in the order the profile lists (each pack is one
-`--phase`) → review what was held → `--acceptance`. From the web UI the same sequence is the
-seven numbered steps.
+`--phase`) → review what was held → `--acceptance` → `--generate-tests`. From the web UI the same
+sequence is the eight numbered steps.
 
 ### Migration phases
 
@@ -244,12 +251,35 @@ build_verification:
 A failed compile feeds the compiler errors back to the transform agent as review feedback and
 consumes one retry. A missing toolchain is reported as SKIPPED rather than failing the file.
 
+### Optional: test generation
+
+A compile gate proves the migrated code builds, not that it still behaves. `--generate-tests`
+writes one JUnit 5 + Mockito test class per class the migration wrote, reviewed by the second model
+exactly as the migration is:
+
+```yaml
+test_generation:
+  enabled: true
+  pass_threshold: 75
+  overwrite: false       # an existing test is a human's work — never overwritten
+  run_tests:
+    enabled: false       # execute each generated test against source ⊕ migrated
+    mode: "maven"        # maven | gradle | command
+```
+
+Which classes get a test, and where it lands, are decided in code — never by the model. A test that
+fails a mechanical check (JUnit 4 imports, `javax.*`, no `@Test`, non-determinism), scores below
+the threshold, or runs and fails is staged under `.forge-staging/` with its reason instead of being
+written: a broken test in `src/test/java` breaks every build after it. Results land in
+`test-generation-report.md` and `generated-tests.json`; `--generate-tests-only` exits non-zero when
+anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITECTURE.md).
+
 ---
 
 ## Status
 
 - ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`; Terraform reviewed end to end (IAM covers inference profiles, guardrail tuned for source code, Phase 6 modules opt-in) — re-apply to pick the fixes up
-- ✅ **Phase 0 pipeline** — complete, 470 tests passing (`cd forge-mvp && pytest`, no AWS required)
+- ✅ **Phase 0 pipeline** — complete, 580+ tests passing (`cd forge-mvp && pytest`, no AWS required)
 - ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
 - ✅ **Phases** — `java21` and `struts-spring6` built in; 10 runnable packs on top
@@ -257,6 +287,7 @@ consumes one retry. A missing toolchain is reported as SKIPPED rather than faili
 - ✅ **Discovery + acceptance** — `--discover` profiles any repo and selects packs; `--acceptance` gates the project on mechanical checks
 - ✅ **Human in the loop** — risky units are held for review; `migration-review.html` → `decisions.json` → `--apply-decisions`; notes roll up into `pack-feedback.md`
 - ✅ **Local web UI** — `python migrate.py --ui`: the same pipeline driven from a browser on your own machine, with live progress and one-click approve / reject / retry
+- ✅ **Test generation** — `--generate-tests` writes JUnit 5 + Mockito tests for the migrated classes, reviewed by the second model; `--run-tests` executes them and holds the ones that fail
 - ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
 - ⏳ **Phase 6+** — SQS and SageMaker modules exist in Terraform, off by default (`enable_*`), not deployed
 

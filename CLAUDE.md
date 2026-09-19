@@ -96,6 +96,8 @@ python migrate.py ./myapp --phase webapp-bootstrap-jakarta10 --output-dir ./migr
 python migrate.py ./myapp --phase javax-to-jakarta --acceptance-only --output-dir ./migrated   # re-check an existing output
 python migrate.py ./myapp --apply-decisions decisions.json --output-dir ./migrated            # approve / reject / retry from the review page
 python migrate.py --feedback-report --output-dir ./migrated                                    # notes grouped by pack and rule
+python migrate.py ./myapp --phase javax-to-jakarta --output-dir ./migrated --generate-tests    # ...and write JUnit 5 tests for what it wrote
+python migrate.py ./myapp --generate-tests-only --output-dir ./migrated --run-tests            # tests over an earlier run, executed
 ```
 
 **Local web UI.** `python migrate.py --ui` starts a FastAPI app on `127.0.0.1` (port 8765 or the
@@ -129,6 +131,16 @@ retry re-runs the unit with the note as a `HUMAN REVIEW FEEDBACK` prompt block o
 and a fresh checkpoint thread. The note lives in `human_note`, not `review_feedback` — that field
 is only rendered on retries and a build failure overwrites it. `--feedback-report` groups notes by
 pack and rule into `pack-feedback.md` so a repeated correction becomes a pack edit.
+
+**Test generation** (`forge/testgen/`) writes the JUnit 5 + Mockito tests the legacy code never
+had, *after* the migration — `--generate-tests` on a run, `--generate-tests-only` over an existing
+output directory, the **Tests** step in the UI, or `service.generate_tests()`. It runs over the
+**output** tree, because "the new code" is what the migration wrote; chained onto a run it is
+narrowed to that run's `written_paths`. Graph: `testgen_pre → generate → static_checks → review →
+write_tests → run_tests`, with the same retry-with-feedback loop and the same two-model
+cross-validation as the migration. Two model calls per class, zero for one the rules exclude.
+Artifacts are `test-generation-report.md` and `generated-tests.json`; `--generate-tests-only`
+exits non-zero when anything was held, so it gates CI.
 
 **Acceptance** (`forge/verify/acceptance.py`) runs a pack's declared checks over the *merged* view
 (source tree with `./migrated` overlaid — `forge/verify/merged_tree.py`), since the output holds
@@ -264,6 +276,29 @@ must never die because CloudWatch is unreachable.
 dependencies are on the classpath, so `build_verification.enabled` defaults to `false`. Set
 `classpath`, or use `mode: maven` against a real `pom.xml`. A missing compiler yields SKIPPED,
 not FAIL — a toolchain gap is an environment problem, not a bad migration.
+
+**A generated test is never written unless it is worth having, and the model never chooses where
+it lands.** Which classes get one is decided in `forge/testgen/targets.py` from the type
+declaration, its annotations and its public signatures — an interface, an abstract class, a class
+with no public members and a class that **already has a test** are skipped, each with a reason in
+the report, because a silent skip is indistinguishable from an oversight. An existing test is a
+human's work and the one artifact this pipeline must not overwrite (`overwrite: false`). The
+destination is rebuilt from the generated file's own `package` and type name under
+`src/test/java`, so unlike `write_output` the model's path key is **discarded**, not merely
+guarded: there is one right place for `com.corp.UserServiceTest`.
+
+The mechanical invariants are checked in code and **before** the review, so a JUnit 4 import costs
+zero review calls — `forge/testgen/checks.py` covers JUnit 4 (`org.junit.Test`, `@RunWith`,
+`Assert`), Jakarta-EE `javax.*`, a missing `@Test`, `@Disabled`, the class name and package,
+non-determinism (`Thread.sleep`, `Math.random`, unseeded `Random`, `System.getenv`) and a secret
+scan of the generated file. A unit that fails them, that scores below `pass_threshold` after its
+retries, or whose test **ran and failed**, is staged under `.forge-staging/` with the reason and is
+not written — a broken test in `src/test/java` breaks every build after it, so a failing test is
+also removed from the output tree before the retry. Whether the test or the migrated code is wrong
+is the human's call, and the failure output reaches both the retry prompt and the report. FORGE
+never edits the build file: the test dependencies a generated test needs are *reported*, not added.
+The prompt's first rule is "never invent API", which is why `forge/testgen/context.py` supplies the
+collaborators' public signatures and the test libraries the build actually carries.
 
 **The file writer treats model output as untrusted.** Destination paths come from the LLM, so
 `write_output` refuses anything resolving outside `output_dir`, and reconstructs the package path

@@ -47,7 +47,8 @@
 
   // Follow a job's SSE stream. The browser reconnects with Last-Event-ID on its own; we close on done/error.
   var EVENT_TYPES = ['start', 'skipped', 'file', 'snapshot', 'snapshot_skipped', 'queue', 'acceptance', 'acceptance_skipped',
-    'cancelled', 'summary', 'nothing', 'apply_outcome', 'apply_done', 'done', 'error'];
+    'cancelled', 'summary', 'nothing', 'apply_outcome', 'apply_done', 'testgen_start', 'testgen_unit',
+    'testgen_cancelled', 'testgen_summary', 'done', 'error'];
   function follow(jobId, onEvent) {
     var es = new EventSource('/api/runs/' + jobId + '/events');
     EVENT_TYPES.forEach(function (t) {
@@ -68,7 +69,8 @@
       var bar = $('jobbar');
       if (h.active) {
         bar.hidden = false; bar.className = 'jobbar';
-        bar.innerHTML = tag(h.active.state, 'running') + ' ' + esc(h.active.kind) + ' ' + esc(h.active.params.phase || '') + ' · <a href="#/' + (h.active.kind === 'apply' ? 'review' : 'run') + '">watch</a>';
+        var where = { apply: 'review', testgen: 'tests' }[h.active.kind] || 'run';
+        bar.innerHTML = tag(h.active.state, 'running') + ' ' + esc(h.active.kind) + ' ' + esc(h.active.params.phase || '') + ' · <a href="#/' + where + '">watch</a>';
         if (!S.pollTimer) S.pollTimer = setInterval(health, 3000);
       } else {
         bar.hidden = true;
@@ -154,7 +156,7 @@
     },
     start: async function (ev) {
       ev.preventDefault(); flash('');
-      var body = projectBody({ phase: $('r-phase').value, dry_run: $('r-dry').checked, acceptance: $('r-acc').checked, acceptance_build: $('r-accbuild').checked, no_metrics: $('r-nometrics').checked });
+      var body = projectBody({ phase: $('r-phase').value, dry_run: $('r-dry').checked, acceptance: $('r-acc').checked, acceptance_build: $('r-accbuild').checked, no_metrics: $('r-nometrics').checked, generate_tests: $('r-tests').checked, run_tests: $('r-runtests').checked });
       $('r-start').disabled = true; $('r-status').textContent = 'starting…';
       try { var r = await api('POST', '/api/runs', body); steps.run.attach(r.job_id, body.phase); }
       catch (e) { flash(fmtErr(e)); $('r-start').disabled = false; $('r-status').textContent = ''; }
@@ -173,6 +175,8 @@
           S.job.files = d.index; $('r-bar').style.width = Math.round(100 * d.index / Math.max(1, d.total)) + '%';
           $('r-files').insertAdjacentHTML('beforeend', '<li><span class="idx">' + d.index + '/' + d.total + '</span><span class="lbl" title="' + esc(d.file) + '">' + esc(d.label) + '</span>' + tag(d.status) + '<span class="hint">' + (d.score != null ? 'score ' + d.score : '') + '</span>' + (d.risk_tier ? tag(d.risk_tier) : '<span></span>') + '</li>');
         }
+        else if (t === 'testgen_start') $('r-files').insertAdjacentHTML('beforeend', '<li><span class="idx">tests</span><span class="lbl">' + d.targets + ' class(es) to write tests for, ' + d.skipped + ' skipped</span><span></span><span></span><span></span></li>');
+        else if (t === 'testgen_unit') $('r-files').insertAdjacentHTML('beforeend', '<li><span class="idx">' + d.index + '/' + d.total + '</span><span class="lbl" title="' + esc(d.test || '') + '">' + esc(d.label) + '</span>' + tag(d.status) + '<span class="hint">' + (d.score != null ? 'score ' + d.score : '') + '</span><span></span></li>');
         else if (t === 'cancelled') $('r-status').textContent = 'cancelled after ' + d.done + ' of ' + d.total;
         else if (t === 'nothing') { $('r-done').hidden = false; $('r-done').textContent = d.message; }
         else if (t === 'done' || t === 'error') steps.run.finish(t, d);
@@ -193,7 +197,8 @@
         + '<div class="row">' + (r.queue_count ? '<a class="button primary" href="#/review">Review ' + r.queue_count + ' file(s) →</a>' : '<span class="tag DONE">nothing needs review</span>')
         + ' <a class="button" target="_blank" rel="noopener" href="' + fileUrl('migration-report.md') + '">report</a>'
         + (r.paths.page ? ' <a class="button" target="_blank" rel="noopener" href="' + fileUrl('migration-review.html') + '">static review page</a>' : '')
-        + (r.acceptance && r.acceptance.verdict ? ' <a class="button" href="#/accept">acceptance detail</a>' : '') + acc + '</div>';
+        + (r.acceptance && r.acceptance.verdict ? ' <a class="button" href="#/accept">acceptance detail</a>' : '')
+        + (r.testgen ? ' <a class="button" href="#/tests">tests: ' + r.testgen.totals.generated + ' written, ' + r.testgen.totals.held + ' held</a>' : '') + acc + '</div>';
     },
     cancel: async function () { if (!S.job) return; try { await api('POST', '/api/runs/' + S.job.id + '/cancel'); $('r-cancel').disabled = true; $('r-status').textContent = 'cancelling after the current file…'; } catch (e) { flash(fmtErr(e)); } },
     history: async function () {
@@ -291,6 +296,86 @@
           }).join('');
         } catch (e) { $('a-status').textContent = ''; flash(fmtErr(e)); }
       };
+    }
+  };
+
+  steps.tests = {
+    render: async function () {
+      if (!needProject()) return;
+      $('tg-form').onsubmit = steps.tests.start;
+      $('tg-cancel').onclick = steps.tests.cancel;
+      var h = await health();
+      if (h && h.active && h.active.kind === 'testgen') { steps.tests.attach(h.active.id); return; }
+      steps.tests.load();
+    },
+    load: async function () {
+      try {
+        var record = await api('GET', '/api/testgen?output_dir=' + encodeURIComponent(S.project.output_dir));
+        steps.tests.show(record.totals, record.units, record.dependencies, record.skipped, record.dry_run);
+        $('tg-status').textContent = 'last generated ' + record.run;
+      } catch (e) { $('tg-status').textContent = 'No tests generated yet for this output directory.'; }
+    },
+    start: async function (ev) {
+      ev.preventDefault(); flash('');
+      var body = projectBody({ dry_run: $('tg-dry').checked, run_tests: $('tg-run').checked });
+      $('tg-start').disabled = true; $('tg-status').textContent = 'starting…';
+      try { var r = await api('POST', '/api/testgen', body); steps.tests.attach(r.job_id); }
+      catch (e) { flash(fmtErr(e)); $('tg-start').disabled = false; $('tg-status').textContent = ''; }
+    },
+    attach: function (jobId) {
+      if (S.es) S.es.close();
+      S.job = { id: jobId, kind: 'testgen' };
+      $('tg-live').hidden = false; $('tg-units').innerHTML = ''; $('tg-done').hidden = true; $('tg-table').hidden = true;
+      $('tg-bar').style.width = '0'; $('tg-start').disabled = true; $('tg-cancel').hidden = false;
+      $('tg-status').textContent = 'generating (job ' + jobId + ')…';
+      health();
+      S.es = follow(jobId, function (t, d) {
+        if (t === 'testgen_start') $('tg-status').textContent = d.targets + ' class(es), ' + d.skipped + ' skipped' + (d.run_tests ? ' · running each test' : '');
+        else if (t === 'testgen_unit') {
+          $('tg-bar').style.width = Math.round(100 * d.index / Math.max(1, d.total)) + '%';
+          $('tg-units').insertAdjacentHTML('beforeend', '<li><span class="idx">' + d.index + '/' + d.total + '</span><span class="lbl" title="' + esc(d.file) + '">' + esc(d.label) + '</span>' + tag(d.status) + '<span class="hint">' + (d.score != null ? 'score ' + d.score : '') + (d.reason ? ' · ' + esc(d.reason) : '') + '</span>' + (d.test_verdict && d.test_verdict !== 'SKIPPED' ? tag(d.test_verdict) : '<span></span>') + '</li>');
+        }
+        else if (t === 'testgen_cancelled') $('tg-status').textContent = 'cancelled after ' + d.done + ' of ' + d.total;
+        else if (t === 'done' || t === 'error') steps.tests.finish(t, d);
+      });
+    },
+    finish: function (t, d) {
+      $('tg-start').disabled = false; $('tg-cancel').hidden = true; $('tg-bar').style.width = '100%'; health();
+      if (t === 'error') { $('tg-status').textContent = 'failed'; $('tg-done').hidden = false; $('tg-done').innerHTML = '<b>Failed:</b> ' + esc(d.error) + '<pre>' + esc(d.traceback) + '</pre>'; return; }
+      $('tg-status').textContent = d.state;
+      var r = d.result; if (!r) return;
+      steps.tests.show(r.totals, r.units, r.dependencies, null, r.dry_run);
+    },
+    show: function (totals, units, dependencies, skipped, dryRun) {
+      var box = $('tg-done'); box.hidden = false;
+      box.innerHTML = '<div class="totals">'
+        + ['generated', 'held', 'blocked'].map(function (k) { return '<div><b>' + (totals[k] || 0) + '</b><span>' + k + '</span></div>'; }).join('')
+        + '<div><b>' + (totals.tests_passed || 0) + '</b><span>tests passed</span></div>'
+        + '<div><b>' + (totals.tests_failed || 0) + '</b><span>tests failed</span></div>'
+        + '<div><b>$' + Number(totals.cost_usd || 0).toFixed(3) + '</b><span>est. cost</span></div></div>'
+        + (dryRun ? '<p class="hint">Dry run — nothing was written.</p>' : '')
+        + ((dependencies && dependencies.length) ? '<p>Add at test scope: ' + dependencies.map(function (x) { return '<code>' + esc(x) + '</code>'; }).join(', ') + '</p>' : '')
+        + '<div class="row"><a class="button" target="_blank" rel="noopener" href="' + fileUrl('test-generation-report.md') + '">test report</a>'
+        + ' <a class="button" target="_blank" rel="noopener" href="' + fileUrl('generated-tests.json') + '">record</a></div>';
+
+      var t = $('tg-table'); t.hidden = false;
+      t.innerHTML = '<tr><th>Class</th><th>Kind</th><th>Status</th><th>Score</th><th>Retries</th><th>Test</th><th>Test file</th><th>Why held</th></tr>'
+        + (units || []).map(function (u) {
+          return '<tr><td class="mono">' + esc(u.rel_path) + '</td><td>' + esc(u.kind) + '</td><td>' + tag(u.status) + '</td><td>' + (u.score != null ? u.score : '—') + '</td><td>' + (u.retry_count || 0) + '</td><td>' + esc(u.test_verdict || '—') + '</td><td class="mono">' + esc(u.test_rel_path) + '</td><td>' + esc(u.hold_reason || '') + '</td></tr>';
+        }).join('');
+
+      var wrap = $('tg-skipped-wrap');
+      if (skipped && skipped.length) {
+        wrap.hidden = false;
+        $('tg-skipped').innerHTML = '<tr><th>Class</th><th>Reason</th></tr>' + skipped.map(function (row) {
+          return '<tr><td class="mono">' + esc(row.rel_path) + '</td><td>' + esc(row.reason) + '</td></tr>';
+        }).join('');
+      } else { wrap.hidden = true; }
+    },
+    cancel: async function () {
+      if (!S.job) return;
+      try { await api('POST', '/api/runs/' + S.job.id + '/cancel'); $('tg-cancel').disabled = true; $('tg-status').textContent = 'cancelling after the current class…'; }
+      catch (e) { flash(fmtErr(e)); }
     }
   };
 

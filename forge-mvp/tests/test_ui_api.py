@@ -297,6 +297,51 @@ def test_files_refuses_anything_outside_output_dir(client, tmp_path):
     assert client.get("/api/files", params={"output_dir": str(out), "name": "missing.md"}).status_code == 404
 
 
+# ─── test generation ──────────────────────────────────────────────────────────
+
+def test_testgen_is_a_job_like_a_run_and_its_record_is_served(client, project, tmp_path, aws):
+    from tests.conftest import mocked_testgen
+
+    out = str(tmp_path / "out")
+    started = client.post("/api/runs", json=_run_body(project, tmp_path, client))
+    _finish(client, started.json()["job_id"])
+
+    assert client.get("/api/testgen", params={"output_dir": out}).status_code == 404
+
+    with mocked_testgen():
+        r = client.post("/api/testgen", json={"source_dir": str(project), "output_dir": out, "config": client.cfg})
+        assert r.status_code == 202, r.text
+        job = _finish(client, r.json()["job_id"])
+
+    assert job["state"] == "done"
+    assert job["result"]["totals"]["generated"] == 2
+    assert (tmp_path / "out/src/test/java/com/corp/user/UserActionTest.java").is_file()
+
+    record = client.get("/api/testgen", params={"output_dir": out}).json()
+    assert record["version"] == 1 and len(record["units"]) == 2
+
+    names = {a["name"] for a in client.get("/api/artifacts", params={"output_dir": out}).json()["artifacts"]}
+    assert {"test-generation-report.md", "generated-tests.json"} <= names
+
+
+def test_testgen_needs_an_output_directory_to_have_migrated_into(client, project, tmp_path):
+    r = client.post("/api/testgen", json={"source_dir": str(project), "output_dir": str(tmp_path / "nothing"),
+                                          "config": client.cfg})
+    assert r.status_code == 404 and "run a migration first" in r.json()["detail"]
+
+
+def test_a_run_can_ask_for_tests_in_the_same_job(client, project, tmp_path, aws):
+    from tests.conftest import mocked_testgen
+
+    with mocked_testgen():
+        started = client.post("/api/runs", json=_run_body(project, tmp_path, client, generate_tests=True))
+        job = _finish(client, started.json()["job_id"])
+
+    assert job["result"]["testgen"]["totals"]["generated"] == 2
+    events = [e for e in _sse(client, started.json()["job_id"]) if e["event"].startswith("testgen")]
+    assert [e["event"] for e in events] == ["testgen_start", "testgen_unit", "testgen_unit", "testgen_summary"]
+
+
 # ─── registry ─────────────────────────────────────────────────────────────────
 
 def test_registry_one_job_at_a_time_and_events_in_order():

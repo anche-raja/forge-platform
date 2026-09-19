@@ -45,6 +45,21 @@ build_verification:
   timeout_seconds: 300
 context:
   max_chars: 60000
+test_generation:
+  enabled: true
+  style: junit5
+  pass_threshold: 75
+  retry_threshold: 50
+  max_retries: 1
+  overwrite: false
+  max_source_chars: 60000
+  context_max_chars: 12000
+  kinds: []
+  run_tests:
+    enabled: false
+    mode: maven
+    command: ''
+    timeout_seconds: 900
 """
 
 
@@ -141,6 +156,58 @@ def mocked_aws(config_path=None, review_score: int = 95):
 
         up.return_value.invoke.side_effect = transform
         yield {"metrics": metrics, "upgrade": up, "review": rev, "pre": pre, "post": post}
+
+
+def generated_test(fqcn: str) -> str:
+    """A minimal JUnit 5 test class that passes every mechanical check."""
+    package, _, cls = fqcn.rpartition(".")
+    head = f"package {package};\n\n" if package else ""
+    return (
+        head
+        + "import org.junit.jupiter.api.Test;\n"
+        + "import static org.junit.jupiter.api.Assertions.assertEquals;\n\n"
+        + f"class {cls} {{\n"
+        + "    @Test\n"
+        + "    void addsUpTheWayItAlwaysDid() {\n"
+        + "        assertEquals(2, 1 + 1);\n"
+        + "    }\n"
+        + "}\n"
+    )
+
+
+@contextlib.contextmanager
+def mocked_testgen(review_score: int = 90, content=None, payload=None):
+    """Patch the two models test generation calls, plus the checkpointer.
+
+    ``content`` is a callable taking the test's FQCN and returning the file
+    body, so a test can inject a deliberately broken one; ``payload`` replaces
+    the whole generator response.
+    """
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("forge.state_store.dynamodb.boto3"))
+        gen = stack.enter_context(patch("forge.agents.test_gen.ChatBedrockConverse"))
+        rev = stack.enter_context(patch("forge.review.test_reviewer.ChatBedrockConverse"))
+        saver = stack.enter_context(patch("forge.testgen.graph.DynamoDBSaver"))
+
+        from langgraph.checkpoint.memory import MemorySaver
+        saver.return_value = MemorySaver()
+
+        body = content or generated_test
+
+        def generate(messages):
+            human = messages[1].content
+            fqcn = human.split("Test class to produce: ", 1)[1].splitlines()[0].strip()
+            if payload is not None:
+                return llm_reply(payload)
+            path = "src/test/java/" + fqcn.replace(".", "/") + ".java"
+            return llm_reply({"files": {path: body(fqcn)}, "cases": [{"name": "addsUpTheWayItAlwaysDid"}],
+                              "untested": [], "dependencies": ["org.junit.jupiter:junit-jupiter"], "notes": []})
+
+        gen.return_value.invoke.side_effect = generate
+        rev.return_value.invoke.return_value = llm_reply(
+            {"score": review_score, "verdict": "PASS", "feedback": "", "checks": {}}
+        )
+        yield {"generate": gen, "review": rev}
 
 
 MIGRATED_JAVA = """\

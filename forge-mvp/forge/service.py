@@ -12,7 +12,7 @@ patch them before they are first bound.
 """
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -57,6 +57,41 @@ class AcceptanceOutcome:
 
 
 @dataclass
+class TestGenResult:
+    """What a test-generation stage produced. Same shape of answer as a run."""
+
+    source_dir: str
+    output_dir: str
+    dry_run: bool
+    style: str
+    units: List[dict]
+    skipped: list
+    totals: Dict[str, Any]
+    paths: Dict[str, Optional[str]]
+    record: dict
+    cancelled: bool = False
+
+    @property
+    def exit_code(self) -> int:
+        """Non-zero when anything needs a human — so ``--generate-tests-only`` gates CI."""
+        held = self.totals.get("held", 0) + self.totals.get("blocked", 0) + self.totals.get("tests_failed", 0)
+        return 1 if held else 0
+
+    def to_json(self) -> dict:
+        return {
+            "source_dir": self.source_dir, "output_dir": self.output_dir, "dry_run": self.dry_run,
+            "style": self.style, "cancelled": self.cancelled, "totals": self.totals, "paths": self.paths,
+            "skipped": len(self.skipped),
+            "dependencies": list(self.record.get("dependencies") or []),
+            "units": [{"rel_path": u.get("rel_path"), "kind": u.get("kind"), "status": u.get("status"),
+                       "score": u.get("review_score"), "test_rel_path": u.get("test_rel_path"),
+                       "test_verdict": u.get("test_verdict"), "retry_count": u.get("retry_count"),
+                       "hold_reason": u.get("hold_reason") or u.get("error")}
+                      for u in self.units],
+        }
+
+
+@dataclass
 class RunResult:
     phase: str
     source_dir: str
@@ -69,6 +104,7 @@ class RunResult:
     paths: Dict[str, Optional[str]]
     acceptance: Optional[AcceptanceOutcome] = None
     cancelled: bool = False
+    testgen: Optional[TestGenResult] = None
 
     def summary(self) -> dict:
         """JSON-safe: what a UI shows after a run. Not the full statuses."""
@@ -78,6 +114,7 @@ class RunResult:
             "skipped": len(self.skipped),
             "queue_count": len(self.queue.get("entries", [])),
             "acceptance": self.acceptance.to_json() if self.acceptance else None,
+            "testgen": self.testgen.to_json() if self.testgen else None,
             "files": [{
                 "file_path": fs.get("file_path"), "status": fs.get("status"), "score": fs.get("review_score"),
                 "risk_tier": fs.get("risk_tier"), "retry_count": fs.get("retry_count"),
@@ -245,13 +282,18 @@ def discover(source_dir: str, output_dir: str, config: Optional[ForgeConfig] = N
 
 def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeConfig, *, dry_run: bool = False,
                   single_file: Optional[str] = None, resume: bool = False, no_metrics: bool = False,
-                  run_acceptance: bool = False, acceptance_build: bool = False,
+                  run_acceptance: bool = False, acceptance_build: bool = False, with_tests: bool = False,
+                  run_tests: Optional[bool] = None,
                   on_event: OnEvent = None, cancel: Optional[threading.Event] = None) -> RunResult:
     """One phase over one project — what ``migrate.py --phase`` does.
 
     Raises ``NoEligibleFiles`` when there is nothing to do. ``cancel`` is
     checked between units; on cancel the artifacts are still written, because
     held files are already staged and must not be orphaned.
+
+    ``with_tests`` runs test generation afterwards, over the files this run
+    actually wrote — after acceptance, because a project that did not migrate
+    is not a project to write tests for.
     """
     from forge.extract import clear_context_cache
     from forge.extract.selectors import is_generated_target
@@ -341,12 +383,25 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     generate_report(output_path=str(report_path), phase=phase, source_dir=source_dir, file_statuses=all_statuses,
                     bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost, skipped=skipped)
 
+    deleted = [d for fs in all_statuses for d in (fs.get("deleted_files") or [])]
+
     acceptance_outcome: Optional[AcceptanceOutcome] = None
     if run_acceptance:
-        deleted = [d for fs in all_statuses for d in (fs.get("deleted_files") or [])]
         acceptance_outcome = acceptance(phase, source_dir, str(output_root), config, deleted=deleted,
                                         run_build=acceptance_build, dry_run=dry_run)
         _emit_acceptance(on_event, acceptance_outcome)
+
+    testgen_result: Optional[TestGenResult] = None
+    if with_tests:
+        # Only what this run wrote. A file the migration left alone already has
+        # whatever tests it always had, and generating for it would be a
+        # different job at a different price.
+        written = [p for fs in all_statuses for p in (fs.get("written_paths") or [])]
+        # An empty list is not "everything": a run that wrote nothing has
+        # nothing to test, and the output directory may hold an earlier run's work.
+        testgen_result = generate_tests(source_dir, str(output_root), config, dry_run=dry_run,
+                                        only=written, run_tests=run_tests, deleted=deleted,
+                                        on_event=on_event, cancel=cancel)
 
     totals = {
         "total": len(all_statuses),
@@ -364,8 +419,10 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         statuses=all_statuses, totals=totals, skipped=list(skipped), queue=queue,
         paths={"report": str(report_path), "queue": str(output_root / QUEUE_NAME), "page": page_path,
                "snapshot": snapshot_path,
-               "acceptance": str(acceptance_outcome.path) if acceptance_outcome and acceptance_outcome.path else None},
-        acceptance=acceptance_outcome, cancelled=cancelled,
+               "acceptance": str(acceptance_outcome.path) if acceptance_outcome and acceptance_outcome.path else None,
+               "testgen": testgen_result.paths["report"] if testgen_result else None,
+               "generated_tests": testgen_result.paths["record"] if testgen_result else None},
+        acceptance=acceptance_outcome, cancelled=cancelled, testgen=testgen_result,
     )
 
 
@@ -388,6 +445,118 @@ def acceptance(phase: str, source_dir: str, output_dir: str, config: ForgeConfig
     report = _run([spec], source_dir, output_dir, decisions, deleted=deleted, run_build=run_build)
     path = write_acceptance(report, output_dir)
     return AcceptanceOutcome(report, path, None, 0 if report.verdict == "PASS" else 1)
+
+
+# ─── test generation ──────────────────────────────────────────────────────────
+
+def _testgen_state(target, *, source_dir: str, output_dir: str, dry_run: bool, style: str) -> dict:
+    from forge.testgen import make_test_unit
+
+    return {
+        "current_unit": make_test_unit(
+            file_path=target.path, rel_path=target.rel_path, package=target.package,
+            type_name=target.type_name, kind=target.kind, test_rel_path=target.test_rel_path, style=style,
+        ),
+        "source_dir": str(Path(source_dir).resolve()),
+        "output_dir": str(Path(output_dir).resolve()),
+        "dry_run": dry_run,
+        "units_processed": 0,
+        "units_generated": 0,
+        "units_held": 0,
+        "units_blocked": 0,
+        "bedrock_calls": 0,
+        "estimated_cost_usd": 0.0,
+        "messages": [],
+    }
+
+
+def generate_tests(source_dir: str, output_dir: str, config: ForgeConfig, *, dry_run: bool = False,
+                   only: Optional[Sequence[str]] = None, run_tests: Optional[bool] = None,
+                   deleted: Sequence[str] = (), on_event: OnEvent = None,
+                   cancel: Optional[threading.Event] = None) -> TestGenResult:
+    """Write JUnit 5 tests for the migrated classes in ``output_dir``.
+
+    Runs over the output tree, because that is what "the new code" is: a
+    migration writes only the files it changed. ``only`` narrows it further to
+    specific paths — the files one run wrote — so chaining this onto a
+    migration costs nothing for classes that migration never touched.
+
+    Never raises on an empty scan. A run with nothing to generate still writes
+    the report, because *why* each class was skipped is the answer the person
+    asking for tests actually needs.
+    """
+    from forge.testgen import TestGenSettings, build_record, scan_test_targets, write_record, write_report
+    from forge.testgen.graph import build_testgen_graph
+    from forge.testgen.runner import TestRunner
+    from forge.utils.telemetry import MetricsEmitter
+
+    settings = TestGenSettings.from_config(config)
+    if run_tests is not None:
+        settings = replace(settings, run=replace(settings.run, enabled=bool(run_tests)))
+
+    source_dir = str(Path(source_dir).resolve())
+    output_root = Path(output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    scan = scan_test_targets(str(output_root), source_dir, only=only, overwrite=settings.overwrite,
+                             kinds=settings.kinds)
+    emit(on_event, {"type": "testgen_start", "targets": len(scan.targets), "skipped": len(scan.skipped),
+                    "dry_run": dry_run, "style": settings.style,
+                    "run_tests": bool(settings.run.enabled and not dry_run)})
+
+    units: List[dict] = []
+    bedrock_calls = 0
+    cost = 0.0
+    cancelled = False
+
+    if scan.targets:
+        # Metrics are the two the Terraform alarms already know. Test units are
+        # deliberately absent from files_processed: that metric is the migration's,
+        # and the PipelineStalled alarm counts it.
+        metrics = MetricsEmitter(config, enabled=not dry_run)
+        # The runner is a no-op returning SKIPPED unless run_tests is enabled; it
+        # is always wired in so the graph has one shape.
+        runner = TestRunner(config, settings, source_dir, str(output_root), deleted=deleted)
+        graph = build_testgen_graph(config, settings, runner)
+        try:
+            for i, target in enumerate(scan.targets, start=1):
+                if cancel is not None and cancel.is_set():
+                    cancelled = True
+                    emit(on_event, {"type": "testgen_cancelled", "done": i - 1, "total": len(scan.targets)})
+                    break
+                initial = _testgen_state(target, source_dir=source_dir, output_dir=str(output_root),
+                                         dry_run=dry_run, style=settings.style)
+                final = graph.invoke(initial, config={"configurable": {"thread_id": f"testgen::{target.rel_path}"}})
+                unit = final["current_unit"]
+                units.append(unit)
+                bedrock_calls += final.get("bedrock_calls", 0)
+                cost += final.get("estimated_cost_usd", 0.0) or 0.0
+                emit(on_event, {
+                    "type": "testgen_unit", "index": i, "total": len(scan.targets), "file": target.rel_path,
+                    "label": f"{target.type_name} ({target.kind})", "test": unit.get("test_rel_path"),
+                    "status": unit.get("status"), "score": unit.get("review_score"),
+                    "test_verdict": unit.get("test_verdict"), "retry_count": unit.get("retry_count"),
+                    "reason": unit.get("hold_reason") or unit.get("error"),
+                })
+                if not dry_run:
+                    metrics.emit({"bedrock_calls": final.get("bedrock_calls", 0),
+                                  "estimated_cost_usd": final.get("estimated_cost_usd", 0.0)})
+        finally:
+            runner.close()
+
+    record = build_record(units, scan.skipped, source_dir=source_dir, output_dir=str(output_root),
+                          style=settings.style, dry_run=dry_run, bedrock_calls=bedrock_calls, cost_usd=cost)
+    record_path = write_record(str(output_root), record)
+    report_path = write_report(str(output_root), record)
+    totals = dict(record["totals"])
+    emit(on_event, {"type": "testgen_summary", **totals, "report": str(report_path), "record": str(record_path),
+                    "dependencies": list(record.get("dependencies") or [])})
+
+    return TestGenResult(
+        source_dir=source_dir, output_dir=str(output_root), dry_run=dry_run, style=settings.style,
+        units=units, skipped=list(scan.skipped), totals=totals,
+        paths={"report": str(report_path), "record": str(record_path)}, record=record, cancelled=cancelled,
+    )
 
 
 def _emit_acceptance(on_event: OnEvent, outcome: AcceptanceOutcome) -> None:

@@ -41,6 +41,8 @@ ARTIFACTS = [
     ("manual-review-queue.json", "Review queue"),
     ("migration-context.json", "Context snapshot"),
     ("migration-acceptance.json", "Acceptance record"),
+    ("test-generation-report.md", "Test generation report"),
+    ("generated-tests.json", "Generated tests record"),
     ("decisions-applied.jsonl", "Applied decisions log"),
     ("pack-feedback.md", "Pack feedback report"),
     ("forge-profile.yaml", "Discovery profile"),
@@ -67,6 +69,15 @@ class RunRequest(Project):
     no_metrics: bool = False
     single_file: Optional[str] = None
     resume: bool = False
+    generate_tests: bool = False      # write JUnit 5 tests for what this run wrote
+    run_tests: bool = False           # ...and execute them
+
+
+class GenerateTestsRequest(Project):
+    """Test generation over an existing output directory."""
+
+    dry_run: bool = False
+    run_tests: bool = False
 
 
 class DecisionsRequest(BaseModel):
@@ -208,7 +219,8 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
                 return service.run_migration(
                     source, phase, output_dir, config, dry_run=body.dry_run, single_file=body.single_file,
                     resume=body.resume, no_metrics=body.no_metrics, run_acceptance=body.acceptance,
-                    acceptance_build=body.acceptance_build, on_event=emit, cancel=job.cancel,
+                    acceptance_build=body.acceptance_build, with_tests=body.generate_tests,
+                    run_tests=body.run_tests or None, on_event=emit, cancel=job.cancel,
                 )
             except service.NoEligibleFiles as e:
                 emit({"type": "nothing", "message": str(e)})
@@ -314,6 +326,44 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
             raise HTTPException(404, f"no output directory at {body.output_dir} — run a migration first")
         outcome = service.acceptance(phase, source, str(output_dir), config, run_build=body.run_build)
         return {**outcome.to_json(), "exit_code": outcome.exit_code, "phase": phase}
+
+    # ─── test generation ──────────────────────────────────────────────────────
+
+    @app.post("/api/testgen", status_code=202)
+    def start_testgen(body: GenerateTestsRequest):
+        """Generate tests for the migrated classes already in the output directory.
+
+        A job like a run: it is minutes of model calls, and the page follows the
+        same SSE stream.
+        """
+        source = _source(body.source_dir)
+        config = _config(body.config, body.decisions)
+        output_dir = Path(body.output_dir).expanduser()
+        if not output_dir.is_dir():
+            raise HTTPException(404, f"no output directory at {body.output_dir} — run a migration first")
+
+        def target(job, emit):
+            return service.generate_tests(source, str(output_dir), config, dry_run=body.dry_run,
+                                          run_tests=body.run_tests or None, on_event=emit, cancel=job.cancel)
+
+        try:
+            job = registry.start("testgen", body.model_dump(), target, summarise=lambda r: r.to_json())
+        except JobBusy as e:
+            raise HTTPException(409, str(e))
+        return {"job_id": job.id, "state": job.state}
+
+    @app.get("/api/testgen")
+    def testgen(output_dir: str = Query(...)):
+        """The last test-generation record, for the page to render without re-running."""
+        from forge.testgen import RECORD_NAME
+
+        path = Path(output_dir).expanduser() / RECORD_NAME
+        if not path.is_file():
+            raise HTTPException(404, f"no {RECORD_NAME} in {output_dir} — generate tests first")
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            raise HTTPException(409, f"{path} is not readable as JSON: {e}")
 
     @app.get("/api/feedback")
     def feedback(output_dir: str = Query(...)):

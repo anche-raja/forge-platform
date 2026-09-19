@@ -139,6 +139,39 @@ build_verification:
   classpath: ""
   timeout_seconds: 300
 
+# ─── Test generation ──────────────────────────────────────────────────────────
+# After a migration, write the JUnit 5 tests the legacy code never had:
+#   migrate.py ./app --phase javax-to-jakarta --output-dir ./migrated --generate-tests
+#   migrate.py ./app --generate-tests-only --output-dir ./migrated     # over an existing run
+# Two model calls per class (generate + review, cross-validated like the
+# migration), and none at all for a class this file's rules exclude.
+#   model / review_model  — default to transform_model / review_model
+#   overwrite             — regenerate over an existing test. Leave false: an
+#                           existing test is a human's work.
+#   kinds                 — restrict to some of controller/service/repository/
+#                           entity/config/plain. Empty means every kind.
+#   run_tests             — execute each generated test against the merged tree.
+#                           A test that fails is taken back out of the tree and
+#                           held, with its output, in the report. Needs the
+#                           toolchain, so it is off by default.
+test_generation:
+  enabled: true
+  style: "junit5"
+  model: ""
+  review_model: ""
+  pass_threshold: 75
+  retry_threshold: 50
+  max_retries: 1
+  overwrite: false
+  max_source_chars: 60000
+  context_max_chars: 12000
+  kinds: []
+  run_tests:
+    enabled: false
+    mode: "maven"          # maven | gradle | command
+    command: ""            # {test_class} {test_fqcn} {workspace} {test_file}
+    timeout_seconds: 900
+
 # ─── Decisions ────────────────────────────────────────────────────────────────
 # Project-level choices that packs read (see prompts/FORGE-Platform-Requirements.md
 # §4). An acceptance check guarded by \`when:\` is skipped — never passed — while

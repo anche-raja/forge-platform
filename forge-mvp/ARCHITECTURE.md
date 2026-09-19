@@ -28,6 +28,10 @@ That is the built-in `java21` phase. Every other transition — Jakarta namespac
 Spring Security, Struts 2 → 7, JSP/JSTL, JUnit 5, the WAR bootstrap, the Liberty `server.xml` —
 is a **pack** loaded from `prompts/packs/` and selected with `--phase <pack-id>` (§12).
 
+After a migration, **test generation** (§14) writes the JUnit 5 tests the legacy code never had
+for the classes that run actually wrote — `--generate-tests`, or `--generate-tests-only` over an
+output directory from an earlier run.
+
 The transformation rules live in [forge/phases.py](forge/phases.py), paired with the reviewer
 rubric that grades them in one `PhaseSpec`; [forge/agents/java_upgrade.py](forge/agents/java_upgrade.py)
 reads the transform prompt from there. Change a prompt and its rubric together. A pack's rules
@@ -56,8 +60,9 @@ come from its `.pack.md` file instead.
 > The spec pins `langgraph>=0.2 / langchain>=0.3`; the graph also compiles and tests pass under
 > the current `langgraph 1.x / langchain 1.x` line.
 
-**Not in the MVP** (despite being in the deck): Strands Agents, SQS, the Containerize and Test-Gen agents, the 5-agent review board, and `@tool`
-function-calling. Agents use plain system-prompt + `invoke`. The deck's Discovery agent,
+**Not in the MVP** (despite being in the deck): Strands Agents, SQS, the Containerize agent, the
+5-agent review board, and `@tool` function-calling. The deck's **Test-Gen** agent is built — as a
+transform/review pair around a graph of its own (§14), not as a tool-calling agent. Agents use plain system-prompt + `invoke`. The deck's Discovery agent,
 Risk-Scorer, review portal and **Leader Agent** exist in deterministic form — `--discover`,
 `forge/risk/`, the review page + web UI, and the LangGraph state machine itself — rather than as
 model-driven agents. The Leader's six duties map onto the graph one for one; see §3.
@@ -227,6 +232,7 @@ Single file [agents.yaml](agents.yaml), loaded by `ForgeConfig`. Key knobs:
 | `scope_package_prefix` | `com.corp` | Files outside scope are flagged |
 | `complexity_block_threshold` | `2000` | LOC ceiling for auto-transform |
 | `guardrail_id` / `guardrail_version` | *(placeholder)* | Bedrock Guardrail to apply |
+| `test_generation` | *(block)* | Test-Gen (§14): models, thresholds, `overwrite`, `kinds`, `run_tests` |
 
 In production `agents.yaml` is generated from Terraform outputs via
 `forge-terraform/scripts/generate-agents-yaml.sh`.
@@ -252,8 +258,9 @@ python migrate.py ./myapp --phase java21 --resume
 
 Flags: `--phase` (a built-in phase or any complete pack — see §12), `--dry-run`, `--resume`,
 `--file`, `--output-dir` (default `./migrated`), `--config`, `--no-metrics`, `--list-packs`,
-`--discover`, `--acceptance` / `--acceptance-only` / `--acceptance-build`, `--apply-decisions`,
-`--feedback-report`, and `--ui` / `--port` / `--no-browser` for the local web UI (§13).
+`--discover`, `--acceptance` / `--acceptance-only` / `--acceptance-build`, `--generate-tests` /
+`--generate-tests-only` / `--run-tests` (§14), `--apply-decisions`, `--feedback-report`, and
+`--ui` / `--port` / `--no-browser` for the local web UI (§13).
 
 `migrate.py` is a thin printer: every command calls a function in [forge/service.py](forge/service.py)
 and turns its events into the lines above. The web UI calls the same functions.
@@ -303,6 +310,10 @@ forge-mvp/
     extract/                       # web_bootstrap.py, selectors.py — deterministic context extractors
     context/                       # render.py, inject.py, snapshot.py — context into prompts, bounded
     risk/score.py                  # deterministic risk score and tier
+    testgen/                       # test generation: targets.py (which classes), checks.py (mechanical
+                                   #   invariants), context.py (collaborator API + test libraries),
+                                   #   writer.py (where a test lands), runner.py (execute), graph.py,
+                                   #   report.py, settings.py, state.py
     review_queue.py                # manual-review-queue.json v2 + migration-review.html
     decisions.py                   # approve / reject / retry from a decisions file or the UI
     feedback_report.py             # reviewers' notes grouped by pack and rule
@@ -311,9 +322,11 @@ forge-mvp/
       guardrails_pre.py            # risk score, Bedrock Guardrails (INPUT), Opus pre-flight
       java_upgrade.py              # the one transform agent (Opus 4.8) + pack prompt + context
       guardrails_post.py           # Bedrock Guardrails (OUTPUT), zero-javax check, Opus post-check
+      test_gen.py                  # the Test-Gen agent (Opus 4.8) — one class in, one test class out
     review/
       base_reviewer.py
       java_reviewer.py             # the one review agent (Nova Pro) + pack rubric
+      test_reviewer.py             # grades a generated test (Nova Pro) against the JUnit 5 rubric
     guardrails/
       bedrock_guardrails.py        # ApplyGuardrail wrapper
     verify/
@@ -325,7 +338,7 @@ forge-mvp/
       file_scanner.py  file_writer.py  report.py  java_checks.py  telemetry.py  cost.py
   infrastructure/
     create_dynamodb.py             # dev table creation (non-Terraform)
-  tests/                           # 470 tests, fully mocked (conftest.mocked_aws) — no AWS needed
+  tests/                           # 580+ tests, fully mocked (conftest.mocked_aws / mocked_testgen)
 ```
 
 ---
@@ -347,6 +360,10 @@ These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives
 - **Review is single-user.** The web UI (§13) runs on loopback for one engineer with one job at
   a time; the static review page + `--apply-decisions` is the CI-friendly form. There is no
   shared, multi-user review service.
+- **Generated tests are unit tests, and nobody measures them.** Test-Gen (§14) writes one test
+  class per class under test with collaborators mocked. It does not write integration tests, does
+  not start a Spring context, does not measure coverage, and never edits the build file — the test
+  dependencies it needs are reported, not added.
 - **The guardrail is only as good as its entity list.** Any intervention on INPUT blocks the
   file, so the Terraform guardrail lists secrets only (never `EMAIL` / `IP_ADDRESS`); an
   operator who adds entity types in the console can block ordinary code.
@@ -388,10 +405,11 @@ and opens the browser. It replaces nothing: the CLI stays for CI, and both sit o
 service layer.
 
 **Service contract** ([forge/service.py](forge/service.py)). Plain functions, no argparse, no
-`print`, no `sys.exit`: `packs()`, `discover()`, `run_migration()`, `acceptance()`, `apply()`,
-`feedback()`. Progress is an `on_event(dict)` callback with a `type` key — `start`, `skipped`,
-`file`, `snapshot`, `queue`, `acceptance`, `summary`, `cancelled`, `nothing`, `apply_outcome`,
-`apply_done`. The CLI's `_print_event` reproduces its historical stdout from those events;
+`print`, no `sys.exit`: `packs()`, `discover()`, `run_migration()`, `acceptance()`,
+`generate_tests()`, `apply()`, `feedback()`. Progress is an `on_event(dict)` callback with a `type`
+key — `start`, `skipped`, `file`, `snapshot`, `queue`, `acceptance`, `summary`, `cancelled`,
+`nothing`, `apply_outcome`, `apply_done`, `testgen_start`, `testgen_unit`, `testgen_summary`,
+`testgen_cancelled`. The CLI's `_print_event` reproduces its historical stdout from those events;
 `tests/test_service.py::test_cli_prints_exactly_the_historical_lines` pins it. "Nothing to do" is
 `NoEligibleFiles`, which the CLI turns into exit 0. `run_migration` takes a `threading.Event` for
 cancellation, checked between units; on cancel the report and queue are still written, because held
@@ -411,8 +429,13 @@ phase that is not runnable or a bad path; 409 when busy) · `GET /api/runs/{id}`
 metadata + the entry HTML from `review_queue.render_entries`, embedded in an iframe with the same
 CSS as the static page, so the decision widget is one DOM contract) · `POST /api/review/decisions`
 (validated by `decisions_from`, the same function `--apply-decisions` uses; runs as an `apply` job)
-· `POST /api/acceptance` (synchronous; the page warns that `run_build` blocks) · `GET /api/feedback`
-· `GET /api/artifacts` · `GET /api/files?output_dir=&name=`.
+· `POST /api/acceptance` (synchronous; the page warns that `run_build` blocks) · `POST /api/testgen`
+(202 + job id, like a run; 404 when there is no output directory to generate from) · `GET
+/api/testgen?output_dir=` (the last `generated-tests.json`) · `GET /api/feedback` · `GET
+/api/artifacts` · `GET /api/files?output_dir=&name=`.
+
+The page's steps are Project → Discover → Run → Review → Accept → **Tests** → Feedback → Artifacts.
+The Run step can tick *generate tests*, which chains §14 onto the same job.
 
 **Per-run decisions.** The Discover step offers every platform decision; the values go in the run
 body and reach the packs, the hold gate and the acceptance checks through
@@ -425,3 +448,91 @@ chosen output directory. The front end is three static files (`forge/ui/static/`
 `fetch` + `EventSource`, no build step and no CDN — it must work on a machine with no internet.
 Stopping the server kills a job mid-unit; *Cancel* is the clean stop and `--resume` recovers as
 before.
+
+---
+
+## 14. Test generation
+
+The migration answers "did it transform correctly?" (the reviewer) and "does it still compile?"
+(the build gate). Neither answers *does it still do what it did* — and a legacy J2EE codebase is
+the least likely place to find the tests that would. Test-Gen writes them.
+
+```bash
+python migrate.py ./app --phase javax-to-jakarta --output-dir ./migrated --generate-tests
+python migrate.py ./app --generate-tests-only --output-dir ./migrated        # over an earlier run
+python migrate.py ./app --generate-tests-only --output-dir ./migrated --run-tests
+```
+
+**It runs over the output tree, not the source tree.** "The new code" is what the migration wrote;
+a class it never touched already has whatever tests it always had. Chained onto a run, the scan is
+narrowed further to that run's `written_paths`, so a second pack over the same project costs
+nothing for the files the first one migrated.
+
+**Graph** ([forge/testgen/graph.py](forge/testgen/graph.py)), one class under test per invocation,
+`thread_id = testgen::<rel path>`:
+
+```
+testgen_pre ─▶ generate ─▶ static_checks ─▶ review ─▶ write_tests ─▶ run_tests ─▶ finish
+                   ▲            │             │                          │
+                   └── increment_retry ◀──────┴──────────────────────────┘
+                                │
+                                └─▶ hold  (staged under .forge-staging/, a human decides)
+```
+
+| Node | Model / service | Role |
+|---|---|---|
+| `testgen_pre` | local code | The secret gate and a size ceiling, ahead of every remote call. No model is asked anything. |
+| `generate` | **Opus 4.8** | One class in, one `<Type>Test` out, with the collaborator signatures and the project's test libraries in the prompt |
+| `static_checks` | local code | JUnit 4 imports, `javax.*`, a missing `@Test`, `@Disabled`, the class name and package, non-determinism, and a secret scan of the generated file |
+| `review` | **Nova Pro** | Scores framework / coverage / assertions / isolation / faithfulness, 100 points, `PASS ≥ 75` |
+| `write_tests` | local FS | `src/test/java/<pkg>/<Type>Test.java` inside the output directory |
+| `run_tests` | `mvn` / `gradle` / a command | Opt-in. Runs the test against a materialised merged tree |
+| `hold` | local FS | Stage under `.forge-staging/` with the reason — the test exists, but not in the build |
+
+Five decisions are worth stating, because each one is the answer to a way this could go wrong.
+
+**Which classes, and where the test lands, are decided in code.**
+[targets.py](forge/testgen/targets.py) reads the type declaration, its annotations and its public
+signatures, classifies it (controller / service / repository / entity / config / plain) and skips
+what cannot be unit tested — an interface, an abstract class, a class with no public members, a
+class that already has a test. Every skip is reported: a silently skipped class is
+indistinguishable from one nobody thought about. The destination is derived from the file's own
+`package` and type name, so unlike `write_output` the model's path is **discarded entirely** —
+there is exactly one right place for `com.corp.UserServiceTest`, and the model's key adds only a
+way out of the output directory.
+
+**An existing test is never overwritten.** `overwrite` defaults to false. A test already in the
+tree is a human's work and the one artifact this pipeline must not touch.
+
+**The mechanical checks run before the review, not after.** JUnit 4 imports, `javax.*`, a missing
+`@Test` and the wrong class name are invariants, so [checks.py](forge/testgen/checks.py) decides
+them with regexes and a failure goes straight back to the generator — costing zero review calls.
+It is `guardrails_post`'s zero-`javax` rule, one layer up.
+
+**A test that is not good enough is staged, never written.** Below the pass threshold after its
+retries, or failing a mechanical check, or having run and failed, the file goes to
+`.forge-staging/` and the reason goes in the report. A broken test in `src/test/java` breaks every
+build that follows it, so a failing generated test is also removed from the output tree before the
+retry. Whether it is the test or the migrated code that is wrong is a human's call, and the
+failure output is in the report either way — that signal is the most valuable thing this stage
+produces.
+
+**The prompt is told what the API is.** Its first rule is *never invent API*, which is only fair
+if the API is supplied: [context.py](forge/testgen/context.py) resolves the collaborators the class
+declares to files in the merged tree and renders their public signatures, and it lists the test
+libraries the build files actually carry. A library that is absent is named as absent; what the
+test needs and does not have is reported in `dependencies` rather than added, because FORGE does
+not edit build files.
+
+**Two model calls per class** — generate and review, cross-validated across model families exactly
+as the migration is — and zero for a class the rules exclude or the secret gate stops. Prompts and
+rubric live in [forge/phases.py](forge/phases.py) as a `TestGenSpec`, beside the migration's, and
+`tests/test_testgen.py` asserts the weights still total 100 and still match the response schema.
+
+**Artifacts.** `test-generation-report.md` (dependencies, per-class results, what was held and why,
+members left untested, what was skipped) and `generated-tests.json` (the machine record; a held or
+dry-run unit carries its generated source inline, since that file is nowhere else a reader would
+look). `--generate-tests-only` exits non-zero when anything was held, blocked or failed, so it
+gates CI. Test units are **not** written to the DynamoDB state table — that table is the
+migration's audit trail, keyed by source file — and the two metrics emitted are `bedrock_calls`
+and `estimated_cost_usd` only, never `files_processed`, which the PipelineStalled alarm counts.

@@ -19,6 +19,10 @@ Actionable backlog for the next development cycle. Context for each item lives i
 - [x] Local web UI — `migrate.py --ui`; `forge/service.py` shared by CLI and UI, FastAPI routes,
       one-at-a-time job registry with SSE progress, live review with Apply, acceptance, feedback
       and artifact views (`forge/ui/`).
+- [x] **Test-Gen agent** — `forge/testgen/`, `--generate-tests` / `--generate-tests-only` /
+      `--run-tests`, the Tests step in the UI. Deterministic target selection and destination,
+      mechanical checks ahead of the review, a failing test staged rather than written
+      (ARCHITECTURE.md §14).
 
 ## P1 — Verification quality
 
@@ -44,8 +48,9 @@ Actionable backlog for the next development cycle. Context for each item lives i
 
 ## P3 — Roadmap (beyond Phase 0, from the deck)
 
-- [ ] Build the next transform/review agent pairs (Spring X→Y, Struts2→MVC, Discovery, Risk-Scorer,
-      Containerize, Test-Gen) — currently only `java21` exists.
-- [ ] **Test-Gen agent** + run generated JUnit 5 tests as a second verification gate (complements the
-      compile gate above).
+- [ ] Build the next transform/review agent pairs (Spring X→Y, Struts2→MVC, Containerize) —
+      Discovery, Risk-Scorer and Test-Gen are done, the first two deterministically.
+- [ ] **Integration tests, and coverage.** Test-Gen writes unit tests with collaborators mocked. A
+      Spring-context slice test (`@WebMvcTest`, `@DataJpaTest`) and a JaCoCo coverage gate are the
+      next rungs; neither is built.
 - [ ] Module-level build gate — `mvn -pl <module> -am compile` after a batch, in addition to the per-file gate.

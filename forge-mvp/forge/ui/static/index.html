@@ -19,8 +19,9 @@
   <a href="#/run" data-step="run"><span class="n">3</span>Run</a>
   <a href="#/review" data-step="review"><span class="n">4</span>Review</a>
   <a href="#/accept" data-step="accept"><span class="n">5</span>Accept</a>
-  <a href="#/feedback" data-step="feedback"><span class="n">6</span>Feedback</a>
-  <a href="#/artifacts" data-step="artifacts"><span class="n">7</span>Artifacts</a>
+  <a href="#/tests" data-step="tests"><span class="n">6</span>Tests</a>
+  <a href="#/feedback" data-step="feedback"><span class="n">7</span>Feedback</a>
+  <a href="#/artifacts" data-step="artifacts"><span class="n">8</span>Artifacts</a>
 </nav>
 
 <main id="main">
@@ -82,6 +83,8 @@
         <label><input type="checkbox" id="r-dry"> Dry run — write nothing, list every transform for review</label>
         <label><input type="checkbox" id="r-acc"> Run acceptance checks afterwards</label>
         <label><input type="checkbox" id="r-accbuild"> …including the build check (needs the toolchain; slow)</label>
+        <label><input type="checkbox" id="r-tests"> Generate JUnit 5 tests for the files this run writes</label>
+        <label><input type="checkbox" id="r-runtests"> …and run them, holding the ones that fail (needs the toolchain; slow)</label>
         <label><input type="checkbox" id="r-nometrics"> Skip CloudWatch metrics</label>
       </div>
       <div class="row">
@@ -135,6 +138,31 @@
       <div id="a-verdict" class="verdict"></div>
       <table class="tbl" id="a-table"></table>
     </div>
+  </section>
+
+  <section id="step-tests" class="step" hidden>
+    <h1>Tests</h1>
+    <p class="lead">JUnit 5 + Mockito tests for the migrated classes in the output directory. Which classes is
+      decided in code, and so is the destination; a test that fails a mechanical check, scores below the
+      threshold, or runs and fails is staged instead of written — it never enters the build.</p>
+    <form id="tg-form" class="form" autocomplete="off">
+      <div class="checks">
+        <label><input type="checkbox" id="tg-run"> Run each generated test and hold the ones that fail (needs the toolchain; slow)</label>
+        <label><input type="checkbox" id="tg-dry"> Dry run — generate and review, write nothing</label>
+      </div>
+      <div class="row">
+        <button type="submit" class="primary" id="tg-start">Generate tests</button>
+        <button type="button" id="tg-cancel" hidden>Cancel after the current class</button>
+        <span id="tg-status" class="hint"></span>
+      </div>
+    </form>
+    <div id="tg-live" hidden>
+      <div class="progress"><div id="tg-bar"></div></div>
+      <ol id="tg-units" class="files"></ol>
+    </div>
+    <div id="tg-done" class="card" hidden></div>
+    <table class="tbl" id="tg-table" hidden></table>
+    <details id="tg-skipped-wrap" hidden><summary>Classes skipped, and why</summary><table class="tbl" id="tg-skipped"></table></details>
   </section>
 
   <section id="step-feedback" class="step" hidden>

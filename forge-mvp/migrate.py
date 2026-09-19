@@ -43,6 +43,24 @@ def _print_event(event: dict) -> None:
         for r in event["results"]:
             print(f"  [{r['outcome'].upper():4}] {r['kind']:<16} {r['detail']}")
         print(f"Acceptance record: {event['path']}")
+    elif t == "testgen_start":
+        run_str = " | running them" if event["run_tests"] else ""
+        print(f"\nTest generation ({event['style']}) — {event['targets']} class(es), "
+              f"{event['skipped']} skipped{run_str}")
+    elif t == "testgen_unit":
+        score_str = f", score: {event['score']}" if event["score"] is not None else ""
+        verdict = f", tests: {event['test_verdict']}" if event["test_verdict"] not in (None, "SKIPPED") else ""
+        reason = f" — {event['reason']}" if event.get("reason") else ""
+        print(f"[{event['index']}/{event['total']}] {event['label']} → {event['status']}"
+              f"{score_str}{verdict}{reason}")
+    elif t == "testgen_cancelled":
+        print(f"\nTest generation cancelled after {event['done']} of {event['total']} class(es)")
+    elif t == "testgen_summary":
+        print(f"\nTests: {event['generated']} written | {event['held']} held | {event['blocked']} blocked "
+              f"| {event['tests_passed']} passed | {event['tests_failed']} failed")
+        if event["dependencies"]:
+            print("Test dependencies needed: " + ", ".join(event["dependencies"]))
+        print(f"Test report: {event['report']}")
     elif t == "cancelled":
         print(f"\nCancelled after {event['done']} of {event['total']} unit(s)")
     elif t == "summary":
@@ -146,6 +164,20 @@ def _acceptance_only(args) -> int:
     return outcome.exit_code
 
 
+def _generate_tests_only(args) -> int:
+    """Write tests for an existing --output-dir. Exit 0 only when nothing needs a human."""
+    from forge import service
+    from forge.config import ForgeConfig
+    from forge.utils.telemetry import configure_logging
+
+    configure_logging(args.log_level)
+    result = service.generate_tests(
+        args.source_dir, args.output_dir, ForgeConfig(args.config), dry_run=args.dry_run,
+        run_tests=args.run_tests or None, on_event=_print_event,
+    )
+    return result.exit_code
+
+
 def _migrate(args) -> int:
     from forge import service
     from forge.config import ForgeConfig
@@ -157,7 +189,8 @@ def _migrate(args) -> int:
         service.run_migration(
             args.source_dir, args.phase, args.output_dir, config,
             dry_run=args.dry_run, single_file=args.single_file, resume=args.resume, no_metrics=args.no_metrics,
-            run_acceptance=args.acceptance, acceptance_build=args.acceptance_build, on_event=_print_event,
+            run_acceptance=args.acceptance, acceptance_build=args.acceptance_build,
+            with_tests=args.generate_tests, run_tests=args.run_tests or None, on_event=_print_event,
         )
     except service.NoEligibleFiles as e:
         print(str(e))
@@ -199,6 +232,12 @@ def main():
                         help="Skip migration; run acceptance checks against an existing --output-dir")
     parser.add_argument("--acceptance-build", action="store_true",
                         help="Also run `build` acceptance checks (needs the toolchain; slow)")
+    parser.add_argument("--generate-tests", action="store_true",
+                        help="After the run, generate JUnit 5 tests for the files it wrote")
+    parser.add_argument("--generate-tests-only", action="store_true",
+                        help="Skip migration; generate tests for the migrated classes already in --output-dir")
+    parser.add_argument("--run-tests", action="store_true",
+                        help="Execute each generated test and hold the ones that fail (needs the toolchain; slow)")
     parser.add_argument("--apply-decisions", metavar="DECISIONS_JSON",
                         help="Apply a reviewer's approve/reject/retry decisions to the review queue in --output-dir")
     parser.add_argument("--feedback-report", action="store_true",
@@ -223,6 +262,8 @@ def main():
         return _discover(args)
     if args.apply_decisions:
         return _apply_decisions(args)
+    if args.generate_tests_only:
+        return _generate_tests_only(args)
     if not args.phase:
         parser.error("--phase is required")
     if args.acceptance_only:
