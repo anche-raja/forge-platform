@@ -1,0 +1,76 @@
+Bedrock Guardrails is its own managed policy engine. Detection runs on AWS-managed internal classifiers — entity/PII detectors, the content-filter classifiers, the PROMPT_ATTACK classifier, and literal word matching. You don't pick or pin a model for it, you don't get to change it, and it's billed per text unit evaluated rather than per model token. That's exactly why CLAUDE.md stresses it's called "as a standalone ApplyGuardrail API call — not inline with model invocation": there is no model invocation attached to it.
+
+______________________________________________________________________________________________
+______________________________________________________________________________________________
+
+
+
+                     ┌─────────────────────────────────────────┐
+  file_scanner       │ BEFORE the graph: scope + glob decide   │
+  (no model)         │ if the file is ours. Out of scope ⇒     │
+                     │ skipped, listed in report, 0 calls.     │
+                     └────────────────┬────────────────────────┘
+                                      ▼
+╔═══════════════════════ guardrails_pre  (entry point) ═══════════════════════╗
+║                                                                             ║
+║  0. read source            ── unreadable ─────────────────▶ BLOCKED         ║
+║     (generate: true ⇒ the rendered context block instead)                   ║
+║                                                                             ║
+║  1. score_unit()           always runs first, so even a blocked             ║
+║     LOCAL, no model        file carries risk_tier into the queue            ║
+║                                                                             ║
+║  2. secret_scan            ── key material ──────────────▶ BLOCKED          ║
+║     LOCAL, no network         verdict KEY_MATERIAL_BLOCKED_LOCALLY          ║
+║                               0 Bedrock calls, nothing left the machine     ║
+║                                                                             ║
+║  3. ApplyGuardrail INPUT   ── GUARDRAIL_INTERVENED ──────▶ BLOCKED          ║
+║     AWS, no model             (any intervention, incl. ANONYMIZE)           ║
+║                                                                             ║
+║  4. Opus 4.8 pre-flight    ── BLOCK ─────────────────────▶ BLOCKED          ║
+║     secrets / PII / LOC    ── WARN ──▶ finding, continue                    ║
+║                            ── PASS ──▶ TRANSFORMING                        ║
+╚═════════════════════════════════════╤═══════════════════════════════════════╝
+                                      │ route_pre
+                    BLOCKED ──────────┴──────────── else
+                       │                             │
+                       ▼                             ▼
+                   blocked node              java_upgrade (Opus 4.8)
+                       │                             │
+                       │                             ▼
+                       │                     java_reviewer (Nova Pro)
+                       │                             │ route_reviewer
+                       │         ┌───────────────────┼────────────────────┐
+                       │      score ≥ 80        50–79 & retries<2      else
+                       │         │                   │                    │
+                       │         │            increment_retry ──▶ java_upgrade
+                       │         ▼                                        │
+╔══════════════════════╪═══ guardrails_post ══════════════════════╗       │
+║                      │                                          ║       │
+║  1. concat output    │ ── empty ──────────────▶ MANUAL_REVIEW   ║       │
+║                      │                                          ║       │
+║  2. ApplyGuardrail OUTPUT ── INTERVENED ─────▶ MANUAL_REVIEW    ║       │
+║     AWS, no model                                               ║       │
+║                                                                 ║       │
+║  3. javax.* regex    ── leftover imports ────▶ MANUAL_REVIEW    ║       │
+║     LOCAL, no model     Rule 1, mechanical                      ║       │
+║                                                                 ║       │
+║  4. Opus 4.8 post    ── BLOCK ───────────────▶ MANUAL_REVIEW    ║       │
+║     regressions         else status unchanged                   ║       │
+╚══════════════════════╤══════════════════════════════════════════╝       │
+                       │ route_post                                       │
+        MANUAL_REVIEW ─┤─ must_hold(risk) ─┤─ else                        │
+                 │     │                   │                              │
+                 │     ▼                   ▼                              │
+                 │  hold_for_review     write_file                        │
+                 │  (.forge-staging/)      │                              │
+                 │  never builds           ▼                              │
+                 │                    verify_build                        │
+                 │                         │ route_verify                 │
+                 │         FAIL & retries ─┴─▶ increment_retry            │
+                 │         FAIL & exhausted ──▶ manual_queue ◀────────────┘
+                 ▼                            │
+            manual_queue ────────────────────┬┘
+                                             ▼
+                                        update_state ──▶ END
+                                   (counts DONE / MANUAL_REVIEW /
+                                    BLOCKED / HELD, emits metrics)
