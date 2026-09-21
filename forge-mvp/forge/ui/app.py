@@ -94,6 +94,28 @@ class AcceptanceRequest(Project):
     run_build: bool = False
 
 
+class ChatRequest(Project):
+    """One turn of the chat: a typed message, or a button the user pressed.
+
+    Never both. An ``action`` is the only thing that may execute a gated tool —
+    a spend confirmation or a review decision is a click, not a sentence the
+    model can talk itself into — so a body carrying both would leave it
+    ambiguous which of the two authorised the turn.
+
+    ``source_dir`` overrides the inherited required field and is optional here,
+    which is the whole of the owner's objection to the wizard: *"I requested to
+    change with prompt instead of this project setup"*. The chat has to accept
+    a first message before anyone has named a folder, because asking for the
+    folder is the leader's job and it cannot ask from behind a 400. ``config``
+    stays required — a leader with no model is not a leader.
+    """
+
+    source_dir: Optional[str] = None
+    conversation_id: Optional[str] = None
+    message: Optional[str] = None
+    action: Optional[Dict[str, Any]] = None
+
+
 # ─── helpers ──────────────────────────────────────────────────────────────────
 
 def _config(path: Optional[str], decisions: Optional[Dict[str, str]]) -> ForgeConfig:
@@ -159,9 +181,16 @@ def _job_or_404(registry: JobRegistry, job_id: str):
 # ─── the app ──────────────────────────────────────────────────────────────────
 
 def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
+    from forge.leader.convo import ConversationStore
+
     app = FastAPI(title="FORGE", docs_url=None, redoc_url=None)
     registry = registry or JobRegistry()
     app.state.registry = registry
+    # In memory for the life of the process, like the job registry beside it.
+    # A conversation that outlived the server would promise a history the rest
+    # of the UI does not keep; the browser re-creates one from the 202 instead.
+    conversations = ConversationStore()
+    app.state.conversations = conversations
     if STATIC.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
@@ -285,6 +314,124 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
 
         return StreamingResponse(frames(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # ─── chat ─────────────────────────────────────────────────────────────────
+
+    def _active_chat(conversation_id: str):
+        """The job currently writing that conversation, or None."""
+        active = registry.active()
+        if active is None or active.kind != "chat":
+            return None
+        return active if active.params.get("conversation_id") == conversation_id else None
+
+    @app.post("/api/chat", status_code=202)
+    def chat(body: ChatRequest):
+        """One leader turn, as a job in the same single slot a run takes.
+
+        A turn is not a request-thread call like /api/intent, because the tools
+        it may reach are runs: minutes of model calls with events to stream. It
+        holds the one job slot on purpose (R7). The tools call ``service.*`` on
+        this thread and relay their events into this job's stream, so a second
+        job would put two threads on the graph, DynamoDB and the context cache
+        — the invariant jobs.py enforces by allowing only one.
+        """
+        from forge.leader.agent import LeaderAgent
+        from forge.leader.tools import ProjectContext
+
+        has_message, has_action = body.message is not None, body.action is not None
+        if has_message == has_action:
+            raise HTTPException(400, "send exactly one of message or action")
+        message = body.message.strip() if has_message else None
+        if has_message and not message:
+            raise HTTPException(400, "message is empty")
+
+        # Everything that can raise HTTPException runs here, on the request
+        # thread. Inside the target it would be an ordinary exception that
+        # fails the job — a 400 the browser would have to read out of an SSE
+        # error frame.
+        config = _config(body.config, body.decisions)
+        # The same config without the browser's decision overlay. Handing the
+        # overlay to the intent layer as "config" makes it attribute the last
+        # plan's answers to agents.yaml and drop them from its assumptions —
+        # the misattribution app.js already avoids by leaving `decisions` out
+        # of its /api/intent body.
+        base_config = _config(body.config, None)
+
+        convo = conversations.get_or_create(body.conversation_id)
+        # Three ways a turn learns which repository it is about, in order: the
+        # body named one (the browser still may, and the CLI's tests do), the
+        # conversation is already bound to one, or nobody has said yet — and
+        # that last case runs too. A blank string is "not said", not a path:
+        # the field is optional now, and an empty input box must not become a
+        # 400 the leader cannot answer.
+        if body.source_dir is not None and str(body.source_dir).strip():
+            source = _source(body.source_dir)
+            output_dir = str(Path(body.output_dir).expanduser())
+            if not convo.bind(source, output_dir):
+                raise HTTPException(400, "this conversation belongs to a different project — start a new chat")
+        else:
+            # set_project binds the conversation from inside a turn, so this is
+            # where a chat that named its folder in prose picks it up again.
+            source, output_dir = convo.source_dir, convo.output_dir
+        ctx = ProjectContext(source_dir=source, output_dir=output_dir, config=config,
+                             base_config=base_config, bound=bool(source))
+
+        def target(job, emit):
+            # Claim the turn, then build the agent — in that order, and both in
+            # here. Constructing it on the request thread would turn a missing
+            # region or profile into a 500 on the POST; built here it fails the
+            # job the way a run does, and the claim means the failure lands in
+            # the transcript stamped with this job's id, so a reload can show
+            # the turn that did not happen.
+            convo.begin_turn(job.id)
+            try:
+                agent = LeaderAgent(config)
+            except Exception as e:      # noqa: BLE001 — recorded, then re-raised as the job's error
+                convo.add_item({"role": "error", "message": f"{type(e).__name__}: {e}"})
+                convo.end_turn()
+                raise
+            return agent.run_turn(convo, ctx, message=message, action=body.action,
+                                  emit=emit, cancel=job.cancel, job_id=job.id)
+
+        try:
+            # `phase` is present but empty: the job bar reads params.phase for
+            # whatever is active, and a chat turn has no phase to show.
+            job = registry.start("chat", {"surface": "chat", "conversation_id": convo.id, "phase": ""},
+                                 target, summarise=lambda r: r)
+        except JobBusy as e:
+            raise HTTPException(409, str(e))
+        return {"job_id": job.id, "conversation_id": convo.id, "state": job.state}
+
+    @app.get("/api/chat/{conversation_id}")
+    def get_chat(conversation_id: str):
+        """The conversation, and the job still writing it if there is one.
+
+        The active job is read BEFORE the transcript, and that order is the
+        whole point. Read the other way round, a turn that finishes between the
+        two reads gives the browser a half-written turn and no stream to replay
+        the rest from. This way the overlap is the harmless one: items the
+        browser skips because they carry the active job's id, and then draws
+        from the replay.
+
+        An id this process has never seen is a fresh conversation, not a 404 —
+        the store dies with the server and the browser keeps the id in
+        localStorage, so every restart would otherwise open on an error.
+        """
+        active = _active_chat(conversation_id)
+        convo = conversations.get_or_create(conversation_id)
+        return {**convo.to_json(), "active_job": active.to_json() if active else None}
+
+    @app.post("/api/chat/{conversation_id}/reset")
+    def reset_chat(conversation_id: str):
+        """Start again: the old conversation is dropped, not archived.
+
+        Refused while its turn is running, because the job thread would keep
+        spending into a conversation nothing can display any more — the run it
+        is in the middle of would finish with its held files unreachable.
+        """
+        if _active_chat(conversation_id) is not None:
+            raise HTTPException(409, "that chat has a turn running — stop it first")
+        return {"conversation_id": conversations.reset(conversation_id).id}
 
     # ─── review ───────────────────────────────────────────────────────────────
 

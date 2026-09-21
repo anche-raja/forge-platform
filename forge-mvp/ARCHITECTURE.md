@@ -132,10 +132,15 @@ is a static edge or a plain Python function, and no model ever names the next st
 Why it stays this way: orchestration decisions are mechanical, and this repo has already paid for
 handing a mechanical question to a model — asking one whether a file was in scope sent both early
 live runs to `MANUAL_REVIEW`, the second at a *passing* score of 80 — guarded now by
-[tests/test_scope.py](tests/test_scope.py) and recorded in `../CLAUDE.md`. A
-model-driven leader would reintroduce that failure mode at the layer where it is hardest to debug,
-and make the order of a run non-reproducible. The model's influence is deliberately bounded on both
-sides: it returns a score, code picks the branch, and `max_retries` caps the loop.
+[tests/test_scope.py](tests/test_scope.py) and recorded in `../CLAUDE.md`. The model's influence is
+deliberately bounded on both sides: it returns a score, code picks the branch, and `max_retries`
+caps the loop.
+
+There **is** a model-driven leader now — [§16](#16-the-leader-agent) — and this table is still
+accurate, because it is a table of what happens *inside a run*. The leader chooses which run to
+start and explains the result; every duty listed above stays the static edge or plain function it
+already was. The failure mode this section warns about is a model being asked whether a file is in
+scope, and that question is still never asked.
 
 One deliberate drift from the deck while we are here: it specifies **Sonnet 4.5** for the transform,
 leader and guardrails roles. This implementation uses **Opus 4.8** for transform and guardrails (§2);
@@ -436,26 +441,30 @@ CSS as the static page, so the decision widget is one DOM contract) · `POST /ap
 /api/testgen?output_dir=` (the last `generated-tests.json`) · `GET /api/feedback` · `GET
 /api/artifacts` · `GET /api/files?output_dir=&name=`.
 
-The page's steps are Project → **Intent** → Discover → Run → Review → Accept → **Tests** →
-Feedback → Artifacts. The Run step can tick *generate tests*, which chains §14 onto the same job.
+**The page is a chat, and only a chat.** The nine-step wizard (Project → Intent → Discover → Run
+→ Review → Accept → Tests → Feedback → Artifacts) was deleted: the owner counted the steps and
+asked for *"prompt instead of this project setup"*. `index.html` is one section, `app.js` is a
+helpers module with no router, and every step became a card in the transcript — `plan`,
+`evidence`, `estimate`, `confirm`, `review_file`, `acceptance`, `tests`, `feedback`, `artifacts`,
+`land`. `forge/leader/` holds the agent that draws them, and `tests/test_ui_api.py` pins the
+wizard's absence so it cannot come back a step at a time.
 
-The **Intent** step (§15) is the only one that costs money before a run: `POST /api/intent` is
-synchronous rather than a job, because one cheap call has nothing to stream and a job would take
-the single job slot away from an actual migration. It shows the plan, the packs it set aside with
-their reasons, each decision's provenance, and what it had to assume. Skipping it and using
-Discover is always free. The **Run** step then renders the resolved plan as a queue with done/next
-markers; clicking a row selects that pack rather than starting it, so nothing in this UI spends
-money on one click.
+The leader asks which folder the repository is in and calls `set_project`, so `POST /api/chat`
+takes an OPTIONAL `source_dir` and a turn with no project bound runs anyway — asking is the answer,
+and it cannot be asked from behind a 400. Intent still costs one model call and discovery is still
+free; the difference is that `resolve_intent` is a tool the leader chooses rather than a step the
+user clicks. `land_on_branch` is the one thing in FORGE that writes into the user's own repository:
+a new branch, one commit, never a push, and always a click.
 
-A step is three edits that must stay in sync — a nav anchor's `data-step`, a `#step-<name>` section
-and a `steps.<name>` handler — because the router matches them by convention. A half-wired step
-fails silently at runtime, so `tests/test_ui_api.py` asserts the three sets are equal and that the
-hand-written numbering is still `1..N`.
+The routes above all remain — the CLI and the tests use them and they are the service layer's HTTP
+face — but the browser now calls only `/api/chat`, `/api/runs/{id}/events`, `/api/review` (to ask
+which held entries are still staged) and `/api/files`.
 
-**Per-run decisions.** The Discover step offers every platform decision; the values go in the run
-body and reach the packs, the hold gate and the acceptance checks through
-`ForgeConfig.with_overrides({"decisions": ...})` — a deep-copied config, nested mappings merged, no
-temp YAML and no environment variable.
+**Per-run decisions.** The decisions the Discover step used to offer are the ones `resolve_intent`
+maps a plain-English request onto; the values reach the packs, the hold gate and the acceptance
+checks through `ForgeConfig.with_overrides({"decisions": ...})` — a deep-copied config, nested
+mappings merged, no temp YAML and no environment variable. `risk_ceiling` is the exception: it
+never comes from a model-authored sentence, because the leader may not lower the hold gate.
 
 **Boundaries.** Loopback only (there is no `--host`); no authentication because there is no network;
 `/api/files` refuses absolute names, `..` and symlink escapes (403) and serves nothing outside the
@@ -567,10 +576,10 @@ python migrate.py ./app --discover --intent "latest Java and Spring, stay on Str
 
 **It narrows; it never invents.** `resolve_packs` remains the only thing that decides what a
 repository contains — a pack with no `detect` match cannot be activated by any prompt, and a request
-for one is reported as `unsupported`. That is what keeps this on the right side of CLAUDE.md's *"do
-not add a model-driven leader"*: pack activation is mechanical and stays mechanical, while
-intent→decisions is the one genuinely linguistic step, replacing a human's YAML edit rather than the
-evidence engine. The order still comes from `resolve_order`, and the plan is persisted with
+for one is reported as `unsupported`. That is the limit CLAUDE.md's leader rule is really about:
+pack activation is mechanical and stays mechanical, while intent→decisions is the one genuinely
+linguistic step, replacing a human's YAML edit rather than the evidence engine. The leader in §16
+calls `resolve_intent` as a tool and inherits exactly this bound. The order still comes from `resolve_order`, and the plan is persisted with
 provenance, so it replays with zero model calls.
 
 **No source code reaches the model.** It is given `Profile.to_json()` — build system, Java level,

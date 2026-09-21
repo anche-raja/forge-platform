@@ -103,9 +103,13 @@ python migrate.py ./myapp --generate-tests-only --output-dir ./migrated --run-te
 ```
 
 **Local web UI.** `python migrate.py --ui` starts a FastAPI app on `127.0.0.1` (port 8765 or the
-next free one; `--port` to fix it, `--no-browser` to just print the URL) and opens a page that walks
-the same flow as steps: Project → Intent → Discover → Run → Review → Accept → Tests → Feedback →
-Artifacts. Intent is the one step that costs anything before a run; Discover is free. It is
+next free one; `--port` to fix it, `--no-browser` to just print the URL) and opens **a chat**. The
+nine-step wizard is gone — the owner counted the steps and asked for "prompt instead of this project
+setup" — so the leader agent (`forge/leader/`) asks which folder the repository is in, calls the
+tools, and every step the wizard had is now a card in the transcript: the plan, the evidence behind
+it, an estimate, review cards with diffs and approve/reject, acceptance, artifacts, and
+`land_on_branch` to put the result on a git branch. Discovery is still free; intent still costs one
+model call; anything over `leader.confirm_above_usd` parks a card and waits for a click. It is
 for one engineer on their own machine: loopback only, no auth, one job at a time (a second run is
 refused with 409 because the extract cache and boto3 clients are process-global). **The UI and the
 CLI call the same functions** — `forge/service.py` holds the one implementation of a run, and
@@ -137,7 +141,7 @@ pack and rule into `pack-feedback.md` so a repeated correction becomes a pack ed
 
 **Test generation** (`forge/testgen/`) writes the JUnit 5 + Mockito tests the legacy code never
 had, *after* the migration — `--generate-tests` on a run, `--generate-tests-only` over an existing
-output directory, the **Tests** step in the UI, or `service.generate_tests()`. It runs over the
+output directory, the `generate_tests` tool in the chat, or `service.generate_tests()`. It runs over the
 **output** tree, because "the new code" is what the migration wrote; chained onto a run it is
 narrowed to that run's `written_paths`. Graph: `testgen_pre → generate → static_checks → review →
 write_tests → run_tests`, with the same retry-with-feedback loop and the same two-model
@@ -256,13 +260,34 @@ reading and escalation in `route_reviewer` / `route_post` / `must_hold`, bookkee
 `update_state`. No node returns a node name; there is no `bind_tools`, `@tool`, `ToolNode` or
 `create_react_agent` anywhere in the tree.
 
-**Do not add a model-driven leader.** It is the package-scope mistake one layer up: a mechanical
-question handed to a model, this time at the layer where a wrong answer is hardest to debug. It would
-also make the order of a run non-reproducible and add a fifth model call per file. The reviewer's
-influence is bounded on both sides on purpose — it returns an integer, `route_reviewer` picks the
-branch, and `max_retries` caps the loop; the model's own `review_verdict` string is recorded and never
-routed on. The deck is the target end-state for *agents*, not for the control plane; §3 of
-`forge-mvp/ARCHITECTURE.md` carries the duty-by-duty mapping.
+**There is now a model-driven leader, and it is bounded rather than forbidden.** This rule used to
+read *"do not add a model-driven leader"*. The owner reversed it deliberately, and the reversal is
+recorded here rather than quietly dropped, because the objection it was protecting against is still
+the right objection — a mechanical question handed to a model, at the layer where a wrong answer is
+hardest to debug, with a run order that stops being reproducible.
+
+What changed is the scope of the question, not the answer to it. `forge/leader/` (ARCHITECTURE §16,
+LEADER.md) lets a model **sequence** work and talk to a human; it does not let a model decide what
+the repository contains. The split is enforced in code, not in the prompt:
+
+- **Pack activation stays mechanical.** `resolve_packs` over `detect` evidence. A pack the leader
+  names that discovery did not select never reaches `service` — the conversation's `selected_packs`
+  is the bound.
+- **`forge/graph.py` is untouched.** Everything inside a run — unit order, `route_reviewer`,
+  `max_retries`, `must_hold` — is the same code as before. The leader chooses *which run*, never
+  what happens in one.
+- **Money and mutation are a click.** Anything over `leader.confirm_above_usd` parks until a human
+  confirms; applying review decisions and `land_on_branch` are always confirmed, whatever the
+  estimate.
+- **`risk_ceiling` never comes from a prompt.** The toolbox overwrites it with the config's value
+  after every `resolve_intent`, because a model-authored intent sentence outranking config would
+  disable the hold gate.
+
+The reviewer's influence is bounded on both sides for the same reason — it returns an integer,
+`route_reviewer` picks the branch, `max_retries` caps the loop, and the model's own `review_verdict`
+string is recorded and never routed on. If a change would move one of the four limits above into the
+prompt, that is the mistake this rule is still about. §3 and §16 of `forge-mvp/ARCHITECTURE.md`
+carry the duty-by-duty mapping.
 
 **The intent layer is not an exception to that — check it against the rule before extending it.**
 `--discover --intent "..."` (`forge/intent/`, ARCHITECTURE §15, INTENT.md) does hand a model a
