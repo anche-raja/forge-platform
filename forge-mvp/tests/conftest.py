@@ -11,6 +11,8 @@ import contextlib
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, ToolMessage
+from langchain_core.messages.tool import tool_call_chunk
 
 from forge.config import ForgeConfig
 from forge.state import make_file_status
@@ -30,6 +32,13 @@ retry_threshold: 50
 max_retries: 2
 scope_package_prefix: ''
 complexity_block_threshold: 2000
+leader:
+  model: ''
+  max_steps: 8
+  max_tokens: 2048
+  confirm_above_usd: 1.0
+  unit_cost_usd: 0.07
+  history_messages: 40
 model_pricing:
   us.anthropic.claude-opus-4-8:
     input_per_1k: 0.005
@@ -235,3 +244,156 @@ CLEAN_JAVA = (
     "    public void handle(HttpServletRequest req) {}\n"
     "}\n"
 )
+
+
+# ─── the leader's model, scripted ─────────────────────────────────────────────
+
+def text_turn(text: str, *, pieces: int = 3, usage=(1000, 50), stop: str = "end_turn") -> dict:
+    """One scripted model turn that only talks."""
+    return {"text": text, "tool_calls": [], "pieces": pieces, "usage": usage, "stop": stop}
+
+
+def tool_turn(*calls, text: str = "", pieces: int = 2, usage=(1000, 50), stop: str = "tool_use") -> dict:
+    """One scripted model turn that calls tools.
+
+    Each call is ``{"name", "args"}`` — or ``{"name", "raw_args": "<junk>"}`` to
+    stream arguments that are not JSON, which is how a real model's malformed
+    call arrives (``invalid_tool_calls``, with ``tool_calls`` empty).
+    ``stop=None`` streams a reply that never says why it ended, which is what an
+    interrupted stream looks like.
+    """
+    return {"text": text, "tool_calls": [dict(c) for c in calls], "pieces": pieces,
+            "usage": usage, "stop": stop}
+
+
+def _split(text: str, pieces: int):
+    if not text:
+        return []
+    step = max(1, -(-len(text) // max(1, pieces)))
+    return [text[i:i + step] for i in range(0, len(text), step)]
+
+
+def assert_leader_protocol(messages):
+    """Refuse what Bedrock would refuse, where a test can still see it.
+
+    langchain converts an ``AIMessage`` carrying two ``toolUse`` blocks and one
+    matching ``toolResult`` without a murmur; the 400 arrives from Bedrock, on a
+    real call, in front of a user. So the fake model checks the two invariants
+    the leader loop promises — the system block is rebuilt per call and never
+    stored, and every tool call is answered — rather than letting a history test
+    pass on a request that could never be sent.
+    """
+    assert messages, "the leader called the model with no messages at all"
+    assert isinstance(messages[0], SystemMessage), (
+        f"the first message must be the system prompt + state block, got {type(messages[0]).__name__}")
+    strays = [i for i, m in enumerate(messages[1:], 1) if isinstance(m, SystemMessage)]
+    assert not strays, f"the state block was stored in history at {strays}; it belongs in messages[0] only"
+
+    asked = {}
+    for m in messages:
+        if isinstance(m, AIMessage):
+            for call in m.tool_calls or []:
+                asked[call.get("id")] = call.get("name")
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    unanswered = sorted(f"{name}({cid})" for cid, name in asked.items() if cid not in answered)
+    assert not unanswered, f"tool calls with no ToolMessage: {', '.join(unanswered)} — Bedrock rejects that turn"
+    orphans = sorted(m.tool_call_id for m in messages
+                     if isinstance(m, ToolMessage) and m.tool_call_id not in asked)
+    assert not orphans, f"tool results with no tool call: {', '.join(orphans)} — Bedrock rejects that turn"
+    return messages
+
+
+class FakeStreamingLLM:
+    """A scripted ``ChatBedrockConverse`` that yields real ``AIMessageChunk``s.
+
+    A fake that returns a finished ``AIMessage`` makes every history test
+    vacuous, because the machinery a truncated tool call slips through is the
+    accumulation itself: ``+`` merges ``tool_call_chunks`` by index and
+    ``parse_partial_json`` silently repairs half-streamed arguments, so
+    ``{"pack": "javax-to-jakarta", "dry_r`` accumulates to a *valid-looking*
+    call with ``dry_run`` gone. The chunk sequence below is the one
+    ``_parse_stream_event`` produces (llm.md §2), so the leader's admission
+    rules are exercised against the thing they exist to catch.
+
+    ``on_chunk(index, chunk)`` runs after the consumer has processed each chunk
+    — that is where a test presses Stop mid-stream.
+    """
+
+    def __init__(self, turns, *, on_chunk=None):
+        self.turns = list(turns)
+        self.calls = []          # the message list of every model call, snapshotted
+        self.bound_tools = None
+        self.bound_kwargs = {}
+        self.on_chunk = on_chunk
+        # Bedrock mints a fresh `toolUse` id for every call in a conversation,
+        # never one per turn. A fake that restarted at "tu_1" each turn handed
+        # the browser three tool rows under one id — chat.js keys its live rows
+        # on `tool_id`, so the second run's progress painted over the first
+        # row's — and hid that from every test here. The counter runs for the
+        # life of the fake so the scripts exercise the ids reality sends.
+        self._minted = 0
+
+    def bind_tools(self, tools, **kwargs):
+        self.bound_tools = list(tools)
+        self.bound_kwargs = dict(kwargs)
+        return self
+
+    def stream(self, messages, config=None, **kwargs):
+        # The loop appends to the same history list while it runs, so the
+        # snapshot has to be taken here or every recorded call looks identical.
+        messages = list(messages)
+        self.calls.append(messages)
+        assert_leader_protocol(messages)
+        if not self.turns:
+            raise AssertionError(
+                f"FakeStreamingLLM: the model was called {len(self.calls)} times; the script has "
+                "no turn left. Either the loop did not stop, or the script is short.")
+        turn = self.turns.pop(0)
+        if isinstance(turn, BaseException):
+            raise turn
+        for i, chunk in enumerate(self._chunks(turn)):
+            yield chunk
+            if self.on_chunk is not None:
+                self.on_chunk(i, chunk)
+
+    def invoke(self, messages, config=None, **kwargs):
+        acc = None
+        for chunk in self.stream(messages, config, **kwargs):
+            acc = chunk if acc is None else acc + chunk
+        return acc
+
+    def _chunks(self, turn):
+        pieces = int(turn.get("pieces") or 1)
+        index = 0
+        yield AIMessageChunk(content=[])                                     # messageStart
+        text = str(turn.get("text") or "")
+        if text:
+            for piece in _split(text, pieces):
+                yield AIMessageChunk(content=[{"type": "text", "text": piece, "index": index}])
+            yield AIMessageChunk(content=[])                                 # contentBlockStop
+            index += 1
+        for call in turn.get("tool_calls") or []:
+            self._minted += 1
+            call_id = str(call.get("id") or f"tu_{self._minted}")
+            name = str(call.get("name") or "")
+            yield AIMessageChunk(
+                content=[{"type": "tool_use", "name": name, "id": call_id, "index": index}],
+                tool_call_chunks=[tool_call_chunk(name=name, id=call_id, args=None, index=index)])
+            raw = call.get("raw_args")
+            raw = raw if raw is not None else json.dumps(call.get("args") or {})
+            for piece in _split(raw, pieces):
+                yield AIMessageChunk(
+                    content=[{"type": "tool_use", "input": piece, "id": None, "index": index}],
+                    tool_call_chunks=[tool_call_chunk(name=None, id=None, args=piece, index=index)])
+            yield AIMessageChunk(content=[])
+            index += 1
+        stop = turn.get("stop")
+        if stop is not None:
+            yield AIMessageChunk(content="", response_metadata={"stopReason": stop})   # messageStop
+        usage = turn.get("usage")
+        if usage:
+            tokens_in, tokens_out = usage
+            yield AIMessageChunk(content="", usage_metadata={
+                "input_tokens": tokens_in, "output_tokens": tokens_out,
+                "total_tokens": tokens_in + tokens_out})                     # metadata
+        yield AIMessageChunk(content=[], chunk_position="last")

@@ -5,225 +5,99 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FORGE</title>
 <link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/chat.css">
 </head>
-<body>
-<header class="top">
-  <div class="brand">FORGE <span class="sub">J2EE → Java 21 · Jakarta EE 10 · Liberty</span></div>
-  <div id="jobbar" class="jobbar" hidden></div>
-  <div class="cwd" id="cwd" title="Relative paths resolve against this directory"></div>
-</header>
+<!-- The step attribute below is written here rather than by a router: the nine
+     wizard steps and route() are gone, so nothing sets it at runtime any more,
+     but every rule in chat.css is scoped to it — see the note at the top of that
+     file for why that scoping is specificity and not decoration. -->
+<body data-step="chat">
 
+<!-- The rail. Thin and quiet: who you are talking to, how to start again, and
+     at the bottom what this conversation has cost, how many packs have run and
+     which repository is bound. Nothing here navigates — there is nowhere to go.
+     #jobbar and #cwd stay because health() in app.js writes to them on every
+     poll, and #cwd doubles as the project line once the leader binds a folder. -->
 <nav class="steps" id="nav">
-  <a href="#/project" data-step="project"><span class="n">1</span>Project</a>
-  <a href="#/intent" data-step="intent"><span class="n">2</span>Intent</a>
-  <a href="#/discover" data-step="discover"><span class="n">3</span>Discover</a>
-  <a href="#/run" data-step="run"><span class="n">4</span>Run</a>
-  <a href="#/review" data-step="review"><span class="n">5</span>Review</a>
-  <a href="#/accept" data-step="accept"><span class="n">6</span>Accept</a>
-  <a href="#/tests" data-step="tests"><span class="n">7</span>Tests</a>
-  <a href="#/feedback" data-step="feedback"><span class="n">8</span>Feedback</a>
-  <a href="#/artifacts" data-step="artifacts"><span class="n">9</span>Artifacts</a>
+  <div class="c-railtop">
+    <div class="brand">
+      <span class="c-mark" aria-hidden="true">&#10022;</span>
+      <span class="c-name">FORGE<span class="sub">J2EE &rarr; Java 21 &middot; Jakarta EE 10 &middot; Liberty</span></span>
+    </div>
+    <!-- aria-label and title are on the BUTTON because .c-lbl goes display:none
+         below 900px: that takes the only real text out of the accessibility
+         tree, and the remaining "+" is aria-hidden. Without these the icon
+         strip has a button with no name and no tooltip. -->
+    <button type="button" id="c-new" class="c-newchat" aria-label="New chat" title="New chat">
+      <span class="c-plus" aria-hidden="true">+</span><span class="c-lbl">New chat</span>
+    </button>
+  </div>
+  <div class="c-railfoot">
+    <div class="c-spend" id="c-spend" hidden></div>
+    <div class="c-packs" id="c-packs" hidden></div>
+    <div id="jobbar" class="jobbar" hidden></div>
+    <div class="c-pathlab" id="cwd-lab" hidden></div>
+    <div class="cwd c-path" id="cwd" title="Relative paths resolve against this directory"></div>
+  </div>
 </nav>
 
 <main id="main">
   <div id="flash" class="flash" hidden></div>
 
-  <section id="step-project" class="step" hidden>
-    <h1>Project</h1>
-    <p class="lead">Which repository to migrate, where the output goes, and which <code>agents.yaml</code> to use.
-      Paths may be relative to the directory the UI was started from.</p>
-    <form id="project-form" class="form" autocomplete="off">
-      <label>Source directory <input id="p-source" name="source_dir" placeholder="/path/to/your/webapp" required></label>
-      <label>Output directory <input id="p-output" name="output_dir" placeholder="./migrated"></label>
-      <label>Config (agents.yaml) <input id="p-config" name="config" placeholder="agents.yaml"></label>
-      <div class="row">
-        <button type="submit" class="primary">Save and check</button>
-        <span id="p-status" class="hint"></span>
-      </div>
-    </form>
-    <div id="p-summary" class="card" hidden></div>
-  </section>
-
-  <section id="step-intent" class="step" hidden>
-    <h1>Intent</h1>
-    <p class="lead">Say what you want migrated, in your own words. FORGE narrows the packs the evidence already
-      found and fills in the decisions to match. It can never add a pack this repository shows no evidence for —
-      discovery stays the only thing that decides what is here.</p>
-    <form id="intent-form" class="form" autocomplete="off">
-      <label>What do you want migrated?
-        <textarea id="i-text" rows="3" placeholder="migrate to the latest Java and Spring, stay on Struts, ignore the db folder as these are sqls"></textarea>
-      </label>
-      <div class="row">
-        <button id="i-run" class="primary" type="submit">Resolve plan</button>
-        <span id="i-status" class="hint"></span>
-      </div>
-      <p class="hint">One model call, billed to your account — cents, not dollars. Needs <span class="mono">agents.yaml</span>.
-        Skip this step and use <a href="#/discover">Discover</a> for the evidence-only plan, which costs nothing.</p>
-    </form>
-
-    <div id="i-result" hidden>
-      <div class="totals" id="i-totals"></div>
-      <div class="cols">
-        <div>
-          <h2>The plan</h2>
-          <table class="tbl" id="i-packs"></table>
-          <h2>Decisions</h2>
-          <p class="hint">Where each value came from. Edit any of them on <a href="#/discover">Discover</a>.</p>
-          <table class="tbl" id="i-decisions"></table>
+  <section id="step-chat" class="step">
+    <!-- .c-pane is the positioning context for the "new messages" pill, so that
+         the pill is absolute inside the transcript and can never rise over the
+         composer the way a position:fixed one would. -->
+    <div class="c-pane">
+      <div id="c-transcript">
+        <div class="c-col">
+          <div id="c-empty">
+            <span class="c-mark c-markbig" aria-hidden="true">&#10022;</span>
+            <h1>What should FORGE do next?</h1>
+            <p class="lead">Say where the repository is and what you want upgraded. Nothing that costs
+              money runs without your click.</p>
+            <div class="c-suggest" id="c-chips"></div>
+          </div>
+          <div id="c-items"></div>
         </div>
-        <div>
-          <h2>Read this before you run</h2>
-          <div id="i-notes"></div>
+
+        <!-- Sticky inside the scroller rather than fixed, so it rises above the
+             conversation and still never covers the composer. -->
+        <div id="c-applybar" class="applybar" hidden>
+          <div class="c-barcol">
+            <span class="c-applyn" id="c-apply-n">0 decisions ready</span>
+            <button id="c-apply" class="primary" type="button">Apply</button>
+            <button id="c-clear" type="button">Clear</button>
+            <span class="hint" id="c-apply-hint"></span>
+          </div>
         </div>
       </div>
-      <div class="row"><a class="button primary" href="#/run">Next: Run →</a>
-        <a class="button" href="#/discover">See the full evidence</a></div>
-    </div>
-  </section>
 
-  <section id="step-discover" class="step" hidden>
-    <h1>Discover</h1>
-    <p class="lead">Profile the repository without a model call: build system, Java level, resolved framework
-      versions, descriptors — and which packs apply, on what evidence.</p>
-    <div class="row">
-      <button id="d-run" class="primary">Discover</button>
-      <span id="d-status" class="hint"></span>
+      <button type="button" id="c-jump" class="c-jump" hidden>&darr; New messages</button>
     </div>
-    <div id="d-result" hidden>
-      <div class="cols">
-        <div>
-          <h2>Packs that apply</h2>
-          <table class="tbl" id="d-packs"></table>
-          <h2>Run order</h2>
-          <ol class="chips" id="d-order"></ol>
-          <p class="hint">Runnable packs form the plan; the Run step suggests the next one. Blocked packs need a
-            context extractor that is not built yet; detect-only packs are recognised but not migrated.</p>
-        </div>
-        <div>
-          <h2>Decisions</h2>
-          <p class="hint">Platform decisions for this project. They reach the packs, the hold gate and the
-            acceptance checks on every run.</p>
-          <div id="d-decisions" class="form"></div>
-        </div>
+
+    <div id="c-composer">
+      <div class="c-col">
+        <div id="c-notice" hidden></div>
+        <form id="c-form" autocomplete="off">
+          <!-- One control: the border, the focus ring and the send button all
+               belong to .c-field, and the textarea inside it is bare. -->
+          <div class="c-field">
+            <textarea id="c-input" rows="1" placeholder="Message FORGE&hellip;"></textarea>
+            <button type="submit" id="c-send" class="c-round" aria-label="Send" title="Send">
+              <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true" focusable="false"><path d="M10 15.5V5.2M5.6 9.6 10 5.2l4.4 4.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button type="button" id="c-stop" class="c-round c-stopper" aria-label="Stop this turn" title="Stop this turn" hidden>
+              <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true" focusable="false"><rect x="4" y="4" width="12" height="12" rx="2.5" fill="currentColor"/></svg>
+            </button>
+          </div>
+        </form>
+        <p class="hint" id="c-foot">Enter to send &middot; Shift+Enter for a new line</p>
       </div>
-      <details><summary>Discovery summary (as the CLI prints it)</summary><pre id="d-summary"></pre></details>
-      <div class="row"><a class="button" href="#/run">Next: Run →</a></div>
     </div>
-  </section>
-
-  <section id="step-run" class="step" hidden>
-    <h1>Run</h1>
-    <p class="lead">One pack over the project. Every file goes through pre-flight guardrails, transform, cross-model
-      review, post guardrails, the hold gate and the build check; risky units are held for you.</p>
-    <div id="r-plan-wrap" hidden>
-      <h2>Your plan</h2>
-      <p class="hint">In dependency order. One pack at a time — the gap between them is where you review what the
-        last one did, which is the point.</p>
-      <ol id="r-plan" class="plan"></ol>
-    </div>
-    <form id="run-form" class="form" autocomplete="off">
-      <label>Pack <select id="r-phase"></select></label>
-      <div class="checks">
-        <label><input type="checkbox" id="r-dry"> Dry run — write nothing, list every transform for review</label>
-        <label><input type="checkbox" id="r-acc"> Run acceptance checks afterwards</label>
-        <label><input type="checkbox" id="r-accbuild"> …including the build check (needs the toolchain; slow)</label>
-        <label><input type="checkbox" id="r-tests"> Generate JUnit 5 tests for the files this run writes</label>
-        <label><input type="checkbox" id="r-runtests"> …and run them, holding the ones that fail (needs the toolchain; slow)</label>
-        <label><input type="checkbox" id="r-nometrics"> Skip CloudWatch metrics</label>
-      </div>
-      <div class="row">
-        <button type="submit" class="primary" id="r-start">Start</button>
-        <button type="button" id="r-cancel" hidden>Cancel after the current file</button>
-        <span id="r-status" class="hint"></span>
-      </div>
-    </form>
-    <div id="r-live" hidden>
-      <div class="progress"><div id="r-bar"></div></div>
-      <div id="r-head" class="runhead"></div>
-      <ol id="r-files" class="files"></ol>
-      <div id="r-done" class="card" hidden></div>
-      <details id="r-log-wrap"><summary>Event log</summary><pre id="r-log"></pre></details>
-    </div>
-    <details id="r-history-wrap"><summary>Earlier jobs this session</summary><table class="tbl" id="r-history"></table></details>
-  </section>
-
-  <section id="step-review" class="step" hidden>
-    <h1>Review</h1>
-    <p class="lead">What the pipeline could not settle on its own. Approve writes the staged file; reject discards
-      it with your reason; retry re-runs the unit with your note in its prompt.</p>
-    <div class="row">
-      <button id="v-reload">Reload queue</button>
-      <span id="v-status" class="hint"></span>
-      <a id="v-static" class="hint" target="_blank" rel="noopener" hidden>open the static review page</a>
-    </div>
-    <div id="v-meta" class="card" hidden></div>
-    <iframe id="v-frame" class="reviewframe" title="Review entries" hidden></iframe>
-    <div id="v-footer" class="applybar" hidden>
-      <button id="v-apply" class="primary">Apply 0 decisions</button>
-      <label><input type="checkbox" id="v-dry"> dry run</label>
-      <span id="v-apply-status" class="hint"></span>
-    </div>
-    <table class="tbl" id="v-outcomes" hidden></table>
-  </section>
-
-  <section id="step-accept" class="step" hidden>
-    <h1>Accept</h1>
-    <p class="lead">A pack's acceptance checks over the merged tree — the source with the output overlaid. The verdict
-      is INCOMPLETE, never PASS, while any check was skipped.</p>
-    <form id="acc-form" class="form" autocomplete="off">
-      <label>Pack <select id="a-phase"></select></label>
-      <label><input type="checkbox" id="a-build"> Run the build check too (this blocks the page while Maven runs)</label>
-      <div class="row">
-        <button type="submit" class="primary">Run acceptance</button>
-        <span id="a-status" class="hint"></span>
-      </div>
-    </form>
-    <div id="a-result" hidden>
-      <div id="a-verdict" class="verdict"></div>
-      <table class="tbl" id="a-table"></table>
-    </div>
-  </section>
-
-  <section id="step-tests" class="step" hidden>
-    <h1>Tests</h1>
-    <p class="lead">JUnit 5 + Mockito tests for the migrated classes in the output directory. Which classes is
-      decided in code, and so is the destination; a test that fails a mechanical check, scores below the
-      threshold, or runs and fails is staged instead of written — it never enters the build.</p>
-    <form id="tg-form" class="form" autocomplete="off">
-      <div class="checks">
-        <label><input type="checkbox" id="tg-run"> Run each generated test and hold the ones that fail (needs the toolchain; slow)</label>
-        <label><input type="checkbox" id="tg-dry"> Dry run — generate and review, write nothing</label>
-      </div>
-      <div class="row">
-        <button type="submit" class="primary" id="tg-start">Generate tests</button>
-        <button type="button" id="tg-cancel" hidden>Cancel after the current class</button>
-        <span id="tg-status" class="hint"></span>
-      </div>
-    </form>
-    <div id="tg-live" hidden>
-      <div class="progress"><div id="tg-bar"></div></div>
-      <ol id="tg-units" class="files"></ol>
-    </div>
-    <div id="tg-done" class="card" hidden></div>
-    <table class="tbl" id="tg-table" hidden></table>
-    <details id="tg-skipped-wrap" hidden><summary>Classes skipped, and why</summary><table class="tbl" id="tg-skipped"></table></details>
-  </section>
-
-  <section id="step-feedback" class="step" hidden>
-    <h1>Feedback</h1>
-    <p class="lead">Reviewers' notes grouped by pack and rule. A correction that repeats across files is a pack edit
-      waiting to happen — the path to edit is shown under each pack.</p>
-    <div class="row"><button id="f-reload">Reload</button><span id="f-status" class="hint"></span></div>
-    <div id="f-result"></div>
-  </section>
-
-  <section id="step-artifacts" class="step" hidden>
-    <h1>Artifacts</h1>
-    <p class="lead">Everything a run leaves in the output directory. Each opens in a new tab.</p>
-    <div class="row"><button id="x-reload">Reload</button><span id="x-status" class="hint"></span></div>
-    <table class="tbl" id="x-table"></table>
   </section>
 </main>
+<script src="/static/chat.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

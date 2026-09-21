@@ -58,6 +58,34 @@ complexity_block_threshold: 2000
 intent:
   model: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
+# ─── Leader (optional; only read by the chat surface in the web UI) ──────────
+# The conductor for the *conversation*, not for a run. It picks which wrapper
+# around forge/service.py to call next and when to stop and ask; it never
+# decides which packs exist, which files a pack takes, or what needs a human.
+# `model` defaults to transform_model. Whatever you name here must also appear
+# in model_pricing or its cost silently accrues as $0.00.
+#
+# confirm_above_usd is the dial that decides how much authority it actually
+# has: a tool whose estimated spend exceeds it does not run, it comes back as a
+# card for you to click. 0 means "never ask" — a deliberate choice, and not the
+# default, because one ambiguous sentence should not be able to start a $100
+# run. Applying review decisions is confirmed whatever this says: an approval is
+# your signature on someone else's code.
+#
+# max_steps caps the tool calls in one turn, so a confused loop costs a turn
+# rather than a budget; history_messages caps what is re-sent on every call,
+# which is the other half of the same bill.
+leader:
+  model: ""
+  max_steps: 8
+  max_tokens: 2048
+  confirm_above_usd: 1.0
+  # The documented average cost of one migrated file (GUARDRAILS.md §8): three
+  # model calls, about $0.07. Estimates only — what a run actually cost comes
+  # from `estimated_cost_usd`, accrued per real call.
+  unit_cost_usd: 0.07
+  history_messages: 40
+
 # ─── Cost model (drives estimated_cost_usd + the FORGE-CostSpike alarm) ──────
 # USD per 1,000 tokens. Update when Bedrock pricing changes — no code change needed.
 model_pricing:

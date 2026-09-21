@@ -229,7 +229,8 @@ python migrate.py /path/to/app --generate-tests-only --output-dir ./migrated --r
 
 A typical project: `--discover` → run the packs in the order the profile lists (each pack is one
 `--phase`) → review what was held → `--acceptance` → `--generate-tests`. From the web UI the same
-sequence is the nine numbered steps.
+sequence is a conversation: the leader asks which folder the repository is in, runs the same
+packs a card at a time, and `land_on_branch` puts the result on a git branch of your own repo.
 
 `--intent` sits on top of `--discover`: it maps a plain-English request onto the `decisions` a
 human would otherwise hand-edit into `forge-profile.yaml`, plus a scope and a *subset* of the packs

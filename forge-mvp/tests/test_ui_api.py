@@ -425,23 +425,128 @@ def test_the_intent_plan_is_a_listed_artifact(client, project, tmp_path):
     assert "stack-profile.json" in names
 
 
-# ─── the three-edit contract for a step ──────────────────────────────────────
+# ─── the page is the chat, and nothing else ──────────────────────────────────
 
-def test_every_nav_step_has_a_section_and_a_render_function():
-    """The router matches nav `data-step` to `#step-<name>` to `steps.<name>` by
-    convention, so a half-wired step fails silently at runtime, not at import."""
+def test_the_page_is_chat_only_and_the_helpers_it_needs_exist():
+    """The nine wizard steps are gone, and this is what stops them coming back.
+
+    The owner opened the UI, counted nine numbered steps plus a Project setup
+    form and asked "do i really need all these?" — then chose to delete them.
+    There is no router left to keep in sync, so the failure mode this test used
+    to guard (a nav entry with no section, silent at runtime) is replaced by a
+    sharper one: chat.js reaching through ``window.FORGE`` for a helper app.js
+    no longer exposes. That is ``undefined is not a function`` on a click, in a
+    file with no build step to catch it and nothing raised where a test looks.
+    """
     import re
+
+    from forge.leader import CHAT_EVENT_TYPES
 
     static = Path(app_module.__file__).parent / "static"
     html = (static / "index.html").read_text(encoding="utf-8")
     js = (static / "app.js").read_text(encoding="utf-8")
+    chat_js = (static / "chat.js").read_text(encoding="utf-8")
 
-    nav = re.findall(r'data-step="([a-z]+)"', html)
-    sections = set(re.findall(r'id="step-([a-z]+)"', html))
-    handlers = set(re.findall(r'steps\.([a-z]+)\s*=\s*\{', js))
+    # One view. A `data-step` or a `#step-*` for anything but chat is a wizard
+    # step that survived, and a hidden one is a step that is merely out of sight.
+    assert set(re.findall(r'data-step="([a-z]+)"', html)) <= {"chat"}
+    assert set(re.findall(r'id="step-([a-z]+)"', html)) == {"chat"}
+    # The rail element survives — it holds the mark, New chat and the spend
+    # meter — so what is pinned is the wizard itself: nine numbered markers and
+    # the hash links that went with them.
+    assert re.findall(r'<span class="n">', html) == [], "the numbered step markers are back"
+    section = re.search(r'<[a-z]+ id="step-chat"[^>]*>', html)
+    assert section and " hidden" not in section.group(0), (
+        "the only view on the page cannot start hidden — nothing is left to reveal it")
+    assert 'href="#/' not in html, "a hash link with no router behind it is a dead link"
 
-    assert "intent" in nav
-    assert set(nav) == sections == handlers, (
-        f"nav={sorted(set(nav))} sections={sorted(sections)} handlers={sorted(handlers)}")
-    # The visible numbering is hand-written; a renumber must stay 1..N in order.
-    assert re.findall(r'<span class="n">(\d+)</span>', html) == [str(i) for i in range(1, len(nav) + 1)]
+    # app.js is a helpers module now: no step handlers, no router, no project form.
+    assert re.findall(r'steps\.([a-z]+)\s*=\s*\{', js) == [], "app.js still carries step handlers"
+    assert re.search(r'\bsteps\s*=\s*\{', js) is None, "the steps handler object is still there"
+    assert re.search(r'\bfunction\s+needProject\b', js) is None
+
+    # chat.js reaches the rest of the page through exactly one object, resolved
+    # at call time. A name it calls and app.js does not expose fails on a click.
+    block = re.search(r'window\.FORGE\s*=\s*\{(.*?)\};', js, re.S)
+    assert block, "app.js no longer exposes window.FORGE, which is all chat.js has"
+    exposed = set(re.findall(r'(?:^|[{,])\s*([A-Za-z_$][\w$]*)\s*:', block.group(1), re.M))
+    wanted = {"S", "save", "api", "follow", "esc", "tag", "flash", "fileUrl", "health"}
+    assert wanted <= exposed, f"window.FORGE no longer exposes {sorted(wanted - exposed)}"
+    used = set(re.findall(r'FORGE\.([A-Za-z_$][\w$]*)', chat_js))
+    assert used <= exposed, f"chat.js calls FORGE.{sorted(used - exposed)}, which app.js does not expose"
+    assert "steps" not in used, "chat.js is the page; there is nothing left to route to"
+
+    assert re.search(r'window\.ForgeChat\s*=', chat_js) and "render" in chat_js
+    assert 'src="/static/chat.js"' in html and 'href="/static/chat.css"' in html
+
+    # Every element chat.js looks up has to be on the page it renders into.
+    for required in ("c-transcript", "c-composer"):
+        assert f'id="{required}"' in html, f"index.html has no #{required} for chat.js to render into"
+    ids = set(re.findall(r"(?:getElementById|\$)\(\s*'(c-[a-z0-9-]+)'\s*\)", chat_js))
+    absent = sorted(i for i in ids if f'id="{i}"' not in html)
+    assert not absent, f"chat.js looks up element(s) index.html does not have: {absent}"
+
+    # EventSource only delivers the event names a listener was registered for,
+    # so a chat event missing from this array is dropped in silence.
+    listed = re.search(r'EVENT_TYPES\s*=\s*\[(.*?)\]', js, re.S).group(1)
+    for name in CHAT_EVENT_TYPES:
+        assert f"'{name}'" in listed, f"app.js never listens for the chat event {name}"
+
+
+def test_every_card_the_leader_can_emit_has_a_renderer_and_no_renderer_is_orphaned():
+    """The other half of the cross-file contract, and the half nobody owns.
+
+    ``cards.py`` and ``chat.js`` were written by different hands against the
+    same list of card kinds. A kind the backend emits and the browser does not
+    know renders as "This page does not know that card" — in the middle of a
+    paid run, on the one surface there is. A renderer for a kind nothing emits
+    is the opposite tell: a deleted card whose branch stayed behind, like the
+    ``setup`` card that pointed at the Project form.
+    """
+    import re
+
+    from forge.leader import cards, tools
+
+    static = Path(app_module.__file__).parent / "static"
+    chat_js = (static / "chat.js").read_text(encoding="utf-8")
+
+    emitted = set()
+    for module in (cards, tools):
+        emitted |= set(re.findall(r'"kind":\s*"([a-z_]+)"',
+                                  Path(module.__file__).read_text(encoding="utf-8")))
+    rendered = set(re.findall(r"kind === '([a-z_]+)'", chat_js))
+
+    assert emitted, "no card kinds found — the regex, not the code, is what broke"
+    assert emitted <= rendered, f"chat.js cannot draw {sorted(emitted - rendered)}"
+    assert rendered <= emitted, f"chat.js draws {sorted(rendered - emitted)}, which nothing emits"
+    # The three the wizard's deletion added, named so a silent removal fails here.
+    assert {"evidence", "artifacts", "land"} <= emitted
+
+
+def test_the_static_pages_only_read_profile_fields_the_profiler_emits(project):
+    """A field name that does not exist renders as "?" and nobody notices.
+
+    The chat's plan card prints the build system and the source level out of
+    ``discover()["profile"]``, which is ``Profile.to_json()``. JavaScript reads
+    it by attribute, so a wrong name is not an error — it is ``undefined``
+    falling through to the ``|| '?'`` default, and "Java ?" on a Maven 8 project
+    looks exactly like a repository the profiler could not read. app.js and
+    chat.js once carried the same wrong name (``java_version``) and so agreed
+    with each other perfectly; this pins them to the schema instead.
+
+    app.js dropped out of the loop with increment 2: the Discover step that read
+    the profile there is gone, and chat.js is the only page left that prints it.
+    """
+    import re
+
+    from forge.discover import build_profile
+
+    known = set(build_profile(str(project)).to_json())
+    assert "java_level" in known and "build_system" in known, sorted(known)
+
+    static = Path(app_module.__file__).parent / "static"
+    for name in ("chat.js",):
+        js = (static / name).read_text(encoding="utf-8")
+        read = set(re.findall(r"\bprofile\.([a-z_]+)", js))
+        assert read, f"{name} no longer reads the profile at all — is this test still pinning anything?"
+        assert read <= known, f"{name} reads profile field(s) the profiler never emits: {sorted(read - known)}"
