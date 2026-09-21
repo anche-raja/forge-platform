@@ -245,8 +245,18 @@ def packs() -> List[dict]:
     } for p in (registry[i] for i in registry.order)]
 
 
-def discover(source_dir: str, output_dir: str, config: Optional[ForgeConfig] = None) -> dict:
-    """Profile a repository and say which packs apply, on what evidence. No model, no AWS."""
+def discover(source_dir: str, output_dir: str, config: Optional[ForgeConfig] = None,
+             intent: Optional[str] = None) -> dict:
+    """Profile a repository and say which packs apply, on what evidence.
+
+    No model and no AWS when ``intent`` is absent — the deterministic path is
+    untouched, and a caller that passes nothing gets exactly what it always did.
+
+    With ``intent``, one model call maps the sentence onto decisions, scope and
+    a subset of the packs the evidence *already* allows. It can narrow that set
+    and never extend it; the order still comes from ``resolve_order``. See
+    :mod:`forge.intent`.
+    """
     from forge.discover import build_profile, render_summary, resolve_packs, write_outputs
     from forge.discover.emit import DEFAULT_DECISIONS
     from forge.discover.resolve import content_patterns
@@ -254,28 +264,69 @@ def discover(source_dir: str, output_dir: str, config: Optional[ForgeConfig] = N
     from forge.utils.file_scanner import runnable_phases
 
     registry = load_packs()
+    config_decisions = dict(config.get("decisions") or {}) if config is not None else {}
     decisions = dict(DEFAULT_DECISIONS)
-    if config is not None:
-        decisions.update(config.get("decisions") or {})
+    decisions.update(config_decisions)
 
     source_dir = str(Path(source_dir).resolve())
     pack_list = list(registry.values())
     profile = build_profile(source_dir, content_patterns=content_patterns(pack_list), decisions=decisions)
-    activations = resolve_packs(profile, pack_list)
     runnable = set(runnable_phases())
-    for a in activations:
-        a.runnable = a.pack_id in runnable
-    order = registry.resolve_order([a.pack_id for a in activations])
-    json_path, yaml_path = write_outputs(profile, activations, order, decisions, output_dir)
-    return {
+
+    def activate() -> list:
+        acts = resolve_packs(profile, pack_list)
+        for a in acts:
+            a.runnable = a.pack_id in runnable
+        return acts
+
+    def as_json(acts) -> list:
+        return [{"pack": a.pack_id, "complete": a.complete, "runnable": a.runnable, "evidence": a.evidence}
+                for a in acts]
+
+    activations = activate()
+    plan = None
+
+    if intent:
+        from forge.intent.agent import IntentAgent
+        from forge.intent.resolve import reconcile
+
+        if config is None:
+            raise ValueError("--intent needs agents.yaml: it makes one model call")
+
+        agent = IntentAgent(config)
+        proposal = agent.propose(intent, profile.to_json(), as_json(activations), decisions)
+
+        def resolved(acts):
+            return reconcile(proposal, as_json(acts), registry, defaults=DEFAULT_DECISIONS,
+                             config_decisions=config_decisions, intent=intent)
+
+        plan = resolved(activations)
+        # A decision from the prompt can change which packs a `decision_equals`
+        # gate admits — ask for Tomcat and the Liberty pack must stop firing.
+        # resolve_packs is pure over profile.decisions, so re-deriving costs
+        # nothing and needs no second model call.
+        if plan.decisions != decisions:
+            decisions = dict(plan.decisions)
+            profile.decisions = dict(decisions)
+            activations = activate()
+            plan = resolved(activations)
+        plan.bedrock_calls = agent.bedrock_calls
+        plan.cost_usd = agent.cost_usd
+
+    order = plan.packs if plan else registry.resolve_order([a.pack_id for a in activations])
+    json_path, yaml_path = write_outputs(profile, activations, order, decisions, output_dir, plan=plan)
+    result = {
         "summary": render_summary(profile, activations, order),
         "profile": profile.to_json(),
-        "activations": [{"pack": a.pack_id, "complete": a.complete, "runnable": a.runnable, "evidence": a.evidence}
-                        for a in activations],
+        "activations": as_json(activations),
         "order": list(order),
         "decisions": decisions,
         "paths": {"json": str(json_path), "yaml": str(yaml_path)},
     }
+    if plan is not None:
+        result["intent"] = plan.to_json()
+        result["paths"]["intent"] = str(Path(output_dir) / "intent-plan.json")
+    return result
 
 
 # ─── the migration run ────────────────────────────────────────────────────────
@@ -327,7 +378,8 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         # Scope filtering happens here, before any model call, so an out-of-scope
         # file costs nothing rather than being discovered mid-pipeline.
         prefix = config.get("scope_package_prefix", "")
-        scan = scan_java_files(source_dir, phase, prefix)
+        exclude_globs = config.get("scope_exclude_globs") or []
+        scan = scan_java_files(source_dir, phase, prefix, exclude_globs)
         files, skipped, generated = scan.files, scan.skipped, scan.generated
         if skipped:
             emit(on_event, {"type": "skipped", "count": len(skipped), "prefix": prefix})

@@ -112,6 +112,7 @@ forge-platform/
 │   │   ├── phases.py      Phase registry — built-ins + every pack, by name
 │   │   ├── packs/         Pack loader: parses prompts/packs/*.pack.md, validates, orders
 │   │   ├── discover/      Stack profile, BOM-aware version resolution, pack activation → forge-profile.yaml
+│   │   ├── intent/        Plain English → decisions, scope and a pack subset; narrows only, never invents
 │   │   ├── extract/       Deterministic context extractors (web_bootstrap: web.xml, vendor descriptors, server.xml)
 │   │   ├── context/       Renders extracted context into prompts under a size cap; snapshot
 │   │   ├── risk/          Deterministic risk score → LOW / MEDIUM / HIGH
@@ -124,7 +125,9 @@ forge-platform/
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
 │   │   └── utils/         scanner, writer, report, java_checks, telemetry, cost
 │   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI, §14 test generation
-│   └── tests/             580+ tests, fully mocked — no AWS needed
+│   ├── GUARDRAILS.md      The six checks every file passes, and what each one costs
+│   ├── INTENT.md          Intent → pack selection: the two boundaries and the eight rules
+│   └── tests/             620+ tests, fully mocked — no AWS needed
 │
 └── prompts/               Specifications and the pack library
     ├── FORGE-Infra-Terraform.md         Infrastructure spec
@@ -191,7 +194,7 @@ pip install -r requirements.txt
 # Run the test suite first — fully mocked, needs no AWS credentials
 pytest
 
-# The whole flow from a browser — Project → Discover → Run → Review → Accept → Feedback
+# The whole flow from a browser — Project → Intent → Discover → Run → Review → Accept → Feedback
 python migrate.py --ui
 
 # The pack library, in dependency order (no AWS needed)
@@ -199,6 +202,10 @@ python migrate.py --list-packs
 
 # Which packs apply to a repository, with evidence — no AWS needed
 python migrate.py /path/to/app --discover
+
+# ...or say what you want in plain English and let FORGE narrow it (one cheap model call)
+python migrate.py /path/to/app --discover \
+  --intent "migrate to the latest Java and Spring, stay on Struts, ignore the db folder"
 
 # Dry run against a single file (no writes, no DynamoDB updates, no metrics)
 python migrate.py /path/to/java/project --phase java21 --dry-run --file /path/to/Foo.java
@@ -222,7 +229,14 @@ python migrate.py /path/to/app --generate-tests-only --output-dir ./migrated --r
 
 A typical project: `--discover` → run the packs in the order the profile lists (each pack is one
 `--phase`) → review what was held → `--acceptance` → `--generate-tests`. From the web UI the same
-sequence is the eight numbered steps.
+sequence is the nine numbered steps.
+
+`--intent` sits on top of `--discover`: it maps a plain-English request onto the `decisions` a
+human would otherwise hand-edit into `forge-profile.yaml`, plus a scope and a *subset* of the packs
+the evidence already activated. It can only ever narrow that set — a pack with no detection
+evidence cannot be activated by any prompt — and the run order still comes from the topological
+sort, so the plan stays reproducible and replays with no model call.
+[forge-mvp/INTENT.md](forge-mvp/INTENT.md) is the detail.
 
 ### Migration phases
 
@@ -305,4 +319,6 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 - [prompts/FORGE-Phase0-MVP.md](prompts/FORGE-Phase0-MVP.md) — MVP pipeline spec
 - [prompts/FORGE-Platform-Requirements.md](prompts/FORGE-Platform-Requirements.md) — pack contract and platform decisions
 - [forge-mvp/ARCHITECTURE.md](forge-mvp/ARCHITECTURE.md) — engine architecture, packs, web UI
+- [forge-mvp/GUARDRAILS.md](forge-mvp/GUARDRAILS.md) — the six checks every file passes, and what each costs
+- [forge-mvp/INTENT.md](forge-mvp/INTENT.md) — turning a sentence into a pack selection, and the limits on it
 - [CLAUDE.md](CLAUDE.md) — working notes for Claude Code sessions

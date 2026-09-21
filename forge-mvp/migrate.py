@@ -101,18 +101,34 @@ def _list_packs() -> int:
 
 
 def _discover(args) -> int:
+    import os
+
     from forge import service
     from forge.config import ForgeConfig
     from forge.packs import PackError
 
-    config = ForgeConfig(args.config) if args.config and Path(args.config).is_file() else None
+    config_path = args.config or os.environ.get("FORGE_AGENTS_YAML", "agents.yaml")
+    config = ForgeConfig(config_path) if Path(config_path).is_file() else None
+    if args.intent and config is None:
+        # Discovery alone needs no config; one model call does.
+        print(f"--intent needs {config_path}: it makes one model call to map the request "
+              f"onto decisions.\nRun without --intent for evidence-only discovery.")
+        return 1
     try:
-        result = service.discover(args.source_dir, args.output_dir, config)
+        result = service.discover(args.source_dir, args.output_dir, config, intent=args.intent)
     except PackError as e:
         print(f"Pack library failed to load:\n  {e}")
         return 1
     print(result["summary"])
+    if "intent" in result:
+        from forge.intent.plan import IntentPlan
+
+        # to_json's keys are IntentPlan's fields, so the round trip is exact.
+        print()
+        print(IntentPlan(**result["intent"]).render())
     print(f"\nProfile: {result['paths']['yaml']}\nDetail:  {result['paths']['json']}")
+    if "intent" in result["paths"]:
+        print(f"Plan:    {result['paths']['intent']}")
     return 0
 
 
@@ -216,6 +232,10 @@ def main():
                         help="List the stack pack library and exit")
     parser.add_argument("--discover", action="store_true",
                         help="Profile source_dir and report which packs apply; writes forge-profile.yaml")
+    parser.add_argument("--intent", metavar="TEXT",
+                        help="With --discover: describe in plain English what you want migrated, and "
+                             "FORGE narrows the detected packs and sets the decisions to match "
+                             "(one model call; it can never add a pack the evidence does not support)")
     from forge.phases import PHASE_NAMES, get_phase
     phase_help = " | ".join(f"{n}: {get_phase(n).description}" for n in PHASE_NAMES)
     parser.add_argument("--phase", choices=list(PHASE_NAMES),

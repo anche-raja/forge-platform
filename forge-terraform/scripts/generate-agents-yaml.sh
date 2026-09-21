@@ -83,7 +83,24 @@ max_retries: 2
 # declaration (XML configs, default-package classes) are always in scope.
 # This NEVER renames a package — the declaration is read, never rewritten.
 scope_package_prefix: "${SCOPE_PACKAGE_PREFIX}"
+# The other half of the same question: "leave this directory alone". Glob
+# patterns relative to source_dir, matched the way a pack's file_glob rules are.
+# Excluding only ever shrinks the unit set, and an excluded path the phase would
+# otherwise have taken is reported in the run's skipped list, never dropped
+# silently. \`--intent\` fills this in from a phrase like "ignore the db folder".
+#   scope_exclude_globs: ["db/**", "**/vendor/**"]
+scope_exclude_globs: []
 complexity_block_threshold: 2000
+
+# ─── Intent (optional; only read by \`--discover --intent "..."\`) ─────────────
+# One model call that maps a plain-English request onto the decisions below and
+# a subset of the packs discovery already activated. It can narrow that set and
+# never extend it — evidence stays the only thing that activates a pack.
+# \`model\` defaults to transform_model; this is classification over a closed
+# vocabulary, so a small model is the right call. Whatever you name here must
+# also appear in model_pricing or its cost silently accrues as \$0.00.
+intent:
+  model: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # ─── The secret gate ──────────────────────────────────────────────────────────
 # Local, deterministic, and ahead of EVERY remote call — ApplyGuardrail included.
@@ -121,6 +138,9 @@ model_pricing:
   "us.amazon.nova-pro-v1:0":
     input_per_1k: 0.0008
     output_per_1k: 0.0032
+  "us.anthropic.claude-haiku-4-5-20251001-v1:0":
+    input_per_1k: 0.001
+    output_per_1k: 0.005
 
 # Publish pipeline counters to the FORGE/Migration namespace. The Terraform
 # alarms and dashboard read these; turning it off leaves them blind.

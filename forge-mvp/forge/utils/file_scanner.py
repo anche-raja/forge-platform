@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-from typing import List, NamedTuple, Tuple
+from typing import List, NamedTuple, Sequence, Tuple
 
 from forge.extract import get_context, get_extractor
 from forge.packs.glob import glob_match
@@ -29,6 +29,14 @@ class ScanResult(NamedTuple):
     # do not exist yet, so they are not in `files`; the transform is given the
     # extracted context instead of a source.
     generated: Tuple[str, ...] = ()
+
+
+def _excluded_by(rel_path: str, exclude_globs: Sequence[str]) -> str:
+    """The first scope glob that claims this path, or ``""``."""
+    for pattern in exclude_globs:
+        if glob_match(pattern, rel_path):
+            return pattern
+    return ""
 
 
 def _wants_tests(spec) -> bool:
@@ -75,6 +83,7 @@ def scan_java_files(
     source_dir: str,
     phase: str = "java21",
     scope_package_prefix: str = "",
+    exclude_globs: Sequence[str] = (),
 ) -> ScanResult:
     """Return the files eligible for migration in this phase, plus what was skipped.
 
@@ -88,6 +97,12 @@ def scan_java_files(
     It never renames anything: a package declaration is read, never rewritten.
     Empty (the default) disables the filter. Skipping here rather than mid-
     pipeline means an out-of-scope file costs zero Bedrock calls.
+
+    `exclude_globs` answers the other half of that question — "leave this
+    directory alone" — against the path rather than the package, using the same
+    matcher `file_glob` detect rules use. It is the `scope.exclude_globs` field
+    of `forge-profile.yaml`. Excluding can only ever shrink the unit set, so it
+    needs no ceiling; an excluded path is reported, never silently dropped.
     """
     spec = get_phase(phase)
 
@@ -121,6 +136,15 @@ def scan_java_files(
             abs_path = Path(root) / fname
             rel_path = str(abs_path.relative_to(source_path)).replace("\\", "/")
             if "src/test" in rel_path and not _wants_tests(spec):
+                continue
+
+            excluded_by = _excluded_by(rel_path, exclude_globs)
+            if excluded_by:
+                # Only report a path the phase would otherwise have taken —
+                # every other file in the tree is already none of its business.
+                if spec.includes(rel_path):
+                    skipped.append(SkippedFile(path=str(abs_path), package="",
+                                               reason=f"excluded by scope glob '{excluded_by}'"))
                 continue
 
             # Packs match on the path ("**/WEB-INF/web.xml"); a PhaseSpec reads
@@ -171,6 +195,12 @@ def scan_java_files(
                         continue
                     rel = str(Path(path).resolve().relative_to(source_path)).replace("\\", "/")
                     if "src/test" in rel and not _wants_tests(spec):
+                        continue
+                    # A selector is not a way around the scope globs either.
+                    excluded_by = _excluded_by(rel, exclude_globs)
+                    if excluded_by:
+                        skipped.append(SkippedFile(path=path, package="",
+                                                   reason=f"excluded by scope glob '{excluded_by}'"))
                         continue
                     try:
                         content = Path(path).read_text(encoding="utf-8", errors="replace")

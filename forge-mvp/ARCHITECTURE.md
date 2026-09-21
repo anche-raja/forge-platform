@@ -258,7 +258,7 @@ python migrate.py ./myapp --phase java21 --resume
 
 Flags: `--phase` (a built-in phase or any complete pack — see §12), `--dry-run`, `--resume`,
 `--file`, `--output-dir` (default `./migrated`), `--config`, `--no-metrics`, `--list-packs`,
-`--discover`, `--acceptance` / `--acceptance-only` / `--acceptance-build`, `--generate-tests` /
+`--discover`, `--intent` (§15), `--acceptance` / `--acceptance-only` / `--acceptance-build`, `--generate-tests` /
 `--generate-tests-only` / `--run-tests` (§14), `--apply-decisions`, `--feedback-report`, and
 `--ui` / `--port` / `--no-browser` for the local web UI (§13).
 
@@ -307,6 +307,8 @@ forge-mvp/
     phases.py                      # built-in phases + every pack, resolved by name
     packs/                         # spec.py, loader.py, glob.py — parse and validate prompts/packs/*.pack.md
     discover/                      # profile.py, resolve.py, emit.py — stack profile → pack activation
+    intent/                        # vocabulary.py (the closed world), agent.py (one call, metadata only),
+                                   #   resolve.py (reconcile — pure, holds the rules), plan.py (IntentPlan)
     extract/                       # web_bootstrap.py, selectors.py — deterministic context extractors
     context/                       # render.py, inject.py, snapshot.py — context into prompts, bounded
     risk/score.py                  # deterministic risk score and tier
@@ -434,8 +436,21 @@ CSS as the static page, so the decision widget is one DOM contract) · `POST /ap
 /api/testgen?output_dir=` (the last `generated-tests.json`) · `GET /api/feedback` · `GET
 /api/artifacts` · `GET /api/files?output_dir=&name=`.
 
-The page's steps are Project → Discover → Run → Review → Accept → **Tests** → Feedback → Artifacts.
-The Run step can tick *generate tests*, which chains §14 onto the same job.
+The page's steps are Project → **Intent** → Discover → Run → Review → Accept → **Tests** →
+Feedback → Artifacts. The Run step can tick *generate tests*, which chains §14 onto the same job.
+
+The **Intent** step (§15) is the only one that costs money before a run: `POST /api/intent` is
+synchronous rather than a job, because one cheap call has nothing to stream and a job would take
+the single job slot away from an actual migration. It shows the plan, the packs it set aside with
+their reasons, each decision's provenance, and what it had to assume. Skipping it and using
+Discover is always free. The **Run** step then renders the resolved plan as a queue with done/next
+markers; clicking a row selects that pack rather than starting it, so nothing in this UI spends
+money on one click.
+
+A step is three edits that must stay in sync — a nav anchor's `data-step`, a `#step-<name>` section
+and a `steps.<name>` handler — because the router matches them by convention. A half-wired step
+fails silently at runtime, so `tests/test_ui_api.py` asserts the three sets are equal and that the
+hand-written numbering is still `1..N`.
 
 **Per-run decisions.** The Discover step offers every platform decision; the values go in the run
 body and reach the packs, the hold gate and the acceptance checks through
@@ -536,3 +551,54 @@ look). `--generate-tests-only` exits non-zero when anything was held, blocked or
 gates CI. Test units are **not** written to the DynamoDB state table — that table is the
 migration's audit trail, keyed by source file — and the two metrics emitted are `bedrock_calls`
 and `estimated_cost_usd` only, never `files_processed`, which the PipelineStalled alarm counts.
+
+---
+
+## 15. Intent — plain English into a pack selection
+
+Discovery answers *what is in this repository*. It cannot answer what is left over: **which of the
+routes the evidence allows did you want?** `struts2-modernize` and `struts2-to-springmvc6` fire on
+identical evidence because both are real options; ten `decisions` keys arbitrate that and cases like
+it, and until now every one was set by a human editing `forge-profile.yaml`.
+
+```bash
+python migrate.py ./app --discover --intent "latest Java and Spring, stay on Struts, ignore the db folder"
+```
+
+**It narrows; it never invents.** `resolve_packs` remains the only thing that decides what a
+repository contains — a pack with no `detect` match cannot be activated by any prompt, and a request
+for one is reported as `unsupported`. That is what keeps this on the right side of CLAUDE.md's *"do
+not add a model-driven leader"*: pack activation is mechanical and stays mechanical, while
+intent→decisions is the one genuinely linguistic step, replacing a human's YAML edit rather than the
+evidence engine. The order still comes from `resolve_order`, and the plan is persisted with
+provenance, so it replays with zero model calls.
+
+**No source code reaches the model.** It is given `Profile.to_json()` — build system, Java level,
+dependency coordinates, import *prefixes*, descriptor *names*, counts. `_profile_block` assembles
+those fields explicitly rather than dumping the profile, and a test asserts a file body never
+appears in the prompt. This is §7 of [GUARDRAILS.md](GUARDRAILS.md) one layer up.
+
+**Shape.** One model call produces a proposal; `reconcile` in
+[forge/intent/resolve.py](forge/intent/resolve.py) checks it against the activations and returns an
+`IntentPlan`. `reconcile` is pure, so its eight rules — include ⊆ activated, nothing silently
+dropped, closed decision vocabulary, mutual exclusion between the Struts routes, state labels
+survive, coherence via `missing_dependencies`, order from `resolve_order`, provenance on every
+decision — are ordinary unit tests with no AWS. A response that will not parse becomes `None`, and
+`reconcile(None, …)` returns the plan discovery would have produced: a guess is worse than a
+default, so there is no retry.
+
+**A decision can re-gate discovery.** `liberty-server-config` is gated on `container: liberty`, so
+asking for Tomcat must stop it firing. `service.discover` re-runs `resolve_packs` with the resolved
+decisions and re-reconciles the same proposal — pure, deterministic, no second call.
+
+**Scope.** `scope.exclude_globs` and `scope.package_prefix` were in the generated profile and read by
+nothing; `scan_java_files` now takes `exclude_globs` and matches with the same `glob_match` the
+`file_glob` detect rules use. Excluding can only shrink the unit set, so it needs no ceiling.
+
+**Cost.** ~2k tokens in, ~600 out — about half a cent on Haiku 4.5, which is what `intent.model`
+defaults to. Name a model there and it must also be in `model_pricing`, or the cost accrues as zero.
+
+`--discover` without `--intent` is unchanged: no model, no AWS.
+`test_discover_without_intent_makes_no_model_call` pins that contract.
+
+Full detail: [INTENT.md](INTENT.md).

@@ -89,3 +89,27 @@ button[hidden]{display:none}
 .verdict{font-size:18px;font-weight:600;margin:12px 0}
 details{margin:12px 0}summary{cursor:pointer;color:var(--muted)}
 @media (prefers-reduced-motion:reduce){.progress div{transition:none}}
+
+/* ─── Intent ──────────────────────────────────────────────────────────────── */
+.form textarea{font:inherit;color:var(--ink);padding:8px 9px;border:1px solid var(--line);border-radius:3px;background:var(--panel);resize:vertical;min-height:64px}
+.form textarea:focus{outline:2px solid var(--accent);outline-offset:1px}
+/* A pack the intent set aside: still listed, visibly not in the plan. */
+.tbl tr.out td{color:var(--muted)}
+.tbl tr.out td.mono{text-decoration:line-through}
+#i-totals{margin:4px 0 18px}
+#i-notes .card{margin:0 0 12px}
+#i-notes h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+#i-notes ul{margin:0;padding-left:18px}
+#i-notes li{margin:3px 0}
+
+/* ─── Run: the plan queue ─────────────────────────────────────────────────── */
+.plan{margin:0 0 18px;padding:0;list-style:none;background:var(--panel);border:1px solid var(--line);max-width:720px}
+.plan li{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line-soft);cursor:pointer}
+.plan li:last-child{border-bottom:0}
+.plan li:hover{background:var(--ground)}
+.plan li .mark{color:var(--muted);text-align:center}
+.plan li.done{color:var(--muted)}
+.plan li.done .mark{color:var(--good)}
+.plan li.next{background:var(--hold)}
+.plan li.next .mark{color:var(--accent)}
+#r-plan-wrap[hidden]{display:none}

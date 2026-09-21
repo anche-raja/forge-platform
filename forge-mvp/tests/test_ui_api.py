@@ -363,3 +363,85 @@ def test_registry_one_job_at_a_time_and_events_in_order():
     assert [e["seq"] for e in job.events] == [1, 2, 3]
     assert [seq for seq, _ in reg.subscribe(job, after=1)] == [2, 3]
     assert reg.active() is None and reg.start("run", {}, target).id != job.id
+
+
+# ─── the Intent step ─────────────────────────────────────────────────────────
+
+def _intent_body(project, tmp_path, client, text="modernize this"):
+    return {"source_dir": str(project), "output_dir": str(tmp_path / "out"),
+            "config": client.cfg, "intent": text}
+
+
+def test_intent_route_narrows_the_plan_and_reports_provenance(client, project, tmp_path):
+    from tests.conftest import llm_reply
+
+    # This fixture is two .java files and no pom, so javax-to-jakarta is the
+    # only pack with evidence. Asking for spring-to-spring6 as well is the
+    # case that matters: it must come back unsupported, not selected.
+    proposal = {
+        "include": ["javax-to-jakarta", "spring-to-spring6"],
+        "decisions": {"risk_ceiling": "review-all"},
+        "scope": {"exclude_globs": ["db/**"]},
+    }
+    with patch("forge.intent.agent.ChatBedrockConverse") as MockLLM:
+        MockLLM.return_value.invoke.return_value = llm_reply(proposal)
+        r = client.post("/api/intent", json=_intent_body(project, tmp_path, client))
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["order"] == ["javax-to-jakarta"]
+    assert body["intent"]["provenance"]["risk_ceiling"] == "prompt"
+    assert body["intent"]["scope"]["exclude_globs"] == ["db/**"]
+    assert [u["asked"] for u in body["intent"]["unsupported"]] == ["spring-to-spring6"]
+
+
+def test_intent_route_rejects_an_empty_request_before_calling_anything(client, project, tmp_path):
+    with patch("forge.intent.agent.ChatBedrockConverse") as MockLLM:
+        r = client.post("/api/intent", json=_intent_body(project, tmp_path, client, text="   "))
+        MockLLM.assert_not_called()
+    assert r.status_code == 400
+    assert "empty" in r.json()["detail"]
+
+
+def test_intent_route_needs_a_config(client, project, tmp_path):
+    body = _intent_body(project, tmp_path, client)
+    body["config"] = str(tmp_path / "nope.yaml")
+    r = client.post("/api/intent", json=body)
+    assert r.status_code == 400
+    assert "config not found" in r.json()["detail"]
+
+
+def test_the_intent_plan_is_a_listed_artifact(client, project, tmp_path):
+    from tests.conftest import llm_reply
+
+    out = tmp_path / "out"
+    with patch("forge.intent.agent.ChatBedrockConverse") as MockLLM:
+        MockLLM.return_value.invoke.return_value = llm_reply({"include": ["javax-to-jakarta"]})
+        client.post("/api/intent", json=_intent_body(project, tmp_path, client))
+
+    names = [a["name"] for a in client.get(f"/api/artifacts?output_dir={out}").json()["artifacts"]]
+    assert "intent-plan.json" in names
+    # The discovery detail row used to name a file the emitter never writes.
+    assert "stack-profile.json" in names
+
+
+# ─── the three-edit contract for a step ──────────────────────────────────────
+
+def test_every_nav_step_has_a_section_and_a_render_function():
+    """The router matches nav `data-step` to `#step-<name>` to `steps.<name>` by
+    convention, so a half-wired step fails silently at runtime, not at import."""
+    import re
+
+    static = Path(app_module.__file__).parent / "static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    js = (static / "app.js").read_text(encoding="utf-8")
+
+    nav = re.findall(r'data-step="([a-z]+)"', html)
+    sections = set(re.findall(r'id="step-([a-z]+)"', html))
+    handlers = set(re.findall(r'steps\.([a-z]+)\s*=\s*\{', js))
+
+    assert "intent" in nav
+    assert set(nav) == sections == handlers, (
+        f"nav={sorted(set(nav))} sections={sorted(sections)} handlers={sorted(handlers)}")
+    # The visible numbering is hand-written; a renumber must stay 1..N in order.
+    assert re.findall(r'<span class="n">(\d+)</span>', html) == [str(i) for i in range(1, len(nav) + 1)]
