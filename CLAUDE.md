@@ -91,6 +91,8 @@ cd forge-mvp
 pytest                                    # no AWS needed
 python migrate.py --list-packs            # the pack library, in dependency order
 python migrate.py ./myapp --discover      # which packs apply to this repo, with evidence; writes forge-profile.yaml
+python migrate.py ./myapp --discover --intent "latest Java and Spring, stay on Struts, ignore the db folder"
+                                          # ...narrowed by a sentence: one cheap model call, needs agents.yaml
 python migrate.py ./myapp --phase javax-to-jakarta --dry-run --file path/to/Foo.java
 python migrate.py ./myapp --phase webapp-bootstrap-jakarta10 --output-dir ./migrated --acceptance
 python migrate.py ./myapp --phase javax-to-jakarta --acceptance-only --output-dir ./migrated   # re-check an existing output
@@ -102,7 +104,8 @@ python migrate.py ./myapp --generate-tests-only --output-dir ./migrated --run-te
 
 **Local web UI.** `python migrate.py --ui` starts a FastAPI app on `127.0.0.1` (port 8765 or the
 next free one; `--port` to fix it, `--no-browser` to just print the URL) and opens a page that walks
-the same flow as steps: Project → Discover → Run → Review → Accept → Feedback → Artifacts. It is
+the same flow as steps: Project → Intent → Discover → Run → Review → Accept → Tests → Feedback →
+Artifacts. Intent is the one step that costs anything before a run; Discover is free. It is
 for one engineer on their own machine: loopback only, no auth, one job at a time (a second run is
 refused with 409 because the extract cache and boto3 clients are process-global). **The UI and the
 CLI call the same functions** — `forge/service.py` holds the one implementation of a run, and
@@ -260,6 +263,18 @@ influence is bounded on both sides on purpose — it returns an integer, `route_
 branch, and `max_retries` caps the loop; the model's own `review_verdict` string is recorded and never
 routed on. The deck is the target end-state for *agents*, not for the control plane; §3 of
 `forge-mvp/ARCHITECTURE.md` carries the duty-by-duty mapping.
+
+**The intent layer is not an exception to that — check it against the rule before extending it.**
+`--discover --intent "..."` (`forge/intent/`, ARCHITECTURE §15, INTENT.md) does hand a model a
+question at the control plane, and it is allowed because the question is not the mechanical one.
+Pack *activation* stays `resolve_packs` over `detect` evidence; the model may only narrow that set
+and fill in the `decisions` a human would otherwise hand-edit into `forge-profile.yaml`. It cannot
+activate a pack the repository shows no evidence for, it cannot order anything — `resolve_order`
+still does — and the resolved plan is persisted with per-decision provenance so a rerun needs no
+model at all. `reconcile()` is pure and holds every one of those limits; if a change would move one
+of them into the prompt instead, it is the mistake this rule is about. The test that keeps it
+honest is `test_discover_without_intent_makes_no_model_call`: discovery with no intent must stay
+free, with no model and no AWS.
 
 **Prompts live in `forge/phases.py`, not in the agents.** Each `PhaseSpec` pairs a transform
 prompt with the reviewer rubric that grades it. They must be changed together — a rubric whose

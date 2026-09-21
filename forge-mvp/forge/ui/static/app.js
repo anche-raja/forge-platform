@@ -5,9 +5,10 @@
 
   // ─── state ────────────────────────────────────────────────────────────────
   var S = {
-    project: load('forge.project', { source_dir: '', output_dir: './migrated', config: '', decisions: {}, plan: [], completed: [] }),
+    project: load('forge.project', { source_dir: '', output_dir: './migrated', config: '', decisions: {}, plan: [], completed: [], intent: '' }),
     packs: null,          // /api/packs
     discovery: null,      // last /api/discover result
+    intent: null,         // last /api/intent result's plan
     job: null,            // job being followed on the Run page
     es: null,             // its EventSource
     review: null,         // last /api/review result
@@ -98,9 +99,84 @@
           var box = $('p-summary'); box.hidden = false;
           box.innerHTML = '<b>' + esc(disc.profile.build_system || 'build: ?') + '</b> · Java ' + esc(disc.profile.java_version || '?') + ' · ' + disc.activations.length + ' pack(s) apply · '
             + (arts.exists ? arts.artifacts.length + ' artifact(s) already in ' + esc(S.project.output_dir) : 'output directory not created yet')
-            + '<div class="row"><a class="button primary" href="#/discover">Next: Discover →</a></div>';
+            + '<div class="row"><a class="button primary" href="#/intent">Next: Intent →</a>'
+            + '<a class="button" href="#/discover">or skip to Discover</a></div>';
         } catch (e) { $('p-status').textContent = ''; flash(fmtErr(e)); }
       };
+    }
+  };
+
+  steps.intent = {
+    render: function () {
+      if (!needProject()) return;
+      $('i-text').value = S.project.intent || '';
+      $('intent-form').onsubmit = steps.intent.resolve;
+      if (S.intent) steps.intent.show(S.intent);
+    },
+    resolve: async function (ev) {
+      ev.preventDefault(); flash('');
+      var text = $('i-text').value.trim();
+      if (!text) { flash('Say what you want migrated first.'); return; }
+      // Deliberately without `decisions`: a second resolve must start from the
+      // defaults and agents.yaml, or last run's answers come back attributed to
+      // the config instead of the prompt.
+      var body = projectBody({ intent: text }); delete body.decisions;
+      $('i-run').disabled = true; $('i-status').textContent = 'asking…';
+      try {
+        var d = await api('POST', '/api/intent', body);
+        S.intent = d; S.discovery = d;
+        S.project.intent = text;
+        S.project.plan = d.order.slice();
+        S.project.decisions = Object.assign({}, d.decisions);
+        save();
+        steps.intent.show(d);
+        $('i-status').textContent = 'plan written to ' + d.paths.yaml;
+      } catch (e) { flash(fmtErr(e)); $('i-status').textContent = ''; }
+      $('i-run').disabled = false;
+    },
+    show: function (d) {
+      var p = d.intent || {};
+      $('i-result').hidden = false;
+
+      $('i-totals').innerHTML = [
+        ['<b>' + p.packs.length + '</b><span>selected</span>'],
+        ['<b>' + p.excluded.length + '</b><span>set aside</span>'],
+        ['<b>' + p.assumptions.length + '</b><span>assumed</span>'],
+        ['<b>$' + Number(p.cost_usd || 0).toFixed(4) + '</b><span>this call</span>']
+      ].map(function (x) { return '<div>' + x + '</div>'; }).join('');
+
+      var rows = p.packs.map(function (id, i) {
+        var state = (p.states || {})[id] || 'runnable';
+        return '<tr><td class="mono">' + (i + 1) + '</td><td class="mono">' + esc(id) + '</td><td>'
+          + tag(state, state === 'detect-only' ? 'skip' : state) + '</td><td></td></tr>';
+      });
+      rows = rows.concat(p.excluded.map(function (e) {
+        return '<tr class="out"><td></td><td class="mono">' + esc(e.pack) + '</td><td>' + tag('set aside', 'skip')
+          + '</td><td class="hint">' + esc(e.reason) + '</td></tr>';
+      }));
+      $('i-packs').innerHTML = '<tr><th></th><th>Pack</th><th>State</th><th>Why not</th></tr>'
+        + (rows.join('') || '<tr><td colspan="4">Nothing applies to this repository.</td></tr>');
+
+      $('i-decisions').innerHTML = '<tr><th>Decision</th><th>Value</th><th>From</th></tr>'
+        + Object.keys(p.decisions).map(function (k) {
+          var src = p.provenance[k] || 'default';
+          return '<tr><td class="mono">' + esc(k) + '</td><td class="mono">' + esc(p.decisions[k]) + '</td><td>'
+            + tag(src, src === 'prompt' ? 'runnable' : 'skip') + '</td></tr>';
+        }).join('');
+
+      function block(title, items, cls) {
+        if (!items || !items.length) return '';
+        return '<div class="card ' + (cls || '') + '"><h3>' + esc(title) + '</h3><ul>'
+          + items.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul></div>';
+      }
+      var gaps = Object.keys(p.gaps || {}).map(function (k) { return k + ' expects ' + p.gaps[k].join(', '); });
+      var notes = block('Assumed — not stated in your request', p.assumptions)
+        + block('Worth confirming', p.questions)
+        + block('Asked for, but not available here', (p.unsupported || []).map(function (u) { return u.asked + ' — ' + u.reason; }))
+        + block('Ignored from the answer', (p.rejected || []).map(function (r) { return r.key + '=' + r.value + ' — ' + r.reason; }))
+        + block('Ordering gaps', gaps);
+      $('i-notes').innerHTML = notes || '<p class="hint">Nothing to flag — the request settled every decision the '
+        + 'selected packs read.</p>';
     }
   };
 
@@ -148,11 +224,33 @@
         var inPlan = plan.indexOf(id) >= 0, done = (S.project.completed || []).indexOf(id) >= 0;
         return '<option value="' + esc(id) + '"' + (id === next ? ' selected' : '') + '>' + esc(id) + (inPlan ? (done ? '  ✓ done' : '  · in plan') : '') + '</option>';
       }).join('');
+      steps.run.plan(plan, next);
       $('run-form').onsubmit = steps.run.start;
       $('r-cancel').onclick = steps.run.cancel;
       steps.run.history();
       var h = await health();
       if (h && h.active && h.active.kind === 'run' && (!S.job || S.job.id !== h.active.id)) steps.run.attach(h.active.id, h.active.params.phase);
+    },
+    plan: function (plan, next) {
+      // The whole queue, with the one you are on marked. Clicking a row selects
+      // it rather than starting it — nothing in this UI spends money on one click.
+      var wrap = $('r-plan-wrap');
+      if (!plan.length) { wrap.hidden = true; return; }
+      wrap.hidden = false;
+      var done = S.project.completed || [];
+      $('r-plan').innerHTML = plan.map(function (id) {
+        var isDone = done.indexOf(id) >= 0, isNext = id === next;
+        var mark = isDone ? '✓' : (isNext ? '▶' : '');
+        return '<li class="' + (isDone ? 'done' : (isNext ? 'next' : '')) + '" data-pack="' + esc(id) + '">'
+          + '<span class="mark">' + mark + '</span><span class="mono">' + esc(id) + '</span>'
+          + '<span class="hint">' + (isDone ? 'done' : (isNext ? 'next' : '')) + '</span></li>';
+      }).join('');
+      $('r-plan').onclick = function (ev) {
+        var li = ev.target.closest('li[data-pack]');
+        if (!li) return;
+        $('r-phase').value = li.getAttribute('data-pack');
+        $('r-status').textContent = 'selected ' + li.getAttribute('data-pack') + ' — press Start when ready';
+      };
     },
     start: async function (ev) {
       ev.preventDefault(); flash('');
@@ -189,7 +287,14 @@
       $('r-status').textContent = d.state;
       var r = d.result; if (!r) return;
       var tt = r.totals;
-      if (d.state === 'done' && !r.dry_run && S.project.completed.indexOf(r.phase) < 0) { S.project.completed.push(r.phase); save(); }
+      if (d.state === 'done' && !r.dry_run && S.project.completed.indexOf(r.phase) < 0) {
+        S.project.completed.push(r.phase); save();
+        // Advance the queue so the next pack is marked before you look away.
+        packs().then(function (pk) {
+          var plan = (S.project.plan || []).filter(function (p) { return pk.runnable.indexOf(p) >= 0; });
+          steps.run.plan(plan, plan.filter(function (p) { return S.project.completed.indexOf(p) < 0; })[0]);
+        });
+      }
       var acc = r.acceptance ? (r.acceptance.verdict ? ' · acceptance ' + tag(r.acceptance.verdict) : ' · acceptance skipped: ' + esc(r.acceptance.skipped_reason)) : '';
       box.innerHTML = '<div class="totals">'
         + ['passed', 'held', 'manual', 'blocked'].map(function (k) { return '<div><b>' + tt[k] + '</b><span>' + k + '</span></div>'; }).join('')

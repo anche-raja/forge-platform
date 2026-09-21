@@ -22,18 +22,9 @@ STATIC = Path(__file__).parent / "static"
 KEEPALIVE_SECONDS = 15.0        # tests shrink this
 
 # What each decision may be, from prompts/FORGE-Platform-Requirements.md §decisions.
-DECISION_OPTIONS: Dict[str, List[str]] = {
-    "web_framework": ["modernize-in-place", "migrate-to-spring"],
-    "runtime": ["war-xml-bootstrap", "war-programmatic-bootstrap"],
-    "container": ["liberty", "wildfly", "tomcat", "jetty"],
-    "liberty_edition": ["open", "websphere"],
-    "liberty_features": ["jakartaee-10.0", "webProfile-10.0", "granular"],
-    "views": ["in-place", "thymeleaf", "defer"],
-    "url_compat": ["preserve-with-redirect", "preserve-exact", "clean-only"],
-    "persistence": ["keep-orm", "to-spring-data"],
-    "idiom_aggressiveness": ["conservative", "moderate"],
-    "risk_ceiling": ["auto", "review-high", "review-all"],
-}
+# Defined in forge.intent.vocabulary — it is the decision vocabulary, not a UI
+# concern, and the CLI validates against the same table.
+from forge.intent.vocabulary import DECISION_OPTIONS  # noqa: E402
 
 ARTIFACTS = [
     ("migration-report.md", "Migration report"),
@@ -46,7 +37,10 @@ ARTIFACTS = [
     ("decisions-applied.jsonl", "Applied decisions log"),
     ("pack-feedback.md", "Pack feedback report"),
     ("forge-profile.yaml", "Discovery profile"),
-    ("forge-profile.json", "Discovery detail"),
+    # The emitter writes stack-profile.json (forge/discover/emit.py:PROFILE_JSON);
+    # the old name here never matched a file, so the row never appeared.
+    ("stack-profile.json", "Discovery detail"),
+    ("intent-plan.json", "Intent plan"),
 ]
 _MEDIA = {".md": "text/markdown", ".html": "text/html", ".json": "application/json",
           ".jsonl": "text/plain", ".yaml": "text/yaml", ".yml": "text/yaml"}
@@ -59,6 +53,10 @@ class Project(BaseModel):
     output_dir: str = "./migrated"
     config: Optional[str] = None
     decisions: Optional[Dict[str, str]] = None
+
+
+class IntentRequest(Project):
+    intent: str
 
 
 class RunRequest(Project):
@@ -204,6 +202,28 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
             return service.discover(source, str(Path(body.output_dir).expanduser()), config)
         except PackError as e:
             raise HTTPException(500, f"pack library failed to load: {e}")
+
+    @app.post("/api/intent")
+    def intent(body: IntentRequest):
+        """Discovery, narrowed by a sentence. One model call, so it needs a config.
+
+        Synchronous like /api/discover rather than a job: one cheap call has
+        nothing to stream, and making it a job would take the single job slot
+        away from an actual run.
+        """
+        from forge.packs import PackError
+
+        text = body.intent.strip()
+        if not text:
+            raise HTTPException(400, "intent is empty")
+        source = _source(body.source_dir)
+        config = _config(body.config, body.decisions)
+        try:
+            return service.discover(source, str(Path(body.output_dir).expanduser()), config, intent=text)
+        except PackError as e:
+            raise HTTPException(500, f"pack library failed to load: {e}")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     # ─── runs ─────────────────────────────────────────────────────────────────
 
