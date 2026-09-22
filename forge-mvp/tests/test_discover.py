@@ -169,11 +169,13 @@ def test_resolution_fires_the_right_packs_with_evidence(repo, packs):
     acts = {a.pack_id: a for a in resolve_packs(p, packs)}
 
     expected = {"build-maven-modernize", "java8-to-java21", "javax-to-jakarta", "spring-to-spring6",
-                "springsec-to-springsec6", "struts2-modernize", "struts2-to-springmvc6",
+                "springsec-to-springsec6", "struts2-modernize",
                 "jsp-jstl-modernize", "junit4-to-junit5", "webapp-bootstrap-jakarta10",
                 "liberty-server-config", "hibernate-to-hibernate6"}
     assert expected <= set(acts), sorted(set(acts))
-    for absent in ("ejb2-to-spring", "ejb3-to-spring", "jsf-to-faces4", "ibatis-to-mybatis", "ant-to-maven", "struts1-to-springmvc6"):
+    for absent in ("ejb2-to-spring", "ejb3-to-spring", "jsf-to-faces4", "ibatis-to-mybatis", "ant-to-maven",
+                   # Removed with the Struts -> Spring MVC route.
+                   "struts1-to-springmvc6", "struts2-to-springmvc6"):
         assert absent not in acts, absent
 
     assert any("struts2-core:6.8.0 < 7.0.0" in e for e in acts["struts2-modernize"].evidence)
@@ -253,12 +255,14 @@ def test_summary_names_frameworks_and_marks_non_runnable_packs(repo, packs):
     p = build_profile(str(repo), content_patterns=content_patterns(packs), decisions=DEFAULT_DECISIONS)
     acts = resolve_packs(p, packs)
     for a in acts:
-        a.runnable = a.complete and a.pack_id != "struts2-to-springmvc6"
+        # No shipped pack is blocked any more, so one is forced here to keep the
+        # "blocked" label in the summary under test.
+        a.runnable = a.complete and a.pack_id != "spring-to-spring6"
     order = load_packs().resolve_order([a.pack_id for a in acts])
     text = render_summary(p, acts, order)
     assert "build system   maven  (2 module(s))" in text and "java level     8" in text
     assert "Struts 2 6.8.0" in text and "Spring 5.3.39" in text and "JUnit 4 4.12" in text
-    assert "struts2-to-springmvc6        blocked" in text
+    assert "spring-to-spring6            blocked" in text
     assert "hibernate-to-hibernate6      detect-only" in text
     assert "struts2-modernize            runnable" in text
 

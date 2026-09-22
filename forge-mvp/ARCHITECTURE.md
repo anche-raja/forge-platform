@@ -392,16 +392,21 @@ The engine above is unchanged. What Phase 1 adds is *what it runs* and *what it 
 | Human loop | `forge/risk/`, `forge/review_queue.py`, `forge/decisions.py`, `forge/feedback_report.py` | Risk score → `risk_ceiling` hold gate → review page → `--apply-decisions` (approve / reject / retry-with-note) → `--feedback-report`. The note is its own prompt block and outranks automated feedback. |
 | Acceptance | `forge/verify/acceptance.py` | `--acceptance` / `--acceptance-only`: a pack's checks over the merged view (`merged_tree.py`). Pass / fail-with-evidence / skip-with-reason; `INCOMPLETE` while anything is skipped. Appends to the report, writes `migration-acceptance.json`, sets the exit code. |
 
-**Runnable today** (`runnable_phases()`): `java21`, `struts-spring6`, `build-maven-modernize`,
-`java8-to-java21`, `javax-to-jakarta`, `spring-to-spring6`, `springsec-to-springsec6`,
-`struts2-modernize`, `jsp-jstl-modernize`, `junit4-to-junit5`, `webapp-bootstrap-jakarta10`,
-`liberty-server-config`. Refused until their extractor exists: `struts1-to-springmvc6`,
-`struts2-to-springmvc6`.
+**Runnable today** (`runnable_phases()`): `java21`, `build-maven-modernize`, `java8-to-java21`,
+`javax-to-jakarta`, `spring-to-spring6`, `springsec-to-springsec6`, `struts2-modernize`,
+`jsp-jstl-modernize`, `junit4-to-junit5`, `webapp-bootstrap-jakarta10`, `liberty-server-config`.
+
+Four of those run **without the context they declare**, because runnability turns on selectors
+rather than context availability: `build-maven-modernize` (`reactor`), `spring-to-spring6`
+(`spring_bean_graph`), `jsp-jstl-modernize` (`view_bindings`) and `junit4-to-junit5`
+(`test_subject`). `degraded_phases()` reports them and `--list-packs` labels them; each affected
+unit carries `context_missing: true`.
 
 **Two decisions fixed at platform level** (see the requirements spec): the target is a **WAR on
 WebSphere/Open Liberty at Jakarta EE 10, Spring Framework 6.2, no Spring Boot**; and
-`web_framework: modernize-in-place` (Struts → Struts 7) is the first route, with
-`migrate-to-spring` as the later one.
+`web_framework: modernize-in-place` (Struts → Struts 7) is the **only** route. The Struts → Spring
+MVC packs and the `struts-spring6` built-in phase were removed, and `migrate-to-spring` with them —
+a decision value no pack implements resolves to a plan that selects nothing.
 
 ---
 
@@ -565,10 +570,11 @@ and `estimated_cost_usd` only, never `files_processed`, which the PipelineStalle
 
 ## 15. Intent — plain English into a pack selection
 
-Discovery answers *what is in this repository*. It cannot answer what is left over: **which of the
-routes the evidence allows did you want?** `struts2-modernize` and `struts2-to-springmvc6` fire on
-identical evidence because both are real options; ten `decisions` keys arbitrate that and cases like
-it, and until now every one was set by a human editing `forge-profile.yaml`.
+Discovery answers *what is in this repository*. It cannot answer what is left over: **how much of
+what is there did you want changed, and how aggressively?** Evidence says a project has JSPs, an
+ORM and a risk profile; it does not say whether to move the view tier, keep the ORM mapping, or
+hold every HIGH-risk file for a human. Ten `decisions` keys arbitrate that, and until now every one
+was set by a human editing `forge-profile.yaml`.
 
 ```bash
 python migrate.py ./app --discover --intent "latest Java and Spring, stay on Struts, ignore the db folder"

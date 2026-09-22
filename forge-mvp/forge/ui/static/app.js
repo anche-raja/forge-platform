@@ -66,7 +66,8 @@
   function fileUrl(name) { return '/api/files?output_dir=' + encodeURIComponent(S.project.output_dir || './migrated') + '&name=' + encodeURIComponent(name); }
 
   // Follow a job's SSE stream. The browser reconnects with Last-Event-ID on its own; we close on done/error.
-  var EVENT_TYPES = ['start', 'skipped', 'file', 'snapshot', 'snapshot_skipped', 'queue', 'acceptance', 'acceptance_skipped',
+  var EVENT_TYPES = ['start', 'skipped', 'file', 'snapshot', 'snapshot_skipped', 'context_missing', 'chained',
+    'queue', 'acceptance', 'acceptance_skipped',
     'cancelled', 'summary', 'nothing', 'apply_outcome', 'apply_done', 'testgen_start', 'testgen_unit',
     'testgen_cancelled', 'testgen_summary',
     // A chat turn is a job in the same registry and streams down the same route.

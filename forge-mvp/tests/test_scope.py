@@ -114,7 +114,7 @@ def test_boundary_package_is_skipped_not_matched(project):
 
 def test_struts_xml_survives_scope_filtering(project):
     """XML descriptors have no Java package; the struts phase still needs them."""
-    result = _scan(project, phase="struts-spring6", scope=SCOPE)
+    result = _scan(project, phase="struts2-modernize", scope=SCOPE)
     assert "struts-config.xml" in {Path(f).name for f in result.files}
 
 

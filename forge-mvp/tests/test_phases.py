@@ -1,4 +1,4 @@
-"""Phase registry: prompt selection, file eligibility, and the struts-spring6 path."""
+"""Phase registry: prompt selection, file eligibility, and how a pack carries its own rubric."""
 
 import contextlib
 import re
@@ -85,10 +85,15 @@ def test_java21_takes_only_java(tmp_path):
     assert _scan(_tree(tmp_path), "java21") == ["src/main/java/com/corp/LoginAction.java"]
 
 
-def test_struts_phase_includes_struts_xml_but_not_pom(tmp_path):
-    got = _scan(_tree(tmp_path), "struts-spring6")
+def test_a_pack_takes_its_descriptors_but_not_the_build_files(tmp_path):
+    """Descriptors come in by glob now that the struts-spring6 phase is gone.
+
+    The invariant is unchanged and still worth holding: a framework pack picks
+    up the framework's XML and leaves pom.xml to the build pack, so two packs
+    never edit the same build file.
+    """
+    got = _scan(_tree(tmp_path), "struts2-modernize")
     assert "src/main/resources/struts-config.xml" in got
-    assert "src/main/resources/validation.xml" in got
     assert "pom.xml" not in got and "build.xml" not in got
 
 
@@ -98,7 +103,7 @@ def test_test_sources_excluded_in_every_phase(tmp_path):
         assert not any("src/test" in f for f in _scan(root, phase))
 
 
-# ─── struts phase through the graph ──────────────────────────────────────────
+# ─── a pack through the graph ────────────────────────────────────────────────
 
 SPRING_CONTROLLER = """\
 package com.corp.web;
@@ -111,8 +116,13 @@ public class LoginController {
 """
 
 
-def test_struts_phase_uses_its_own_prompts(tmp_path, java_file):
-    """The transform and review calls must carry the struts rubric, not java21's."""
+def test_a_pack_run_carries_the_packs_own_prompt(tmp_path, java_file):
+    """Each phase's transform call must carry its own rubric, not java21's.
+
+    Previously asserted against the struts-spring6 built-in. That phase is gone
+    with the Struts -> Spring MVC route, so the same invariant is held against a
+    pack — which is where every rubric lives now.
+    """
     with contextlib.ExitStack() as stack:
         up = _graph_mocks(stack, java_file, review_score=90)
         up.return_value.invoke.return_value = llm_reply(
@@ -121,18 +131,20 @@ def test_struts_phase_uses_its_own_prompts(tmp_path, java_file):
         from forge.graph import build_graph
 
         app = build_graph(write_config(tmp_path))
-        state = make_state(java_file, tmp_path, phase="struts-spring6")
+        state = make_state(java_file, tmp_path, phase="struts2-modernize")
         result = app.invoke(state, config={"configurable": {"thread_id": java_file}})
 
     assert result["current_file"]["status"] == "DONE"
     system_prompt = up.return_value.invoke.call_args[0][0][0].content
     assert "Struts" in system_prompt
-    assert "ActionForm" in system_prompt
+    # The negative half is what makes this a test: java21's prompt opens with
+    # this rule, so its absence proves the pack's prompt was used and not the
+    # default that `get_phase` falls back to.
+    assert "Rule 1 — Namespace migration" not in system_prompt
 
 
 def test_deleted_files_are_recorded_and_reported(tmp_path, java_file):
-    """struts-spring6 replaces XML config with @Configuration; the superseded
-    files must be surfaced rather than silently orphaned."""
+    """A pack that supersedes a descriptor must surface it, not orphan it."""
     with contextlib.ExitStack() as stack:
         up = _graph_mocks(stack, java_file, review_score=90)
         up.return_value.invoke.return_value = llm_reply({
@@ -144,7 +156,7 @@ def test_deleted_files_are_recorded_and_reported(tmp_path, java_file):
 
         app = build_graph(write_config(tmp_path))
         result = app.invoke(
-            make_state(java_file, tmp_path, phase="struts-spring6"),
+            make_state(java_file, tmp_path, phase="struts2-modernize"),
             config={"configurable": {"thread_id": java_file}},
         )
 
@@ -153,7 +165,7 @@ def test_deleted_files_are_recorded_and_reported(tmp_path, java_file):
 
     from forge.utils.report import generate_report
     out = tmp_path / "report.md"
-    generate_report(str(out), "struts-spring6", str(tmp_path), [fs], bedrock_calls=4, estimated_cost_usd=0.01)
+    generate_report(str(out), "struts2-modernize", str(tmp_path), [fs], bedrock_calls=4, estimated_cost_usd=0.01)
     body = out.read_text(encoding="utf-8")
     assert "XML configs replaced by Java configuration" in body
     assert "struts-config.xml" in body

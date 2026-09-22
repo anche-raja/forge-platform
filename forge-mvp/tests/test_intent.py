@@ -51,7 +51,7 @@ def test_a_pack_the_prompt_asks_for_without_evidence_is_never_selected(registry)
 
 
 def test_an_empty_repository_yields_an_empty_plan_however_confident_the_prompt(registry):
-    plan = plan_for({"include": ["spring-to-spring6"], "decisions": {"web_framework": "migrate-to-spring"}},
+    plan = plan_for({"include": ["spring-to-spring6"], "decisions": {"web_framework": "modernize-in-place"}},
                     [], registry)
     assert plan.packs == ()
     assert plan.unsupported[0]["asked"] == "spring-to-spring6"
@@ -99,31 +99,38 @@ def test_a_value_outside_the_enum_is_rejected_and_the_default_stands(registry):
 
 # ─── rule 4: mutually exclusive routes ───────────────────────────────────────
 
-def test_the_two_struts_routes_are_never_both_selected(registry):
-    """'They edit the same files toward different targets' — the requirements spec."""
-    activations = [act("struts2-modernize"), act("struts2-to-springmvc6", runnable=False)]
-    plan = plan_for({"include": ["struts2-modernize", "struts2-to-springmvc6"],
-                     "decisions": {"web_framework": "modernize-in-place"}}, activations, registry)
+def test_every_web_framework_option_maps_to_a_route_that_has_packs(registry):
+    """A decision value no pack implements selects nothing, silently.
 
-    assert plan.packs == ("struts2-modernize",)
-    assert plan.excluded[0]["pack"] == "struts2-to-springmvc6"
-    assert "takes the other route" in plan.excluded[0]["reason"]
-
-
-def test_the_other_route_wins_when_the_decision_says_so(registry):
-    activations = [act("struts2-modernize"), act("struts2-to-springmvc6", runnable=False)]
-    plan = plan_for({"decisions": {"web_framework": "migrate-to-spring"}}, activations, registry)
-
-    assert plan.packs == ("struts2-to-springmvc6",)
-    assert plan.excluded[0]["pack"] == "struts2-modernize"
+    This replaces the two-route arbitration tests. The Struts -> Spring MVC
+    packs were removed and `migrate-to-spring` went with them, precisely so that
+    `web_framework` could not be set to a value that resolves to an empty plan.
+    The rule 4 machinery stays for the next time there are two routes; this is
+    what stops a value outliving its packs.
+    """
+    for option in DECISION_OPTIONS["web_framework"]:
+        packs = WEB_FRAMEWORK_ROUTES.get(option)
+        assert packs, f"web_framework offers '{option}' but no route declares packs for it"
+        for pack_id in packs:
+            assert pack_id in registry, f"route '{option}' names '{pack_id}', which is not a pack"
 
 
-def test_a_view_pack_that_reads_web_framework_is_not_arbitrated_by_it(registry):
-    """`jsp-jstl-modernize` ends in '-modernize' and declares `web_framework`,
-    but it runs on either route — a name-suffix rule would drop the JSPs."""
-    activations = [act("struts2-to-springmvc6", runnable=False), act("jsp-jstl-modernize")]
-    plan = plan_for({"decisions": {"web_framework": "migrate-to-spring"}}, activations, registry)
+def test_a_route_pack_survives_its_own_route_being_chosen(registry):
+    activations = [act("struts2-modernize"), act("javax-to-jakarta")]
+    plan = plan_for({"decisions": {"web_framework": "modernize-in-place"}}, activations, registry)
+    assert "struts2-modernize" in plan.packs
+
+
+def test_a_view_pack_is_not_arbitrated_by_the_route_decision(registry):
+    """`jsp-jstl-modernize` ends in '-modernize' but is a view pack.
+
+    A name-suffix rule would sweep it into the route family and drop the JSPs
+    whenever the route changed; the explicit routes table is what prevents that.
+    """
+    activations = [act("struts2-modernize"), act("jsp-jstl-modernize")]
+    plan = plan_for({"decisions": {"web_framework": "modernize-in-place"}}, activations, registry)
     assert "jsp-jstl-modernize" in plan.packs
+    assert "jsp-jstl-modernize" not in route_governed_packs()
 
 
 # ─── rule 5: state labels survive selection ──────────────────────────────────
@@ -137,9 +144,15 @@ def test_a_detect_only_pack_is_labelled_never_promoted(registry):
 
 
 def test_a_blocked_pack_is_labelled_blocked(registry):
-    activations = [act("struts2-to-springmvc6", runnable=False, complete=True)]
-    plan = plan_for({"decisions": {"web_framework": "migrate-to-spring"}}, activations, registry)
-    assert plan.states["struts2-to-springmvc6"] == "blocked"
+    """Complete but not runnable — a pack waiting on a context extractor.
+
+    No shipped pack is in this state since the Struts -> Spring MVC packs were
+    removed, so the activation is built directly. The label still has to work:
+    the next selector-using pack will land here.
+    """
+    activations = [act("spring-to-spring6", runnable=False, complete=True)]
+    plan = plan_for({"include": ["spring-to-spring6"]}, activations, registry)
+    assert plan.states["spring-to-spring6"] == "blocked"
 
 
 # ─── rule 6: coherence ───────────────────────────────────────────────────────
@@ -157,11 +170,10 @@ def test_dropping_a_dependency_that_was_available_is_reported(registry):
     }
 
 
-def test_the_losing_half_of_the_route_is_not_reported_as_a_gap(registry):
-    """`jsp-jstl-modernize` names both Struts packs because it must follow
-    whichever one runs. The other one's absence is the design, not a gap."""
-    activations = [act("struts2-modernize"), act("struts2-to-springmvc6", runnable=False),
-                   act("jsp-jstl-modernize"), act("javax-to-jakarta")]
+def test_a_dependency_edge_satisfied_by_the_plan_is_not_a_gap(registry):
+    """`depends_on` is an ordering edge; an edge inside the plan is not missing."""
+    activations = [act("struts2-modernize"), act("jsp-jstl-modernize"),
+                   act("javax-to-jakarta"), act("build-maven-modernize")]
     plan = plan_for({"decisions": {"web_framework": "modernize-in-place"}}, activations, registry)
 
     assert plan.gaps == {}

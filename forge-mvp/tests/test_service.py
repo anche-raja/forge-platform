@@ -148,8 +148,8 @@ def test_packs_lists_registry_order_with_runnable_flags():
     assert ids.index("javax-to-jakarta") < ids.index("struts2-modernize")
     by_id = {p["id"]: p for p in listed}
     assert by_id["javax-to-jakarta"]["runnable"] is True
-    assert by_id["struts2-to-springmvc6"]["runnable"] is False and by_id["struts2-to-springmvc6"]["complete"] is True
     assert by_id["ejb2-to-spring"]["complete"] is False
+    assert by_id["ejb2-to-spring"]["runnable"] is False
 
 
 def test_feedback_is_json_safe(tmp_path):

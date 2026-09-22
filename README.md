@@ -124,16 +124,19 @@ forge-platform/
 │   │   ├── verify/        build_verifier (javac / mvn) · acceptance checks over the merged tree
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
 │   │   └── utils/         scanner, writer, report, java_checks, telemetry, cost
+│   ├── USING-FORGE.md     START HERE — the chat workflow, end to end
+│   ├── EXTENDING.md       Adding a technology transition: one markdown file, no Python
+│   ├── COMPONENTS.md      What every module does, and where the Java assumptions live
 │   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI, §14 test generation
 │   ├── GUARDRAILS.md      The six checks every file passes, and what each one costs
 │   ├── INTENT.md          Intent → pack selection: the two boundaries and the eight rules
-│   └── tests/             620+ tests, fully mocked — no AWS needed
+│   └── tests/             721 tests, fully mocked — no AWS needed
 │
 └── prompts/               Specifications and the pack library
     ├── FORGE-Infra-Terraform.md         Infrastructure spec
     ├── FORGE-Phase0-MVP.md              Engine spec
     ├── FORGE-Platform-Requirements.md   Pack contract, invariants, platform decisions
-    └── packs/                           20 packs — one technology transition per *.pack.md
+    └── packs/                           18 packs — one technology transition per *.pack.md
 ```
 
 ---
@@ -244,9 +247,8 @@ sort, so the plan stays reproducible and replays with no model call.
 | Phase | Scope | Files scanned |
 |---|---|---|
 | `java21` | Java 8 → 21, `javax.*` → `jakarta.*`, deprecated + date/time APIs | `.java` |
-| `struts-spring6` | Struts 1/2 → Spring MVC 6, Spring 4 → 6, Jackson 1 → 2, Java 8 → 21 | `.java`, `struts-config.xml`, `struts.xml`, `validation.xml`, Tiles configs |
 
-The two phases above are built in. Everything else is a **pack** under [prompts/packs/](prompts/packs/) —
+`java21` is the one built-in phase. Everything else is a **pack** under [prompts/packs/](prompts/packs/) —
 one technology transition per file (`javax-to-jakarta`, `struts2-modernize`, `springsec-to-springsec6`,
 `webapp-bootstrap-jakarta10`, `liberty-server-config`, …), loaded at startup and accepted by
 `--phase`. The contract is [prompts/FORGE-Platform-Requirements.md](prompts/FORGE-Platform-Requirements.md).
@@ -297,7 +299,7 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 - ✅ **Phase 0 pipeline** — complete, 580+ tests passing (`cd forge-mvp && pytest`, no AWS required)
 - ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
-- ✅ **Phases** — `java21` and `struts-spring6` built in; 10 runnable packs on top
+- ✅ **Phases** — `java21` built in; 10 runnable packs on top (4 without their declared context)
 - ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml`, vendor descriptors and Liberty `server.xml` migrate with full descriptor context
 - ✅ **Discovery + acceptance** — `--discover` profiles any repo and selects packs; `--acceptance` gates the project on mechanical checks
 - ✅ **Human in the loop** — risky units are held for review; `migration-review.html` → `decisions.json` → `--apply-decisions`; notes roll up into `pack-feedback.md`
@@ -316,6 +318,9 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 
 ## Specs
 
+- [forge-mvp/USING-FORGE.md](forge-mvp/USING-FORGE.md) — **start here**: the chat workflow, end to end
+- [forge-mvp/EXTENDING.md](forge-mvp/EXTENDING.md) — adding a technology transition: one markdown file, no Python
+- [forge-mvp/COMPONENTS.md](forge-mvp/COMPONENTS.md) — what each module does, and the surprise in each
 - [prompts/FORGE-Infra-Terraform.md](prompts/FORGE-Infra-Terraform.md) — full infrastructure spec
 - [prompts/FORGE-Phase0-MVP.md](prompts/FORGE-Phase0-MVP.md) — MVP pipeline spec
 - [prompts/FORGE-Platform-Requirements.md](prompts/FORGE-Platform-Requirements.md) — pack contract and platform decisions

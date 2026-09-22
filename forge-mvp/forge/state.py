@@ -32,8 +32,13 @@ class FileStatus(TypedDict):
     module_dir: Optional[str]
     # Which extractor fed the prompts, and a digest of the exact block — the
     # audit trail records what the model saw without storing it in state.
+    # `context_name` is set whenever the pack declares one, even if no block
+    # arrived; `context_missing` is then True. Without that pair, a pack running
+    # blind because its extractor is unbuilt is indistinguishable from a pack
+    # that declared `context: none`.
     context_name: Optional[str]
     context_digest: Optional[str]
+    context_missing: bool
     # HELD: written to .forge-staging/ and waiting for a human, per risk_ceiling.
     held_paths: List[str]
     hold_reason: Optional[str]
@@ -90,6 +95,7 @@ def make_file_status(file_path: str, phase: str) -> FileStatus:
         module_dir=None,
         context_name=None,
         context_digest=None,
+        context_missing=False,
         held_paths=[],
         hold_reason=None,
         human_decision=None,

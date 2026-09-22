@@ -19,6 +19,25 @@ def _warn_once(key: str, message: str) -> None:
         _log.warning(message)
 
 
+def declared_context(state: ForgeState) -> str:
+    """The context name the running pack declares — ``"none"`` when it declares one.
+
+    Read separately from :func:`context_block_for` so a caller can tell the two
+    reasons for an empty block apart: a pack that wants no context, and a pack
+    whose extractor does not exist yet. Both produce ``None`` from
+    ``context_block_for``, and conflating them is how a degraded run looks like
+    a clean one.
+    """
+    fs = state["current_file"]
+    phase = state.get("phase") or fs.get("phase") or "java21"
+    return getattr(get_phase(phase), "context", "none") or "none"
+
+
+def context_available(name: str) -> bool:
+    """Whether an extractor is registered for ``name``. ``"none"`` is not a context."""
+    return name != "none" and get_extractor(name) is not None
+
+
 def context_block_for(state: ForgeState, config: ForgeConfig) -> Tuple[Optional[str], Optional[str]]:
     """``(rendered block, digest)``, or ``(None, None)`` when the unit carries no context.
 
@@ -26,6 +45,9 @@ def context_block_for(state: ForgeState, config: ForgeConfig) -> Tuple[Optional[
     whose extractor is not built yet (warned once), or a module the extractor
     cannot make sense of (warned per module). In each case the pipeline runs as
     it did before contexts existed — the model just is not given the descriptors.
+
+    A ``None`` here is not self-explaining: use :func:`declared_context` and
+    :func:`context_available` to record *why* it was empty.
     """
     fs = state["current_file"]
     phase = state.get("phase") or fs.get("phase") or "java21"

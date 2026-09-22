@@ -14,11 +14,12 @@
 Discovery answers *what is in this repository*, mechanically, from evidence. It cannot answer the
 question that is left over: **which of the routes the evidence allows did you actually want?**
 
-That question is real. `struts2-modernize` and `struts2-to-springmvc6` fire on identical evidence —
-`struts2-core`, `com.opensymphony.xwork2`, `struts*.xml` — because both are genuine options for the
-same repository. Ten `decisions` keys arbitrate this and eight more like it, and until now every one
-of them was set by a human editing `forge-profile.yaml` by hand. `emit.py` says so in a comment:
-*"the generated profile spells them out so a reader edits values, not absences."*
+That question is real. Evidence establishes that a repository has JSPs, an ORM mapping and a set of
+HIGH-risk files; it cannot establish whether the view tier should move, whether the ORM stays, or
+how much should be held for a human before anything is written. Ten `decisions` keys arbitrate
+that, and until now every one of them was set by a human editing `forge-profile.yaml` by hand.
+`emit.py` says so in a comment: *"the generated profile spells them out so a reader edits values,
+not absences."*
 
 So a request like
 

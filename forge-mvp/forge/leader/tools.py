@@ -858,15 +858,37 @@ class Toolbox:
         if problem:
             return self._fail(problem)
 
+        # Chain onto whatever an earlier pack in this conversation wrote, rather
+        # than re-reading the original and replacing it. The user drives this
+        # surface by saying "migrate my app" and nothing else, so the leader has
+        # to sequence a multi-pack plan without being told how; refusing on the
+        # second pack would end every real migration one step in.
+        # Only from the manifest, never from `convo.completed`: a chat that
+        # resumed against a directory an earlier session wrote must chain too.
+        from forge.utils import run_manifest
+        written = run_manifest.load(self.ctx.output_dir)
+        chain = bool(written) and any(owner != pack for owner in written.values())
+
         try:
             result = service.run_migration(
                 self.ctx.source_dir, pack, self.ctx.output_dir, self.effective_config(),
                 dry_run=dry_run, run_acceptance=bool(args.get("acceptance", False)),
+                chain=chain,
                 on_event=self._relay(tool_id), cancel=self.cancel,
             )
         except service.NoEligibleFiles as e:
             return ToolOutcome(True, {"status": "nothing", "pack": pack, "message": cards.cap(e)},
                                [], f"{pack}: nothing to do")
+        except service.PackOverlap as e:
+            # ok:false, so the leader reports it and asks rather than retrying:
+            # the fix is a combined phase or a chained output dir, and both are
+            # the user's call. Capped well above TEXT_CAP because the actionable
+            # half is at the end — at 200 chars the leader would see the
+            # complaint and not the remedy. Every part of this string is engine
+            # prose plus file paths, which are already model-visible; no file
+            # bytes can reach it, so the wider cap does not touch R3.
+            return ToolOutcome(False, {"error": cards.cap(e, 800), "pack": pack},
+                               [], f"{pack}: refused — would overwrite another pack")
 
         summary = result.summary()
         totals = dict(summary.get("totals") or {})

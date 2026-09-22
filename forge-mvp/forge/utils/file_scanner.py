@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-from typing import List, NamedTuple, Sequence, Tuple
+from typing import Dict, List, NamedTuple, Sequence, Tuple
 
 from forge.extract import get_context, get_extractor
 from forge.packs.glob import glob_match
@@ -52,6 +52,12 @@ def runnable_phases() -> List[str]:
     """Phases and packs that can be run as a bare ``--phase`` today.
 
     A pack needing a context extractor is included once that extractor exists.
+
+    Runnability turns on *selectors*, not on context availability: a pack whose
+    file set is pure globs can run without its declared context, it just runs
+    with less to go on. That is a real degradation rather than a refusal, so it
+    is reported by :func:`degraded_phases` instead of hidden here — see the note
+    there for why the alternative was rejected.
     """
     # all_phase_names() rather than the import-time PHASE_NAMES snapshot, so
     # this stays correct when the pack directory is pointed somewhere else.
@@ -62,6 +68,26 @@ def runnable_phases() -> List[str]:
         spec = get_phase(name)
         if not getattr(spec, "needs_selectors", False) or _extractor_for(spec) is not None:
             out.append(name)
+    return out
+
+
+def degraded_phases() -> Dict[str, str]:
+    """``{phase: context}`` for runnable packs whose declared context is unbuilt.
+
+    These run, and their output is worse than the pack's author intended: the
+    transform sees only each file's own bytes, and the reviewer loses the block
+    it would have checked "nothing from the descriptors was dropped" against.
+
+    Dropping them from :func:`runnable_phases` was the other option and would
+    have been wrong — it removes `spring-to-spring6` and `build-maven-modernize`
+    from the working set entirely. A pack labelled honestly is more useful than
+    one that has silently disappeared.
+    """
+    out: Dict[str, str] = {}
+    for name in runnable_phases():
+        context = getattr(get_phase(name), "context", "none") or "none"
+        if context != "none" and get_extractor(context) is None:
+            out[name] = context
     return out
 
 

@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig
-from forge.context.inject import context_block_for
+from forge.context.inject import context_block_for, declared_context
 from forge.phases import get_phase
 from forge.state import ForgeState
 from forge.utils.cost import accrue
@@ -46,10 +46,18 @@ class JavaUpgradeAgent(BaseAgent):
         user_content = f"Transform this file:\nFile path: {file_path}\n\n{source_section}"
 
         block, digest = context_block_for(state, self.config)
+        # `context_name` is recorded whether or not a block arrived. Setting it
+        # only on the success path made "the extractor is not built" identical
+        # to "this pack wants no context" — both left it null — so a pack
+        # transforming without the cross-file facts its author declared looked
+        # exactly like one that never needed them.
+        declared = declared_context(state)
+        file_status["context_name"] = None if declared == "none" else declared
         if block:
             user_content += "\n\n" + block
-            file_status["context_name"] = spec.context
             file_status["context_digest"] = digest
+        elif declared != "none":
+            file_status["context_missing"] = True
 
         # A human's note is its own block, not a value in review_feedback: that
         # field is only rendered on retries and a build failure overwrites it.

@@ -34,36 +34,38 @@ a **discovery run**, not a configuration exercise.
 Every file in `prompts/packs/` is a stack pack: YAML frontmatter plus a `## transform` and a
 `## review` section. `forge/packs/loader.py` reads them at startup.
 
+An illustrative pack, using every field. It is not a shipped one — see §2 for those.
+
 ```yaml
 ---
-id: struts2-to-springmvc6        # unique, kebab-case
+id: example-framework-upgrade    # unique, kebab-case, and equal to the filename stem
 version: 1.0.0                   # semver; pinned per project in the profile
-title: Struts 2 -> Spring MVC 6
+title: ExampleMVC 4 -> ExampleMVC 7
 tier: framework                  # language | build | namespace | framework | view | persistence | test | platform
 
 detect:                          # ANY match activates the pack
   any:
-    - dependency: "org.apache.struts:struts2-core"
-    - file_glob: "**/struts*.xml"
-    - import_prefix: "com.opensymphony.xwork2"
+    - dependency: "com.example:examplemvc-core"
+    - file_glob: "**/example*.xml"
+    - import_prefix: "com.example.mvc"
 
 applies_to:                      # which files this pack transforms
-  - file_glob: "**/struts*.xml"
+  - file_glob: "**/example*.xml"
   - content_match:               # decidable from one file's bytes — no extractor
       glob: "**/*.java"
-      pattern: 'WebSecurityConfigurerAdapter|@EnableWebSecurity'
-  - selector: struts_actions     # named selector resolved by the context extractor
+      pattern: 'extends ExampleAction|@ExampleController'
+  - selector: example_actions    # a named selector — BLOCKS the pack until its extractor exists
 
-context: struts_routing_table    # deterministic extractor that must run before transform
-depends_on: [javax-to-jakarta, spring-to-spring6]
+context: example_routing_table   # deterministic extractor that must run before transform
+depends_on: [javax-to-jakarta]   # an ORDERING edge, not a requirement
 decisions: [url_compat]          # profile keys this pack reads
 eliminates:                      # coordinates the build pack must remove
-  - "org.apache.struts:*"
+  - "com.example:examplemvc-legacy"
 upgrades:                        # coordinates the build pack must bump, group:artifact:version
-  - "org.apache.struts:struts2-core:7.3.0"
+  - "com.example:examplemvc-core:7.3.0"
 
 acceptance:                      # mechanical, post-migration; no model involved
-  - no_match: "org\\.apache\\.struts|com\\.opensymphony"
+  - no_match: "com\\.example\\.mvc\\.legacy"
     scope: "src/**/*.java"
   - routing_parity: true
 ---
@@ -131,8 +133,6 @@ technology.
 | `spring-to-spring6` | framework | complete |
 | `springsec-to-springsec6` | framework | complete |
 | `struts2-modernize` | framework | complete |
-| `struts2-to-springmvc6` | framework | complete |
-| `struts1-to-springmvc6` | framework | complete |
 | `jsp-jstl-modernize` | view | complete |
 | `junit4-to-junit5` | test | complete |
 | `webapp-bootstrap-jakarta10` | platform | complete |
@@ -189,22 +189,25 @@ specific input, and they live in `forge-profile.yaml` — never in a pack, never
 
 | Key | Values | Read by | Default |
 |---|---|---|---|
-| `web_framework` | `modernize-in-place` · `migrate-to-spring` | `struts*-modernize`, `struts*-to-springmvc6` | `modernize-in-place` |
+| `web_framework` | `modernize-in-place` | `struts2-modernize` | `modernize-in-place` |
 | `runtime` | `war-xml-bootstrap` · `war-programmatic-bootstrap` | `webapp-bootstrap-jakarta10`, `build-maven-modernize` | `war-xml-bootstrap` |
 | `container` | `liberty` *(platform standard)* · `wildfly` · `tomcat` · `jetty` | `webapp-bootstrap-jakarta10`, `liberty-server-config`, `build-maven-modernize` | `liberty` |
 | `liberty_edition` | `open` · `websphere` | `liberty-server-config` | `websphere` |
 | `liberty_features` | `jakartaee-10.0` · `webProfile-10.0` · `granular` | `liberty-server-config` | `granular` |
 | `views` | `in-place` · `thymeleaf` · `defer` | `jsp-jstl-modernize`, `jsf-to-faces4` | `in-place` |
-| `url_compat` | `preserve-with-redirect` · `preserve-exact` · `clean-only` | `struts*-to-springmvc6` | `preserve-with-redirect` |
+| `url_compat` | `preserve-with-redirect` · `preserve-exact` · `clean-only` | *(no pack today)* | `preserve-with-redirect` |
 | `persistence` | `keep-orm` · `to-spring-data` | `hibernate-to-hibernate6`, `ejb*-to-spring` | `keep-orm` |
 | `idiom_aggressiveness` | `conservative` · `moderate` | `java8-to-java21` | `conservative` |
 | `risk_ceiling` | `auto` · `review-high` · `review-all` | engine | `review-high` |
 
-`web_framework` picks between two mutually exclusive routes through the same portfolio, and the
-order matters more than it looks. `modernize-in-place` upgrades the framework to its current
-release — a per-file change with no cross-file context, so it runs on today's engine and gets the
-application onto Java 21 and Jakarta EE 10 without changing a single URL. `migrate-to-spring`
-replaces the framework, which needs the routing table and therefore the extract stage.
+`web_framework` has one value. `modernize-in-place` upgrades the framework to its current release
+— a per-file change with no cross-file context, so it runs on today's engine and gets the
+application onto Java 21 and Jakarta EE 10 without changing a single URL.
+
+The `migrate-to-spring` route and its two packs were **removed**. They needed a
+`struts_routing_table` extractor that was never built, so they could be selected but never run, and
+a decision value no pack implements resolves to a plan that selects nothing. The key and the
+arbitration machinery stay so a second route can be reintroduced without them going missing.
 
 Doing them in that order is not a compromise, it is the cheaper path: once an application is on
 Struts 7, it is already on Java 21, Jakarta EE 10 and Liberty, and the eventual Spring migration
@@ -237,7 +240,7 @@ packs:
   - javax-to-jakarta@1.0.0         # evidence: 31 javax.servlet imports
   - spring-to-spring6@1.0.0        # evidence: org.springframework:spring-core:5.3.39
   - springsec-to-springsec6@1.0.0  # evidence: WebSecurityConfigurerAdapter
-  - struts2-to-springmvc6@1.0.0    # evidence: struts2-core:6.8.0, 15x struts*.xml
+  - struts2-modernize@1.0.0        # evidence: struts2-core:6.8.0, 15x struts*.xml
   - jsp-jstl-modernize@1.0.0       # evidence: 116 JSP, 57 java.sun.com JSTL URIs
   - junit4-to-junit5@1.0.0         # evidence: junit:junit:4.12, mockito 1.9.5
   - webapp-bootstrap-jakarta10@1.0.0 # evidence: WEB-INF/web.xml v3.1
