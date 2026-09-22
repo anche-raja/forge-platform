@@ -7,8 +7,42 @@ WebSphere/Open Liberty**, one *pack* (technology transition) at a time. Every fi
 Bedrock Guardrails, a transform model, a cross-model review, a deterministic risk score and an
 optional compile gate before it is written; risky units are held for a human. No Spring Boot.
 
-Drive it from the CLI (`migrate.py`, for CI) or from a local web UI (`migrate.py --ui`) — both
-call the same service layer.
+**You drive it from a chat window.** You say what you want in plain English; a leader agent works
+out which packs your repository needs, runs them in order, shows you anything that needs a human
+decision, and puts the result on a git branch. There is also a CLI (`migrate.py`) that CI uses —
+both sit on the same service layer.
+
+---
+
+## Quick start
+
+```bash
+# 1. Install, and prove it works — fully mocked, no AWS needed
+cd forge-mvp && pip install -r requirements.txt && pytest
+
+# 2. Point it at your deployed infrastructure (see Deployment, below)
+cd .. && ./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
+
+# 3. Open the chat
+cd forge-mvp && python migrate.py --ui      # http://127.0.0.1:8765
+```
+
+Then type `migrate the app at ~/work/myapp` and follow the conversation. Nothing costs money until
+you click; anything over $1 stops and asks.
+
+**→ [forge-mvp/USING-FORGE.md](forge-mvp/USING-FORGE.md) is the guide.** It walks a whole migration
+as a chat transcript, and covers review, cost and landing on a branch.
+
+### Where to go next
+
+| If you are… | Read |
+|---|---|
+| **using FORGE** on a codebase | [USING-FORGE.md](forge-mvp/USING-FORGE.md) |
+| **adding a technology transition** | [EXTENDING.md](forge-mvp/EXTENDING.md) — one markdown file, no Python |
+| **working on FORGE itself** | [COMPONENTS.md](forge-mvp/COMPONENTS.md), then [ARCHITECTURE.md](forge-mvp/ARCHITECTURE.md) |
+| **reviewing what it sends to a model** | [GUARDRAILS.md](forge-mvp/GUARDRAILS.md) |
+
+Everything below this point is for deploying and understanding the system.
 
 ---
 
@@ -198,7 +232,7 @@ pip install -r requirements.txt
 # Run the test suite first — fully mocked, needs no AWS credentials
 pytest
 
-# The whole flow from a browser — Project → Intent → Discover → Run → Review → Accept → Feedback
+# The whole flow as a conversation — say what you want, review in chat, land on a branch
 python migrate.py --ui
 
 # The pack library, in dependency order (no AWS needed)
@@ -296,17 +330,17 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 
 ## Status
 
-- ✅ **Phase 0 infra** — deployed to AWS account `100769305811` / `us-east-1`; Terraform reviewed end to end (IAM covers inference profiles, guardrail tuned for source code, Phase 6 modules opt-in) — re-apply to pick the fixes up
-- ✅ **Phase 0 pipeline** — complete, 580+ tests passing (`cd forge-mvp && pytest`, no AWS required)
+- ✅ **Phase 0 infra** — Terraform reviewed end to end (IAM covers inference profiles, guardrail tuned for source code, Phase 6 modules opt-in). Deployed to whichever account you apply it to; `generate-agents-yaml.sh` reads the outputs
+- ✅ **Phase 0 pipeline** — complete, 721 tests passing (`cd forge-mvp && pytest`, no AWS required)
 - ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
 - ✅ **Phases** — `java21` built in; 10 runnable packs on top (4 without their declared context)
 - ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml`, vendor descriptors and Liberty `server.xml` migrate with full descriptor context
 - ✅ **Discovery + acceptance** — `--discover` profiles any repo and selects packs; `--acceptance` gates the project on mechanical checks
-- ✅ **Human in the loop** — risky units are held for review; `migration-review.html` → `decisions.json` → `--apply-decisions`; notes roll up into `pack-feedback.md`
-- ✅ **Local web UI** — `python migrate.py --ui`: the same pipeline driven from a browser on your own machine, with live progress and one-click approve / reject / retry
+- ✅ **Human in the loop** — risky units are held and reviewed **in the chat**, with Approve / Reject / Retry on each; notes roll up into `pack-feedback.md`. `migration-review.html` → `decisions.json` → `--apply-decisions` is the CI-friendly equivalent
+- ✅ **The chat leader** — `python migrate.py --ui`: a model sequences the plan, chains packs so each builds on the last, and confirms before spending. The wizard is gone (ARCHITECTURE §16)
 - ✅ **Test generation** — `--generate-tests` writes JUnit 5 + Mockito tests for the migrated classes, reviewed by the second model; `--run-tests` executes them and holds the ones that fail
-- ⏳ **SNS email confirmation** — pending click in `ancheraja.ai@gmail.com`
+- ⚠️ **Migration quality is unmeasured** — every test mocks the model, so the suite proves orchestration, not output quality. No pass rate from a real multi-file run exists yet (TODO.md P1)
 - ⏳ **Phase 6+** — SQS and SageMaker modules exist in Terraform, off by default (`enable_*`), not deployed
 
 ## Cost profile
