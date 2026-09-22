@@ -75,7 +75,7 @@ terraform apply
 
 ## FORGE pipeline — forge-mvp/
 
-Original spec in `prompts/FORGE-Phase0-MVP.md`. Key design points:
+Original spec in `forge-mvp/PHASE0-SPEC.md`. Key design points:
 
 - **LangGraph graph**: `guardrails_pre → java_upgrade → java_reviewer → guardrails_post → write_file → verify_build → update_state`
 - **Retry loop**: reviewer score 50–79 routes back to `java_upgrade` with feedback injected into prompt; max 2 retries. A failed build reuses the same loop and the same budget.
@@ -246,7 +246,7 @@ of evidence is not grounds for skipping.
 
 Asking an LLM this question inside `guardrails_post` is what sent both early live runs to
 MANUAL_REVIEW, the second at a *passing* score of 80. The clause that caused it came from
-`prompts/FORGE-Phase0-MVP.md` — that spec line has been corrected, because leaving it in place is
+`forge-mvp/PHASE0-SPEC.md` — that spec line has been corrected, because leaving it in place is
 how the bug gets reimplemented. Regression tests: `tests/test_scope.py` (including a guard that
 the pre-flight prompt never asks about packages again) and `tests/test_phase0_closeout.py`.
 
@@ -345,5 +345,5 @@ collaborators' public signatures and the test libraries the build actually carri
 from the source's own `package` declaration when the model returns a bare filename.
 
 ## Specs
-- `prompts/FORGE-Infra-Terraform.md` — full infrastructure specification
-- `prompts/FORGE-Phase0-MVP.md` — Phase 0 Python pipeline specification
+- `forge-terraform/SPEC.md` — the build prompt that directory came from
+- `forge-mvp/PHASE0-SPEC.md` — the Phase 0 build prompt (historical)

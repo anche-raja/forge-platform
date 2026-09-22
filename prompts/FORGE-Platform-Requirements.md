@@ -1,5 +1,14 @@
 # FORGE — Enterprise J2EE Migration Platform
 
+> **Live contract, not a build prompt.** Unlike the other two files in this directory, this one is
+> current and is cited as the authority by the code itself — `forge/packs/spec.py`,
+> `forge/packs/__init__.py`, `forge/intent/vocabulary.py`, `forge/discover/emit.py`,
+> `forge/ui/app.py` and `forge-terraform/scripts/generate-agents-yaml.sh` all point here. §1 is the
+> pack contract; §4 is the decision vocabulary. Change this and the code changes with it.
+>
+> Writing a pack? [EXTENDING.md](../forge-mvp/EXTENDING.md) is the walkthrough; this is the
+> reference behind it.
+
 FORGE migrates any J2EE/Jakarta application in the enterprise, from a single-module WAR to a
 multi-module EAR, using the **same engine**. What differs between projects is never code — it is
 which **stack packs** discovery activates.

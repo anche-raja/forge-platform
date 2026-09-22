@@ -3,7 +3,7 @@
 > **Scope note.** How every file is screened on its way through the pipeline: the two guardrail
 > nodes, the six checks between them, and where each verdict lands. The nodes themselves are
 > summarised in [ARCHITECTURE.md](ARCHITECTURE.md) §4; the guardrail resource is specified in
-> [prompts/FORGE-Infra-Terraform.md](../prompts/FORGE-Infra-Terraform.md). This document is the
+> [forge-terraform/SPEC.md](../forge-terraform/SPEC.md). This document is the
 > detail under both.
 
 ---

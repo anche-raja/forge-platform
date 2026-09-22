@@ -97,9 +97,10 @@ forge-platform/
 │   │   ├── observability/ CloudWatch log group / dashboard / 4 alarms, SNS
 │   │   ├── sqs/           Phase 6 — manual review queue + DLQ        (enable_sqs)
 │   │   └── sagemaker/     Future — TGI endpoint                      (enable_sagemaker)
-│   └── scripts/
-│       ├── bootstrap-state.sh         Creates the TF state bucket + lock table
-│       └── generate-agents-yaml.sh    Writes agents.yaml from terraform output
+│   ├── scripts/
+│   │   ├── bootstrap-state.sh         Creates the TF state bucket + lock table
+│   │   └── generate-agents-yaml.sh    Writes agents.yaml from terraform output
+│   └── SPEC.md            The build prompt this directory came from (historical)
 │
 ├── forge-mvp/             Python pipeline (LangGraph + Bedrock)
 │   ├── migrate.py         CLI — a printer over forge/service.py; --ui starts the web UI
@@ -125,6 +126,7 @@ forge-platform/
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
 │   │   └── utils/         scanner, writer, report, java_checks, telemetry, cost
 │   ├── USING-FORGE.md     START HERE — the chat workflow, end to end
+│   ├── PHASE0-SPEC.md     The build prompt Phase 0 came from (historical)
 │   ├── EXTENDING.md       Adding a technology transition: one markdown file, no Python
 │   ├── COMPONENTS.md      What every module does, and where the Java assumptions live
 │   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI, §14 test generation
@@ -132,11 +134,10 @@ forge-platform/
 │   ├── INTENT.md          Intent → pack selection: the two boundaries and the eight rules
 │   └── tests/             721 tests, fully mocked — no AWS needed
 │
-└── prompts/               Specifications and the pack library
-    ├── FORGE-Infra-Terraform.md         Infrastructure spec
-    ├── FORGE-Phase0-MVP.md              Engine spec
-    ├── FORGE-Platform-Requirements.md   Pack contract, invariants, platform decisions
-    └── packs/                           18 packs — one technology transition per *.pack.md
+└── prompts/               Runtime prompts, and the contract they are written against
+    ├── README.md
+    ├── packs/                           18 packs — sent to Bedrock verbatim on every run
+    └── FORGE-Platform-Requirements.md   The pack contract (§1) and decision vocabulary (§4)
 ```
 
 ---
@@ -321,8 +322,8 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 - [forge-mvp/USING-FORGE.md](forge-mvp/USING-FORGE.md) — **start here**: the chat workflow, end to end
 - [forge-mvp/EXTENDING.md](forge-mvp/EXTENDING.md) — adding a technology transition: one markdown file, no Python
 - [forge-mvp/COMPONENTS.md](forge-mvp/COMPONENTS.md) — what each module does, and the surprise in each
-- [prompts/FORGE-Infra-Terraform.md](prompts/FORGE-Infra-Terraform.md) — full infrastructure spec
-- [prompts/FORGE-Phase0-MVP.md](prompts/FORGE-Phase0-MVP.md) — MVP pipeline spec
+- [forge-terraform/SPEC.md](forge-terraform/SPEC.md) — the build prompt `forge-terraform/` came from
+- [forge-mvp/PHASE0-SPEC.md](forge-mvp/PHASE0-SPEC.md) — the Phase 0 build prompt (historical)
 - [prompts/FORGE-Platform-Requirements.md](prompts/FORGE-Platform-Requirements.md) — pack contract and platform decisions
 - [forge-mvp/ARCHITECTURE.md](forge-mvp/ARCHITECTURE.md) — engine architecture, packs, web UI
 - [forge-mvp/GUARDRAILS.md](forge-mvp/GUARDRAILS.md) — the six checks every file passes, and what each costs
