@@ -6,7 +6,7 @@
 > [prompts/FORGE-Platform-Requirements.md](../prompts/FORGE-Platform-Requirements.md); the
 > local web UI and the service layer under both front ends are in §13.
 > The engine started as a single-phase **Java 8 → 21 upgrade** pipeline. It is *not* the 15-agent vision in
-> `FORGE-AgentDeepDive.pptx`. Per [prompts/FORGE-Phase0-MVP.md](../prompts/FORGE-Phase0-MVP.md),
+> `FORGE-AgentDeepDive.pptx`. Per [PHASE0-SPEC.md](PHASE0-SPEC.md),
 > Phase 0 is deliberately *"one transform agent, one review agent, nothing else."* The deck is the target end-state; this is the foundation.
 
 ---

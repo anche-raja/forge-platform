@@ -1,6 +1,24 @@
 # FORGE — Phase 0: MVP
 # Java Upgrade Agent — Prove the full pipeline works end to end
 
+> **Historical build prompt. Do not read it as a description of the system.**
+>
+> This is the prompt Phase 0 was built *from*, kept as the record of what was
+> asked for and why. The engine has moved well past it: packs, discovery,
+> intent, the risk gate, the review queue, test generation and the chat leader
+> all came later. For what FORGE does today read
+> [ARCHITECTURE.md](ARCHITECTURE.md); for how to use it,
+> [USING-FORGE.md](USING-FORGE.md).
+>
+> Two things below are no longer true, called out because a stale line in this
+> file has already been followed once into a real bug (`../CLAUDE.md`, the
+> package-scope regression):
+> - **`struts-spring6` no longer exists.** The Struts → Spring MVC route was
+>   removed; Struts is modernised in place by the `struts2-modernize` pack.
+>   Ignore every mention of that phase, including the file-eligibility rule.
+> - **`--phase` is not `java21`-only.** It accepts `java21` plus every runnable
+>   pack. `--list-packs` is the live answer.
+
 ## Goal
 Build the minimum working FORGE system. One transform agent (Java X→Y). One review agent (Java reviewer). Full pipeline from CLI to DynamoDB to LangSmith. Nothing else. Every architectural decision made here becomes the foundation all future phases build on.
 

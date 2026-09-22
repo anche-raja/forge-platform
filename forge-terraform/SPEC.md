@@ -2,6 +2,13 @@
 # Terraform — AWS provider
 # Provision everything FORGE needs before running any phase
 
+> **Build prompt.** This is what `forge-terraform/` was built from, and it still
+> matches it — the same four modules (`foundation`, `observability`, `sqs`,
+> `sagemaker`) behind the same `enable_*` flags. Deploying is
+> [the root README](../README.md#deployment); the deployed resources reach the
+> pipeline through `scripts/generate-agents-yaml.sh` in this directory. If the Terraform and this
+> file ever disagree, the Terraform is the truth.
+
 ## Goal
 Build all AWS infrastructure FORGE requires across all 6 phases using Terraform.
 Infrastructure is split into modules — deploy only what each phase needs.
