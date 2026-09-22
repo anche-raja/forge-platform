@@ -201,6 +201,44 @@ def test_unregistered_context_runs_without_a_block_and_warns_once(tmp_path, modu
     assert caplog.text.count("no extractor is registered") == 1
 
 
+def test_a_missing_extractor_is_recorded_and_not_confused_with_wanting_no_context(
+        tmp_path, module, fresh_registry):
+    """The two reasons a context block is empty must stay tellable apart.
+
+    Recording `context_name` only when a block arrived left both cases at
+    `None`: a pack transforming blind because its extractor is unbuilt looked
+    exactly like a pack that declared `context: none`. Four shipped packs are in
+    the first group, so this is the field that says a run was lower confidence.
+    """
+    packs_dir = tmp_path / "packs"
+    write_pack(packs_dir, "blind-pack", frontmatter=_fm(
+        "blind-pack", context="spring_bean_graph",
+        applies_to='\n  - file_glob: "**/*.java"'))
+    write_pack(packs_dir, "plain-pack", frontmatter=_fm(
+        "plain-pack", context="none", applies_to='\n  - file_glob: "**/*.java"'))
+    fresh_registry(packs_dir)
+
+    java = str(module / "src/main/java/com/acme/orders/web/LoggingFilter.java")
+
+    _, blind = _transform(tmp_path, java, "blind-pack")
+    assert blind["context_name"] == "spring_bean_graph", "the declared context is named even when unmet"
+    assert blind["context_missing"] is True
+    assert blind["context_digest"] is None, "nothing was rendered, so there is nothing to digest"
+
+    _, plain = _transform(tmp_path, java, "plain-pack")
+    assert plain["context_name"] is None, "a pack wanting no context names none"
+    assert not plain.get("context_missing"), "declaring `context: none` is not a missing context"
+
+
+def test_a_context_that_is_present_still_records_its_name_and_digest(tmp_path, module):
+    """The success path must keep working — this is the control for the test above."""
+    target = str(module / "src/main/webapp/WEB-INF/web.xml")
+    _, fs = _transform(tmp_path, target, WEBAPP)
+    assert fs["context_name"] == "web_bootstrap"
+    assert fs["context_digest"], "a rendered block is digested for the audit trail"
+    assert not fs.get("context_missing")
+
+
 def test_module_without_a_descriptor_degrades_to_no_context_with_a_warning(tmp_path, caplog):
     lib = tmp_path / "lib"
     src = lib / "src/main/java/com/acme/Util.java"

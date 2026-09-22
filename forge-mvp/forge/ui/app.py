@@ -274,6 +274,11 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
             except service.NoEligibleFiles as e:
                 emit({"type": "nothing", "message": str(e)})
                 return None
+            except service.PackOverlap as e:
+                # An error, not a "nothing": the user asked for work that was
+                # refused, and the message names what to do instead.
+                emit({"type": "error", "error": str(e)})
+                return None
 
         try:
             job = registry.start("run", body.model_dump(), target,

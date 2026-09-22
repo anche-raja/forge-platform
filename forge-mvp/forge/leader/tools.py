@@ -867,6 +867,16 @@ class Toolbox:
         except service.NoEligibleFiles as e:
             return ToolOutcome(True, {"status": "nothing", "pack": pack, "message": cards.cap(e)},
                                [], f"{pack}: nothing to do")
+        except service.PackOverlap as e:
+            # ok:false, so the leader reports it and asks rather than retrying:
+            # the fix is a combined phase or a chained output dir, and both are
+            # the user's call. Capped well above TEXT_CAP because the actionable
+            # half is at the end — at 200 chars the leader would see the
+            # complaint and not the remedy. Every part of this string is engine
+            # prose plus file paths, which are already model-visible; no file
+            # bytes can reach it, so the wider cap does not touch R3.
+            return ToolOutcome(False, {"error": cards.cap(e, 800), "pack": pack},
+                               [], f"{pack}: refused — would overwrite another pack")
 
         summary = result.summary()
         totals = dict(summary.get("totals") or {})

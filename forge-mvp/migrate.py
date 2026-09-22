@@ -12,6 +12,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from forge.config import ConfigError
+
 load_dotenv()
 
 
@@ -32,6 +34,11 @@ def _print_event(event: dict) -> None:
         print(f"Context snapshot: {event['path']}")
     elif t == "snapshot_skipped":
         print(f"Context snapshot skipped: {event['reason']}")
+    elif t == "context_missing":
+        # Printed before the per-file lines, because it is a caveat on all of them.
+        print(f"WARNING: {event['reason']}.\n"
+              f"         Every file in this run is transformed without project context, and the\n"
+              f"         reviewer has no descriptors to cross-check. Results are lower confidence.")
     elif t == "queue":
         print(f"\nReview queue: {event['path']} ({event['count']} files)")
         print(f"Review page:  {event['page']}")
@@ -87,16 +94,33 @@ def _list_packs() -> int:
         print(f"Pack library failed to load:\n  {e}")
         return 1
 
+    from forge.utils.file_scanner import degraded_phases, runnable_phases
+
+    runnable = set(runnable_phases())
+    degraded = degraded_phases()
+
     print(f"{len(registry)} packs — {len(registry.complete)} complete, "
           f"{len(registry.detect_only)} detect-only\n")
     for i, pack_id in enumerate(registry.order, 1):
         pack = registry[pack_id]
         mark = " " if pack.is_complete else "*"
         deps = f"  after: {', '.join(pack.depends_on)}" if pack.depends_on else ""
-        print(f"{i:3}.{mark} [{pack.tier:<11}] {pack.id:<28} {pack.title}")
+        # A complete pack that is not runnable is blocked on a selector's
+        # extractor; a runnable one may still be missing a declared context.
+        if pack.is_complete and pack_id not in runnable:
+            note = "  ← BLOCKED: needs the '%s' extractor" % pack.context
+        elif pack_id in degraded:
+            note = "  ← runs WITHOUT context (needs the '%s' extractor)" % degraded[pack_id]
+        else:
+            note = ""
+        print(f"{i:3}.{mark} [{pack.tier:<11}] {pack.id:<28} {pack.title}{note}")
         if deps:
             print(f"     {deps}")
     print("\n* detect-only — recognised, reported, but not yet migrated")
+    if degraded:
+        print("\nA pack marked \"runs WITHOUT context\" transforms each file from its own bytes\n"
+              "alone: the cross-file facts its author declared are unavailable, and the reviewer\n"
+              "loses the descriptors it would have cross-checked. It works; it is less reliable.")
     return 0
 
 
@@ -211,6 +235,11 @@ def _migrate(args) -> int:
     except service.NoEligibleFiles as e:
         print(str(e))
         sys.exit(0)
+    except service.PackOverlap as e:
+        # Non-zero: nothing ran, and a script chaining packs must not continue
+        # as though the migration happened.
+        print(f"Refused: {e}")
+        sys.exit(2)
     return 0
 
 
@@ -293,4 +322,9 @@ def main():
 
 if __name__ == "__main__":
     # main() returns an exit code on the acceptance paths; a CI gate needs it.
-    sys.exit(main() or 0)
+    try:
+        sys.exit(main() or 0)
+    except ConfigError as e:
+        # A config the user can fix, so it gets its message and not a traceback.
+        print(f"Configuration error: {e}")
+        sys.exit(2)

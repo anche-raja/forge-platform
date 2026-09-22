@@ -15,6 +15,10 @@ dynamodb_table: "forge-migration-state-dev"
 dynamodb_checkpoint_table: "forge-langgraph-checkpoints-dev"
 
 # ─── Bedrock Guardrails ───────────────────────────────────────────────────────
+# This file is a reference for the KEYS. It is not runnable as it stands — the
+# placeholder below has no guardrail behind it, and the first pipeline node
+# fails on it. Generate the real thing instead of editing this by hand:
+#   ./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
 guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"
 guardrail_version: "1"
 
@@ -85,6 +89,37 @@ leader:
   # from `estimated_cost_usd`, accrued per real call.
   unit_cost_usd: 0.07
   history_messages: 40
+
+# ─── The secret gate ──────────────────────────────────────────────────────────
+# Local, deterministic, and ahead of EVERY remote call — ApplyGuardrail included.
+# A file carrying a credential is refused while its bytes are still in the
+# process, for zero Bedrock calls. Nothing downstream substitutes for this: the
+# Bedrock guardrail is itself a network call and covers only six entity types,
+# and a model asked "does this file contain secrets?" has already been shown the
+# secret. Findings never quote the matched bytes. See GUARDRAILS.md §9.
+#   action: block -> BLOCKED. warn -> a finding only, and the file IS then sent.
+#   entropy      -> catches base64-shaped credentials with no vendor prefix.
+#   allow        -> regexes for literals the team has cleared (test vectors,
+#                   sample tokens); matched against the WHOLE line, so a
+#                   trailing `// NIST vector` comment is enough to clear one.
+# Prefer raising min_bits or adding an `allow` entry over turning entropy off,
+# and treat `action: warn` as a policy decision — it sends the secret to the
+# model — not as a way to quiet a noisy scan.
+secret_scan:
+  enabled: true
+  action: block
+  entropy:
+    enabled: true
+    min_length: 20
+    min_bits: 4.0
+  allow: []
+
+# ─── Optional qualitative pre-flight ─────────────────────────────────────────
+# OFF: sending source to a model to look for secrets is the disclosure a secret
+# policy forbids, and every other question the check used to ask is now answered
+# locally. Enable only for the migration-safety questions in guardrails_pre, and
+# only if your policy permits source to reach a model before the gate clears it.
+preflight_model_check: false
 
 # ─── Cost model (drives estimated_cost_usd + the FORGE-CostSpike alarm) ──────
 # USD per 1,000 tokens. Update when Bedrock pricing changes — no code change needed.

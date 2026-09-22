@@ -19,11 +19,16 @@ def generate_report(
 
     counts = {s: 0 for s in ("DONE", "MANUAL_REVIEW", "BLOCKED", "HELD", "REJECTED", "PENDING")}
     retried = 0
+    context_blind = 0
+    missing_context_name = ""
     for fs in file_statuses:
         status = fs.get("status", "UNKNOWN")
         counts[status] = counts.get(status, 0) + 1
         if (fs.get("retry_count") or 0) > 0:
             retried += 1
+        if fs.get("context_missing"):
+            context_blind += 1
+            missing_context_name = missing_context_name or (fs.get("context_name") or "")
 
     lines = [
         f"# FORGE Migration Report",
@@ -41,6 +46,22 @@ def generate_report(
         f"- **Files rejected by reviewer:** {counts.get('REJECTED', 0)}",
         f"- **Total Bedrock calls:** {bedrock_calls}",
         f"- **Estimated Bedrock cost:** ${estimated_cost_usd:.4f}",
+    ]
+
+    # A pack whose declared extractor is not built runs without the cross-file
+    # facts its author said it needs, and the reviewer loses the same block it
+    # would have cross-checked against. That is a quality caveat on every row
+    # below, so it is stated here rather than left to a log line.
+    if context_blind:
+        lines += [
+            f"",
+            f"> **{context_blind} file(s) were transformed without project context.** This pack "
+            f"declares `context: {missing_context_name}`, and no extractor is registered for it, "
+            f"so the transform saw only each file's own bytes and the reviewer had no descriptors "
+            f"to cross-check against. Treat these results as lower confidence.",
+        ]
+
+    lines += [
         f"",
         f"## Per-file Results",
         f"",
