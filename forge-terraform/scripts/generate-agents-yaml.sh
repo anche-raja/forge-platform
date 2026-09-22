@@ -7,6 +7,12 @@
 #
 # Example (writes directly to forge-mvp):
 #   ./scripts/generate-agents-yaml.sh dev > ../forge-mvp/agents.yaml
+#
+# The [environment] argument does NOT choose an environment. Which state this
+# reads was fixed by the -backend-config="key=forge/<env>/terraform.tfstate"
+# you passed at `terraform init`. The argument is a label, and it is checked
+# against that key so a mismatch stops here instead of quietly producing a
+# config for the wrong account. To switch environments, re-run `terraform init`.
 
 set -euo pipefail
 
@@ -21,6 +27,36 @@ TF_DIR="${SCRIPT_DIR}/.."
 
 echo "==> Reading terraform outputs from: ${TF_DIR}" >&2
 cd "$TF_DIR"
+
+# Which state is actually being read. `terraform init` records the resolved
+# backend config here, so this is the ground truth — not the argument above.
+# Reported unconditionally: the whole failure mode is an operator believing the
+# command line over the backend, so the backend has to be the thing on screen.
+BACKEND_META=".terraform/terraform.tfstate"
+STATE_KEY=""
+if [[ -f "$BACKEND_META" ]]; then
+  STATE_KEY="$(jq -r '.backend.config.key // ""' "$BACKEND_META" 2>/dev/null || echo "")"
+  STATE_BUCKET="$(jq -r '.backend.config.bucket // ""' "$BACKEND_META" 2>/dev/null || echo "")"
+  if [[ -n "$STATE_KEY" ]]; then
+    echo "==> State: s3://${STATE_BUCKET}/${STATE_KEY}" >&2
+  fi
+fi
+
+# A label that contradicts the state is the dangerous case: `… prod` against a
+# dev backend yields a dev config whose header says prod. Refuse it. Only when
+# the key actually carries the label as a path segment can we judge, so an
+# unrecognised layout warns rather than blocking a legitimate run.
+if [[ -n "$STATE_KEY" ]]; then
+  if [[ "/${STATE_KEY}" != *"/${ENV}/"* ]]; then
+    if [[ "$STATE_KEY" =~ /(dev|test|stage|staging|prod|production)/ ]]; then
+      echo "ERROR: asked for '${ENV}', but the initialised backend is '${STATE_KEY}'." >&2
+      echo "       This argument does not switch environments — \`terraform init\` does." >&2
+      echo "       Re-run: terraform init -reconfigure -backend-config=\"key=forge/${ENV}/terraform.tfstate\" …" >&2
+      exit 1
+    fi
+    echo "WARNING: cannot confirm '${ENV}' against state key '${STATE_KEY}'; check it is the one you want." >&2
+  fi
+fi
 
 TF_OUTPUT="$(terraform output -json 2>/dev/null)"
 

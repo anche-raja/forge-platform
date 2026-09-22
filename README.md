@@ -20,7 +20,8 @@ both sit on the same service layer.
 # 1. Install, and prove it works — fully mocked, no AWS needed
 cd forge-mvp && pip install -r requirements.txt && pytest
 
-# 2. Point it at your deployed infrastructure (see Deployment, below)
+# 2. Point it at your deployed infrastructure (see Deployment; `dev` is a label,
+#    the environment comes from your `terraform init` backend key)
 cd .. && ./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
 
 # 3. Open the chat
@@ -222,6 +223,11 @@ The Phase 6 manual-review queue and the SageMaker endpoint are opt-in: set `enab
 `agents.yaml` carries every resource ID the pipeline needs plus the thresholds, platform
 decisions and model pricing. **Re-run this after any Terraform change** — a guardrail edit
 publishes a new guardrail version, and the pipeline pins the version number.
+
+The `dev` argument is a **label, not a switch**. Which state is read was fixed by the
+`-backend-config="key=forge/<env>/…"` you passed at `terraform init`. The script prints the state
+it actually read and refuses if the label contradicts it, so you cannot generate a prod-labelled
+config from dev infrastructure — but to change environment, re-run `terraform init`.
 
 ### 3. Run the pipeline
 

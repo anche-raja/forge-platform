@@ -188,6 +188,10 @@ You need AWS credentials and a generated config:
 
 That reads your Terraform outputs. Re-run it after any `terraform apply`.
 
+`dev` is a label, not a switch — the environment comes from the backend key you gave
+`terraform init`. The script prints the state it actually read, and stops if the label disagrees
+with it.
+
 **`agents.yaml.example` will not run** — it is a reference for the keys and ships a placeholder
 guardrail ID. FORGE stops with a message telling you this rather than failing mid-run.
 
