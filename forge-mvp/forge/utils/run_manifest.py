@@ -27,8 +27,8 @@ def _path(output_dir: str) -> Path:
     return Path(output_dir).resolve() / MANIFEST_NAME
 
 
-def load(output_dir: str) -> Dict[str, str]:
-    """``{relative path: phase}`` for everything written into this directory.
+def _read(output_dir: str) -> Dict[str, Dict[str, str]]:
+    """The raw manifest, as ``{"writes": {...}, "deleted": {...}}``.
 
     A missing or unreadable manifest is an empty one: this is a guard, and a
     guard that cannot read its own notes must not block a run.
@@ -36,17 +36,42 @@ def load(output_dir: str) -> Dict[str, str]:
     try:
         data = json.loads(_path(output_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
-    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+        return {"writes": {}, "deleted": {}}
+    if not isinstance(data, dict):
+        return {"writes": {}, "deleted": {}}
+    # The first shape was a flat {path: phase} map of writes.
+    if "writes" not in data and "deleted" not in data:
+        return {"writes": {str(k): str(v) for k, v in data.items()}, "deleted": {}}
+    return {
+        "writes": {str(k): str(v) for k, v in (data.get("writes") or {}).items()},
+        "deleted": {str(k): str(v) for k, v in (data.get("deleted") or {}).items()},
+    }
 
 
-def record(output_dir: str, phase: str, written: Sequence[str]) -> None:
-    """Note that ``phase`` wrote ``written`` (paths relative to ``output_dir``)."""
-    if not written:
+def load(output_dir: str) -> Dict[str, str]:
+    """``{relative path: phase}`` for everything written into this directory."""
+    return _read(output_dir)["writes"]
+
+
+def deleted_paths(output_dir: str) -> List[str]:
+    """Relative paths an earlier pack retired.
+
+    A chained run must not hand the next pack a descriptor the last one
+    replaced — it would migrate a file that is on its way out, and pay for it.
+    """
+    return sorted(_read(output_dir)["deleted"])
+
+
+def record(output_dir: str, phase: str, written: Sequence[str],
+           deleted: Sequence[str] = ()) -> None:
+    """Note what ``phase`` wrote and retired (paths relative to ``output_dir``)."""
+    if not written and not deleted:
         return
-    manifest = load(output_dir)
+    manifest = _read(output_dir)
     for rel in written:
-        manifest[_rel(output_dir, rel)] = phase
+        manifest["writes"][_rel(output_dir, rel)] = phase
+    for rel in deleted:
+        manifest["deleted"][_rel(output_dir, rel)] = phase
     target = _path(output_dir)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)

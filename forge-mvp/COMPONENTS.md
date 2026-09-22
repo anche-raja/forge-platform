@@ -170,7 +170,13 @@ new `.pack.md` and zero Python.** This is the cleanest extension point in the sy
 `java_upgrade.py` opens that path directly; `write_output` overwrites rather than merging. Two packs
 that transform the same file therefore do not compose — which is why the built-in `java21` phase
 bundles Java 8 -> 21 and `javax.*` -> `jakarta.*` into a single pass rather than deferring to the
-two packs that do them separately. `utils/run_manifest.py` records which pack wrote which file and
+two packs that do them separately.
+
+**`chain=True` is how the second pack composes anyway.** It materialises the merged view of source
+⊕ output into a temp tree and runs from there, so the pack transforms the previous pack's result,
+and the overlap guard is skipped because overwriting is then the point. The leader turns it on
+automatically from the manifest, since the chat surface has to sequence a ten-pack plan without
+being told how. `utils/run_manifest.py` records which pack wrote which file and
 `run_migration` raises `PackOverlap` before spending anything, because the engine can refuse but
 cannot merge: two packs' answers to two different questions are not mechanically combinable.
 
@@ -343,7 +349,7 @@ work. This is also the most deeply Java-coupled subsystem after the profiler.
 |---|---|---|
 | `forge/state_store/dynamodb.py` | 231 | Per-file status, and the LangGraph checkpointer. |
 | `forge/utils/file_scanner.py` | 260 | Decides which files a pack takes; reports degraded packs. |
-| `forge/utils/run_manifest.py` | 107 | Which pack wrote which file, so the next one is refused. |
+| `forge/utils/run_manifest.py` | 132 | Which pack wrote and retired which file — the overlap guard and the chained view. |
 | `forge/utils/java_checks.py` | 99 | Java package and import parsing. |
 | `forge/utils/cost.py` | 52 | Token accounting from `usage_metadata`. |
 | `forge/utils/telemetry.py` | 97 | CloudWatch metrics. |
@@ -397,4 +403,5 @@ is off by default. A run will look like it worked.
 - `ARCHITECTURE.md` — how the pipeline is wired, node by node
 - `GUARDRAILS.md` — the six checks every file passes, and what each costs
 - `INTENT.md` — prose → pack selection, and the eight reconciliation rules
+- `EXTENDING.md` — adding a technology transition
 - `../prompts/FORGE-Platform-Requirements.md` §1 — the pack contract, for authors

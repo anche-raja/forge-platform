@@ -124,12 +124,13 @@ forge-platform/
 │   │   ├── verify/        build_verifier (javac / mvn) · acceptance checks over the merged tree
 │   │   ├── state_store/   DynamoDB checkpointer + state manager
 │   │   └── utils/         scanner, writer, report, java_checks, telemetry, cost
-│   ├── USING-FORGE.md     START HERE — repo to migrated code on a branch, and authoring a pack
+│   ├── USING-FORGE.md     START HERE — the chat workflow, end to end
+│   ├── EXTENDING.md       Adding a technology transition: one markdown file, no Python
 │   ├── COMPONENTS.md      What every module does, and where the Java assumptions live
 │   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI, §14 test generation
 │   ├── GUARDRAILS.md      The six checks every file passes, and what each one costs
 │   ├── INTENT.md          Intent → pack selection: the two boundaries and the eight rules
-│   └── tests/             715 tests, fully mocked — no AWS needed
+│   └── tests/             721 tests, fully mocked — no AWS needed
 │
 └── prompts/               Specifications and the pack library
     ├── FORGE-Infra-Terraform.md         Infrastructure spec
@@ -317,7 +318,8 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 
 ## Specs
 
-- [forge-mvp/USING-FORGE.md](forge-mvp/USING-FORGE.md) — **start here**: running a migration end to end, authoring your own pack, and what a non-JVM stack would take
+- [forge-mvp/USING-FORGE.md](forge-mvp/USING-FORGE.md) — **start here**: the chat workflow, end to end
+- [forge-mvp/EXTENDING.md](forge-mvp/EXTENDING.md) — adding a technology transition: one markdown file, no Python
 - [forge-mvp/COMPONENTS.md](forge-mvp/COMPONENTS.md) — what each module does, and the surprise in each
 - [prompts/FORGE-Infra-Terraform.md](prompts/FORGE-Infra-Terraform.md) — full infrastructure spec
 - [prompts/FORGE-Phase0-MVP.md](prompts/FORGE-Phase0-MVP.md) — MVP pipeline spec

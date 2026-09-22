@@ -34,6 +34,8 @@ def _print_event(event: dict) -> None:
         print(f"Context snapshot: {event['path']}")
     elif t == "snapshot_skipped":
         print(f"Context snapshot skipped: {event['reason']}")
+    elif t == "chained":
+        print(f"Chaining: {event['reason']}")
     elif t == "context_missing":
         # Printed before the per-file lines, because it is a caveat on all of them.
         print(f"WARNING: {event['reason']}.\n"

@@ -11,6 +11,7 @@ verifier) are imported inside the functions that need them, so a test can
 patch them before they are first bound.
 """
 
+import tempfile
 import threading
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -351,7 +352,7 @@ def discover(source_dir: str, output_dir: str, config: Optional[ForgeConfig] = N
 def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeConfig, *, dry_run: bool = False,
                   single_file: Optional[str] = None, resume: bool = False, no_metrics: bool = False,
                   run_acceptance: bool = False, acceptance_build: bool = False, with_tests: bool = False,
-                  run_tests: Optional[bool] = None,
+                  run_tests: Optional[bool] = None, chain: bool = False,
                   on_event: OnEvent = None, cancel: Optional[threading.Event] = None) -> RunResult:
     """One phase over one project — what ``migrate.py --phase`` does.
 
@@ -362,6 +363,13 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     ``with_tests`` runs test generation afterwards, over the files this run
     actually wrote — after acceptance, because a project that did not migrate
     is not a project to write tests for.
+
+    ``chain`` builds on what an earlier pack already wrote instead of refusing
+    to overwrite it. The units are read from the merged view of the source tree
+    with ``output_dir`` laid over it, so this pack transforms the *previous*
+    pack's result rather than the original file. Without it a second pack over
+    the same files is refused (``PackOverlap``), because it would read the
+    original and replace the first pack's work.
     """
     from forge.extract import clear_context_cache
     from forge.extract.selectors import is_generated_target
@@ -378,6 +386,20 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     state_manager = DynamoDBStateManager(config)
     metrics = MetricsEmitter(config, enabled=not no_metrics and not dry_run)
     source_dir = str(Path(source_dir).resolve())
+
+    # Chaining: read this pack's units from source ⊕ output rather than from
+    # source alone, so it transforms what the last pack produced. The merged
+    # view is materialised because the whole pipeline — scanner, transform,
+    # extractors, writer — works on real paths, and mirroring the source layout
+    # means `write_output`'s relative paths still land correctly in output_dir.
+    _chain_dir: Optional[tempfile.TemporaryDirectory] = None
+    if chain and not resume:
+        from forge.verify.merged_tree import MergedTree
+        _chain_dir = tempfile.TemporaryDirectory(prefix="forge-chain-")
+        merged = MergedTree(source_dir, output_dir, deleted=run_manifest.deleted_paths(output_dir))
+        source_dir = str(merged.materialize(_chain_dir.name).resolve())
+        emit(on_event, {"type": "chained", "phase": phase,
+                        "reason": "reading from the previous pack's output, not the original source"})
 
     skipped: list = []
     generated: Sequence[str] = ()
@@ -412,7 +434,9 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # Before anything is spent: would this pack overwrite a different pack's
     # work? Packs read the original source, so it would replace rather than
     # build on it. Refused rather than merged — see run_manifest's docstring.
-    if not dry_run:
+    # Chaining is the sanctioned answer, so it is exempt: overwriting is the
+    # point when the input was that output.
+    if not dry_run and not chain:
         clashes = run_manifest.conflicts(output_dir, phase, source_dir, [u for u, _ in units])
         if clashes:
             raise PackOverlap(run_manifest.refusal(phase, clashes))
@@ -448,7 +472,8 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # ones, so a held or blocked unit claims nothing.
     if not dry_run:
         run_manifest.record(str(output_root), phase,
-                            [p for fs in all_statuses for p in (fs.get("written_paths") or [])])
+                            [p for fs in all_statuses for p in (fs.get("written_paths") or [])],
+                            deleted=[d for fs in all_statuses for d in (fs.get("deleted_files") or [])])
 
     # The full extracted context, for the reviewer of last resort and for the
     # acceptance checks that diff pre- against post-migration facts. Written in
@@ -498,6 +523,10 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         "cost_usd": round(total_cost, 6),
     }
     emit(on_event, {"type": "summary", **totals, "report": str(report_path)})
+
+    # The chained copy has done its job; everything downstream reads output_dir.
+    if _chain_dir is not None:
+        _chain_dir.cleanup()
 
     return RunResult(
         phase=phase, source_dir=source_dir, output_dir=str(output_root), dry_run=dry_run,
