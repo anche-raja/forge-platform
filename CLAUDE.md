@@ -155,7 +155,7 @@ only the files that were written. Every outcome is pass, fail with evidence, or 
 reason; the verdict is `INCOMPLETE`, never `PASS`, while anything was skipped. The exit code
 reaches the shell, so `--acceptance-only` is a CI gate.
 
-`--phase` accepts the two built-in phases (`java21`, `struts-spring6`) and every *complete* pack.
+`--phase` accepts the built-in `java21` phase and every *complete* pack.
 A pack that needs a context extractor which is not built yet is refused with a message listing
 what is runnable; `forge.utils.file_scanner.runnable_phases()` is the source of truth.
 

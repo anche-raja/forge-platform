@@ -65,7 +65,7 @@ occupies the single job slot.
 |---|---|---|
 | `forge/service.py` | 716 | The API both the CLI and the UI call. `discover`, `run_migration`, `acceptance`, `apply`, `generate_tests`, `feedback`, `packs`. |
 | `forge/graph.py` | 204 | The LangGraph `StateGraph` — 11 nodes and the routing between them. |
-| `forge/phases.py` | 483 | The two built-in phases, and the adapter that makes a pack look like one. |
+| `forge/phases.py` | 353 | The built-in `java21` phase, and the adapter that makes a pack look like one. |
 | `forge/state.py` | 99 | `ForgeState`, the TypedDict threaded through every node. |
 | `forge/config.py` | 44 | Loads `agents.yaml` into `ForgeConfig`. |
 
@@ -90,7 +90,7 @@ guardrails_pre ─▶ java_upgrade ─▶ java_reviewer ─▶ guardrails_post �
 
 **`phases.py` degrades silently, and this is the trap worth knowing.** `_packs()` is
 `@lru_cache(maxsize=1)` and catches `PackError`, logging *"Pack library did not load, continuing
-with built-in phases only"*. **One malformed pack file disables all twenty.** `--list-packs` is the
+with built-in phases only"*. **One malformed pack file disables all eighteen.** `--list-packs` is the
 only command that reports the failure in full and exits non-zero — which is why it doubles as the
 pack-authoring lint.
 
@@ -125,9 +125,10 @@ match in order — *"a reviewer cannot score against two different rubrics"*, an
 meaningless against a rubric that totals anything else.
 
 **`depends_on` is an ordering edge, not a requirement.** A dependency outside the activated set is
-neither pulled in nor an error, because `jsp-jstl-modernize` declares all three Struts packs and a
-Struts 2 project never activates the Struts 1 one. `missing_dependencies()` reports dangling edges
-as advisory.
+neither pulled in nor an error — `jsp-jstl-modernize` must follow `struts2-modernize` when both are
+active and says nothing when only one is. `missing_dependencies()` reports dangling edges as
+advisory, so the entry that matters is the *unexpected* one: a plan with `struts2-modernize` and no
+`javax-to-jakarta` is a hand-edited profile, not a design.
 
 **The sort is deterministic on purpose.** `_topological` is Kahn's algorithm with the ready set
 re-sorted by `(tier_index, id)` after every pop — *"or two runs of the same project produce
@@ -167,9 +168,9 @@ new `.pack.md` and zero Python.** This is the cleanest extension point in the sy
 
 **Every pack reads the original source tree.** `run_migration` scans `source_dir` and
 `java_upgrade.py` opens that path directly; `write_output` overwrites rather than merging. Two packs
-that transform the same file therefore do not compose — which is why the built-in `java21` and
-`struts-spring6` phases bundle overlapping concerns into a single pass rather than being decomposed
-into individual packs. `utils/run_manifest.py` records which pack wrote which file and
+that transform the same file therefore do not compose — which is why the built-in `java21` phase
+bundles Java 8 -> 21 and `javax.*` -> `jakarta.*` into a single pass rather than deferring to the
+two packs that do them separately. `utils/run_manifest.py` records which pack wrote which file and
 `run_migration` raises `PackOverlap` before spending anything, because the engine can refuse but
 cannot merge: two packs' answers to two different questions are not mechanically combinable.
 
@@ -214,9 +215,9 @@ A pack whose rules reference facts it did not declare is rejected by the loader.
 distinguishable from a pack that declared `context: none`. Keeping them runnable-but-labelled was
 the deliberate call: dropping them would empty the working set.
 
-**This is why 10 of the 20 packs do not run at all** — 8 marked `detect-only`, plus
-`struts1-to-springmvc6` and `struts2-to-springmvc6`, which are *complete* but blocked on a selector.
-Only `web_bootstrap` is registered.
+**This is why 8 of the 18 packs do not run at all** — all marked `detect-only`. Only
+`web_bootstrap` is registered. (The two Struts -> Spring MVC packs were *blocked* by this rule
+rather than detect-only; they have since been removed along with that route.)
 Packs naming `struts_routing_table`, `ejb_bean_table`, `orm_mapping_graph`,
 `faces_navigation_graph`, `jaxrs_resource_table`, `jms_destination_table` or `ant_target_graph` are
 refused rather than run against zero files — *"worse than not running at all"*. The protocol itself

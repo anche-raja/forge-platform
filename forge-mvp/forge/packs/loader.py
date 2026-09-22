@@ -467,11 +467,11 @@ class PackRegistry(Mapping[str, PackSpec]):
     def missing_dependencies(self, ids: Sequence[str]) -> Dict[str, Tuple[str, ...]]:
         """Ordering edges from `ids` that point outside `ids`. Advisory.
 
-        Most entries are benign — the unused half of an either/or, like the
-        Struts 1 pack on a Struts 2 project. It is the *unexpected* entry that
-        matters: a project activating ``struts2-to-springmvc6`` with no
-        ``javax-to-jakarta`` is a profile someone hand-edited wrongly, and the
-        plan should say so rather than migrate into a broken namespace.
+        Most entries are benign — an edge to a pack this project never
+        activated. It is the *unexpected* entry that matters: a project
+        activating ``struts2-modernize`` with no ``javax-to-jakarta`` is a
+        profile someone hand-edited wrongly, and the plan should say so rather
+        than migrate into a broken namespace.
         """
         wanted = set(ids)
         gaps = {}

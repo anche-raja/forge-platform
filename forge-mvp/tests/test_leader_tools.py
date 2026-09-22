@@ -154,9 +154,12 @@ def test_the_first_pack_question_profiles_the_project_itself_rather_than_refusin
 
 
 def test_a_selected_pack_that_is_not_runnable_today_is_still_refused(ctx):
-    convo = _seed(Conversation(), ["struts1-to-springmvc6"])
+    # A detect-only pack: recognised by discovery, never runnable. Was
+    # `struts1-to-springmvc6`, which has been removed — an id that no longer
+    # exists would have exercised the unknown-pack path instead.
+    convo = _seed(Conversation(), ["hibernate-to-hibernate6"])
     with patch("forge.service.run_migration") as run:
-        outcome = _box(ctx, convo).execute("run_pack", {"pack": "struts1-to-springmvc6"}, tool_id="t1")
+        outcome = _box(ctx, convo).execute("run_pack", {"pack": "hibernate-to-hibernate6"}, tool_id="t1")
         run.assert_not_called()
     assert outcome.ok is False
     assert "not runnable today" in outcome.observation["error"]

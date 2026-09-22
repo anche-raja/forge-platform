@@ -13,7 +13,10 @@ from typing import Dict, List, Mapping, Sequence
 # It is the decision vocabulary, not a UI concern, so it lives here and the UI
 # imports it.
 DECISION_OPTIONS: Dict[str, List[str]] = {
-    "web_framework": ["modernize-in-place", "migrate-to-spring"],
+    # `migrate-to-spring` was removed with the Struts -> Spring MVC packs. A
+    # decision value no pack implements resolves to a plan that selects nothing,
+    # which is the silent no-op this vocabulary exists to prevent.
+    "web_framework": ["modernize-in-place"],
     "runtime": ["war-xml-bootstrap", "war-programmatic-bootstrap"],
     "container": ["liberty", "wildfly", "tomcat", "jetty"],
     "liberty_edition": ["open", "websphere"],
@@ -28,8 +31,9 @@ DECISION_OPTIONS: Dict[str, List[str]] = {
 # One line each, for the prompt. A model choosing between enum values needs to
 # know what they mean; without this it matches on the string alone.
 DECISION_HELP: Mapping[str, str] = {
-    "web_framework": "modernize-in-place upgrades the framework in place (Struts 2 -> Struts 7). "
-                     "migrate-to-spring replaces it with Spring MVC 6. Mutually exclusive routes.",
+    "web_framework": "modernize-in-place upgrades the framework where it stands "
+                     "(Struts 2 -> Struts 7 on Jakarta EE 10). It is the only supported route — "
+                     "this platform does not replace the web framework.",
     "runtime": "How the WAR bootstraps: keep web.xml, or move to a programmatic initializer.",
     "container": "Target servlet container. liberty is the platform standard.",
     "liberty_edition": "Open Liberty or WebSphere Liberty.",
@@ -44,14 +48,16 @@ DECISION_HELP: Mapping[str, str] = {
 }
 
 # The route families `web_framework` chooses between. Explicit rather than
-# inferred from the pack id: `jsp-jstl-modernize` also declares `web_framework`
-# and ends in "-modernize", but it is a view pack that runs on either route, so
-# a name-suffix rule would silently drop the JSPs on the Spring route.
+# inferred from the pack id, so a new route pack cannot join a route silently —
 # `test_intent_vocabulary.py` asserts every framework-tier pack that reads
-# `web_framework` appears here, so a new route pack cannot be added silently.
+# `web_framework` appears here.
+#
+# There is one route today. The mapping is kept rather than collapsed because
+# the arbitration it drives is what stops two packs editing the same files
+# toward different targets, and that is worth having in place before a second
+# route is ever added back.
 WEB_FRAMEWORK_ROUTES: Mapping[str, frozenset] = {
     "modernize-in-place": frozenset({"struts2-modernize"}),
-    "migrate-to-spring": frozenset({"struts1-to-springmvc6", "struts2-to-springmvc6"}),
 }
 
 

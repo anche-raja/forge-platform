@@ -18,38 +18,36 @@ you say so.
 
 ## Before you start: what actually runs
 
-**10 of the 20 packs migrate code today.** The rest recognise their technology and report it without
+**10 of the 18 packs migrate code today.** The rest recognise their technology and report it without
 transforming it. This is the first thing to check against your own stack, because it decides whether
 FORGE can do your migration or only describe it.
 
 ```
 $ python migrate.py --list-packs
-20 packs — 12 complete, 8 detect-only
+18 packs — 10 complete, 8 detect-only
 ```
 
 | State | Count | What it means |
 |---|---|---|
 | **runnable** | 10 | `--phase <id>` works |
 | **detect-only** | 8 | Recognised and reported, never migrated |
-| **blocked** | 2 | Complete, but waiting on a context extractor that does not exist yet |
 
 Runnable: `build-maven-modernize`, `java8-to-java21`, `javax-to-jakarta`, `spring-to-spring6`,
 `springsec-to-springsec6`, `struts2-modernize`, `jsp-jstl-modernize`, `junit4-to-junit5`,
-`webapp-bootstrap-jakarta10`, `liberty-server-config` — plus two built-in combined phases, `java21`
-and `struts-spring6`.
+`webapp-bootstrap-jakarta10`, `liberty-server-config` — plus the built-in `java21` phase.
 
 Detect-only: `ant-to-maven`, `hibernate-to-hibernate6`, `jaxrs-to-jakarta-rs`, `ibatis-to-mybatis`,
 `ejb2-to-spring`, `ejb3-to-spring`, `jms-to-spring-jms`, `jsf-to-faces4`.
 
-> ### The Struts → Spring MVC route does not run
+> ### Struts is modernised in place, not replaced
 >
-> `struts1-to-springmvc6` and `struts2-to-springmvc6` are both **blocked** — they need a
-> `struts_routing_table` context extractor that has not been built. If you ask for
-> `--intent "migrate off Struts to Spring MVC"`, intent will faithfully resolve
-> `web_framework: migrate-to-spring`, select those packs, and the engine will then refuse them.
+> FORGE upgrades **Struts 2 → Struts 7** on Jakarta EE 10, via `struts2-modernize`. It does not
+> migrate Struts to Spring MVC: those two packs and the `struts-spring6` built-in phase were
+> removed, along with the `web_framework: migrate-to-spring` decision value.
 >
-> The route that works end to end is **modernize-in-place**: Struts 2 → Struts 7 on Jakarta EE 10,
-> via `struts2-modernize`. Plan for that one unless you are prepared to write the extractor.
+> They had needed a `struts_routing_table` extractor that was never built, so they could be
+> selected and never run. Asking for that route now returns `unsupported` from intent rather than
+> producing a plan the engine refuses.
 
 ---
 
@@ -118,17 +116,16 @@ Discovery — /Users/raja/forge/ams
   frameworks     Struts 2 6.8.0 · Spring 5.3.39 · Spring Security 5.3.13.RELEASE ·
                  JUnit 4 4.12 · Servlet API (javax) 3.1.0 · Jackson 2.20.2
 
-  11 pack(s) apply, in dependency order:
+  10 pack(s) apply, in dependency order:
 
    1.  build-maven-modernize        runnable
         file ams-common/pom.xml
         … 3 more
+   2.  java8-to-java21              runnable
+        property maven.compiler.source=1.8 (Java 8 < 21)
    3.  javax-to-jakarta             runnable
         import javax.servlet.Filter
         … 6 more
-   7.* struts2-to-springmvc6        blocked
-        dependency org.apache.struts:struts2-core:6.8.0
-        … 9 more
 ```
 
 Every activation is justified by **evidence** — a resolved dependency coordinate, an import, a file,
@@ -215,32 +212,35 @@ So the rule is:
 
 | Your packs… | Do this |
 |---|---|
-| touch **different** files (`liberty-server-config` → `server.xml`, `jsp-jstl-modernize` → `.jsp`) | Run them in sequence. This is safe |
-| touch the **same** `.java` files (`javax-to-jakarta`, `java8-to-java21`, `spring-to-spring6`, `struts2-modernize`) | Use a **combined phase** — do not chain them |
+| touch **different** files (`liberty-server-config` → `server.xml`, `jsp-jstl-modernize` → `.jsp`) | Run them in sequence into one `--output-dir`. This is safe |
+| touch the **same** `.java` files (`javax-to-jakarta`, `java8-to-java21`, `spring-to-spring6`, `springsec-to-springsec6`, `struts2-modernize`) | **Chain them** — each run's output is the next run's source |
 
-The combined built-in phases are what the refusal points you at, and why they bundle concerns that
-individual packs keep separate:
-
-```
-java21          Java 8 -> 21, javax.* -> jakarta.*, deprecated and date/time APIs
-struts-spring6  Struts 1/2 -> Spring MVC 6, Spring 4 -> 6, Jackson 1 -> 2, Java 8 -> 21
-```
-
-For a Struts + Spring + Java 8 codebase, `--phase struts-spring6` does the overlapping work in one
-pass over each file, which is the only way the transforms compose. Then run the packs whose file
-sets *don't* overlap — `jsp-jstl-modernize`, `webapp-bootstrap-jakarta10`, `liberty-server-config`,
-`junit4-to-junit5` — separately afterwards.
-
-If you do need two same-file packs in sequence, chain them — make the first pack's output the next
-pack's input:
+### Chaining same-file packs
 
 ```bash
-python migrate.py /path/to/app  --phase javax-to-jakarta --output-dir ./step1
-python migrate.py ./step1       --phase java8-to-java21  --output-dir ./step2
+python migrate.py /path/to/app --phase javax-to-jakarta        --output-dir ./step1
+python migrate.py ./step1      --phase java8-to-java21         --output-dir ./step2
+python migrate.py ./step2      --phase spring-to-spring6       --output-dir ./step3
+python migrate.py ./step3      --phase springsec-to-springsec6 --output-dir ./step4
+python migrate.py ./step4      --phase struts2-modernize       --output-dir ./final
 ```
 
-Check the result: discovery and acceptance both reason about the *original* repository layout, so
-verify against the final tree rather than assuming it carried through.
+Then run the non-overlapping packs into `./final`: `jsp-jstl-modernize` (`.jsp`),
+`webapp-bootstrap-jakarta10` and `liberty-server-config` (descriptors), `junit4-to-junit5`
+(test sources), `build-maven-modernize` (`pom.xml`).
+
+Two things to watch when chaining:
+
+- **Review each step before feeding it to the next.** A held or rejected file does not reach the
+  output tree, so step *n+1* sees the **original** for that file and later steps build on a
+  mixture. Apply your decisions at each step.
+- **Discovery and acceptance reason about the tree you point them at.** Run `--discover` once
+  against the real repository for the plan, but run `--acceptance` against the final tree.
+
+> **There is one built-in combined phase, `java21`** — Java 8 → 21 *and* `javax.*` → `jakarta.*`
+> in a single pass. It covers the first two steps above, so you can start from it and chain the
+> rest. It does **not** cover Spring or Struts. The `struts-spring6` phase that used to bundle
+> those was removed with the Struts → Spring MVC route.
 
 ### Four runnable packs run without the context they declare
 

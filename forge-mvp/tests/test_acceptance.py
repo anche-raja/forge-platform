@@ -209,13 +209,13 @@ def test_build_with_a_missing_tool_is_skipped_not_failed(project):
 
 def test_when_guard_skips_on_unset_or_non_matching_decision_and_runs_when_matching(project):
     src, out = project
-    check = AcceptanceCheck("no_match", r"com\.opensymphony", "**/*.java", when=(("web_framework", "migrate-to-spring"),))
-    pack = _pack(check, decisions=("web_framework",))
+    check = AcceptanceCheck("no_match", r"com\.opensymphony", "**/*.java", when=(("views", "thymeleaf"),))
+    pack = _pack(check, decisions=("views",))
     unset = run_acceptance([pack], str(src), str(out), {}).results[0]
     assert unset.outcome == "skip" and "is not set" in unset.detail
-    other = run_acceptance([pack], str(src), str(out), {"web_framework": "modernize-in-place"}).results[0]
+    other = run_acceptance([pack], str(src), str(out), {"views": "in-place"}).results[0]
     assert other.outcome == "skip" and "not applicable" in other.detail
-    match = run_acceptance([pack], str(src), str(out), {"web_framework": "migrate-to-spring"}).results[0]
+    match = run_acceptance([pack], str(src), str(out), {"views": "thymeleaf"}).results[0]
     assert match.failed
 
 

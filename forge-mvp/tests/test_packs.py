@@ -415,7 +415,7 @@ def library():
 
 
 def test_the_shipped_library_loads(library):
-    assert len(library) >= 20
+    assert len(library) >= 18
     assert library.complete, "the library should ship at least one complete pack"
 
 
@@ -531,7 +531,7 @@ def test_get_phase_resolves_a_pack_by_id():
 def test_get_phase_still_returns_the_builtin_phases():
     from forge.phases import BUILTIN_PHASE_NAMES, get_phase
 
-    assert BUILTIN_PHASE_NAMES == ("java21", "struts-spring6")
+    assert BUILTIN_PHASE_NAMES == ("java21",)
     assert "Rule 1 — Namespace migration" in get_phase("java21").transform_prompt
 
 
@@ -638,7 +638,7 @@ def test_builtin_phase_scanning_is_unchanged(tmp_path):
 
     src = _tree(tmp_path / "src", "com/corp/Foo.java", "res/struts-config.xml", "pom.xml")
     java21 = [Path(f).name for f in scan_java_files(str(src), "java21").files]
-    struts = [Path(f).name for f in scan_java_files(str(src), "struts-spring6").files]
+    struts = [Path(f).name for f in scan_java_files(str(src), "struts2-modernize").files]
     assert java21 == ["Foo.java"]
     assert sorted(struts) == ["Foo.java", "struts-config.xml"]
 
@@ -652,7 +652,7 @@ def test_list_packs_prints_the_library_in_order(capsys):
     assert "javax-to-jakarta" in out
     assert "detect-only" in out
     # Dependency order, not alphabetical.
-    assert out.index("javax-to-jakarta") < out.index("struts2-to-springmvc6")
+    assert out.index("javax-to-jakarta") < out.index("struts2-modernize")
 
 
 def test_list_packs_reports_a_broken_library_in_full(fresh_registry, tmp_path, capsys):
@@ -687,13 +687,18 @@ def test_a_pack_never_both_upgrades_and_eliminates_the_same_artifact(library):
         assert not (upgraded & set(pack.eliminates)), pack.id
 
 
-def test_the_two_struts_routes_are_alternatives(library):
-    """modernize-in-place and migrate-to-spring edit the same files toward
-    different targets. Both are complete packs; activating both is a
-    configuration error, which is why each reads the web_framework decision."""
-    for pid in ("struts2-modernize", "struts2-to-springmvc6"):
-        assert library[pid].is_complete
-        assert "web_framework" in library[pid].decisions
+def test_there_is_one_struts_route_and_it_modernises_in_place(library):
+    """The Struts -> Spring MVC packs were removed; nothing replaces the
+    framework any more.
+
+    Both routes used to edit the same files toward different targets, which is
+    why `struts2-modernize` reads `web_framework`. It still does, so a second
+    route can be reintroduced without the arbitration going missing.
+    """
+    assert library["struts2-modernize"].is_complete
+    assert "web_framework" in library["struts2-modernize"].decisions
+    assert "struts2-to-springmvc6" not in library
+    assert "struts1-to-springmvc6" not in library
 
 
 def test_struts_modernize_runs_on_todays_engine(library):
@@ -723,21 +728,27 @@ def test_acceptance_when_must_name_a_declared_decision(packs):
     assert "does not declare" in load_error(packs)
 
 
-def test_jsp_pack_only_strips_framework_tags_when_replacing_the_framework(library):
-    """Struts 7 still ships /struts-tags. Stripping them from an app that is
-    staying on Struts deletes the framework rendering the page."""
+def test_the_jsp_pack_never_strips_framework_tags(library):
+    """Struts 7 still ships /struts-tags, and the app stays on Struts.
+
+    The pack used to branch: strip the tags on the Spring route, keep them
+    otherwise. With that route gone there is one behaviour — keep them — and the
+    check that demanded their removal is gone with it. Its rubric must agree:
+    it previously scored 0 unless every `<s:` tag had been deleted, which capped
+    a correct in-place migration at 80 against a pass threshold of 80.
+    """
     pack = library["jsp-jstl-modernize"]
-    assert "web_framework" in pack.decisions
 
     strip = [a for a in pack.acceptance if a.kind == "no_match" and "nested" in str(a.value)]
-    assert strip, "expected the framework-tag check"
-    assert strip[0].applies({"web_framework": "migrate-to-spring"})
-    assert not strip[0].applies({"web_framework": "modernize-in-place"})
+    assert not strip, "no acceptance check may demand framework tags be removed"
 
     # The JSTL URI move is unconditional: Jakarta EE 10 does not serve the old
     # URIs, so a JSP left on java.sun.com fails to render either way.
     jstl = [a for a in pack.acceptance if "java" in str(a.value) and "sun" in str(a.value)]
     assert jstl and jstl[0].when == ()
+
+    assert "preserved" in pack.review_prompt.lower(), "the rubric must reward keeping them"
+    assert "no `<s:`" not in pack.review_prompt, "and must not demand their removal"
 
 
 def test_a_hybrid_struts_spring_app_has_no_blocked_packs(library):

@@ -1,7 +1,7 @@
 ---
 id: jsp-jstl-modernize
-version: 1.0.0
-title: JSP + JSTL 1.x -> Jakarta JSTL 3.0 (and framework taglib removal)
+version: 2.0.0
+title: JSP + JSTL 1.x -> Jakarta JSTL 3.0 (taglib URIs only; framework tags preserved)
 tier: view
 detect:
   any:
@@ -14,39 +14,26 @@ applies_to:
   - file_glob: "**/*.tag"
   - file_glob: "**/*.tagf"
 context: view_bindings
-depends_on: [struts2-modernize, struts2-to-springmvc6, struts1-to-springmvc6, javax-to-jakarta]
-decisions: [views, url_compat, web_framework]
+depends_on: [struts2-modernize, javax-to-jakarta]
+decisions: [views]
 eliminates:
   - "javax.servlet:jstl"
 acceptance:
   - no_match: 'java\.sun\.com/jsp/jstl'
     scope: "**/*.jsp"
-  - no_match: '<(s|html|bean|logic|nested):'
-    scope: "**/*.jsp"
-    when: {web_framework: migrate-to-spring}
 ---
 
 ## transform
 
-You are migrating one JSP from JSTL 1.x (and, where present, a framework taglib) to Jakarta
-JSTL 3.0 on Jakarta EE 10.
+You are moving one JSP from JSTL 1.x to Jakarta JSTL 3.0 on Jakarta EE 10.
 
-**How much you change depends on the `web_framework` decision, and getting this wrong breaks every
-page:**
+**The application is staying on Struts, upgraded to Struts 7.** This is a narrow change: the JSTL
+taglib URIs move to their Jakarta names, and **nothing else in the page changes**. Struts 7 still
+ships `/struts-tags`, so every `<s:` tag still works and every one of them stays.
 
-- **`modernize-in-place`** — the application is staying on Struts, upgraded to Struts 7. Struts 7
-  still ships `/struts-tags` and every `<s:` tag still works. **Apply Rule 1 only.** Leave every
-  `<s:` tag, the `/struts-tags` declaration, and every OGNL expression exactly as they are.
-  Stripping them would remove the framework that is still rendering the page. Rules 2 to 4 do not
-  apply; skip them.
-- **`migrate-to-spring`** — the framework is being replaced, so the tags must go. Apply all rules.
-
-Rule 1 is mandatory in both cases: Jakarta EE 10 does not serve the old JSTL URIs, so a JSP left
-on `java.sun.com` fails to render regardless of which route the application is taking.
-
-**You are given the view bindings**: the controller that renders this view, the model attribute
-names and types it exposes, the form-backing object where one exists, and the migrated URL for
-every endpoint this page links to.
+All four rules apply. Rule 1 is the edit; Rules 2 to 4 are the things that must survive it, and
+they are where this pack goes wrong — rewriting Struts tags into JSTL looks like the modernisation
+being asked for, and is the one change that breaks the page.
 
 Rule 1 — Taglib URIs. These change in **every** JSP, including ones with no framework tags —
 Jakarta EE 10 does not serve the old URIs and the page fails at render:
@@ -57,50 +44,25 @@ Jakarta EE 10 does not serve the old URIs and the page fails at render:
   defect worth reporting, though not one to fix here)
 - `http://java.sun.com/jsp/jstl/xml`       → `jakarta.tags.xml`
 
-Rule 2 — Struts 2 tags (`/struts-tags`):
-- `<s:property value="x"/>` → `<c:out value="${x}"/>`. **Struts `property` HTML-escapes by
-  default**; a bare `${x}` does not. Use `<c:out>` unless the original set `escapeHtml="false"`.
-- `<s:iterator value="l" var="i">` → `<c:forEach items="${l}" var="i">` (note `IteratorStatus`
-  → `varStatus`)
-- `<s:if test>` / `<s:elseif>` / `<s:else>` → `<c:if>` / `<c:choose><c:when><c:otherwise>`
-- `<s:form>` → `<form:form modelAttribute="..." action="...">`
-- `<s:textfield>`/`<s:password>`/`<s:textarea>` → `<form:input>`/`<form:password>`/`<form:textarea>` with `path`
-- `<s:select list="...">` → `<form:select items="${...}">`
-- `<s:checkbox>`/`<s:radio>` → `<form:checkbox>`/`<form:radiobuttons>`
-- `<s:url>`/`<s:a>` → `<c:url>` / `<a href="<c:url .../>">`
-- `<s:text name="k"/>` → `<spring:message code="k"/>`
-- `<s:actionerror/>`/`<s:fielderror/>` → `<form:errors path="*"/>` / `<form:errors path="f"/>`
-- `<s:token/>` → the CSRF token field for the target framework
+Rule 2 — **Leave the framework taglib exactly as it is.** This is the rule most likely to be
+broken, because rewriting Struts tags into JSTL looks like the modernisation being asked for. It is
+not. Struts 7 still ships `/struts-tags`, the application still runs on Struts, and removing a tag
+removes the thing rendering the page:
+- Keep every `<s:...>` tag, attribute for attribute.
+- Keep the `<%@ taglib uri="/struts-tags" %>` declaration.
+- Keep every OGNL expression — `%{...}`, `#session.foo`, `#request.foo`, value-stack access —
+  unchanged. OGNL is not EL, and a "corrected" expression renders blank or wrong data with no
+  error at all.
+- Keep `<s:property>` as `<s:property>`. It HTML-escapes by default; a bare `${x}` does not, so
+  converting one is a stored XSS regression as well as a framework removal.
 
-Rule 3 — Struts 1 tags (`html:`, `bean:`, `logic:`, `nested:`):
-- `<bean:write name="x" property="y"/>` → `<c:out value="${x.y}"/>` (also escapes by default)
-- `<bean:message key="k"/>` → `<spring:message code="k"/>`
-- `<logic:iterate>` → `<c:forEach>`; `<logic:equal>`/`<logic:present>`/`<logic:notEmpty>` → `<c:if>`
-- `<html:form action="/x">` → `<form:form modelAttribute="..." action="...">`
-- `<html:text property="p"/>` → `<form:input path="p"/>`
-- `<html:errors/>` → `<form:errors path="*"/>`
-- `<nested:*>` tags → the equivalent with the full path; the nesting context disappears, so paths
-  must become absolute against the form object
+The same applies to any Struts 1 taglib (`html:`, `bean:`, `logic:`, `nested:`) still present.
 
-Rule 4 — Expression languages. Struts OGNL and Struts 1 `name`/`property` pairs are **not** EL:
-- `#session.foo` → `${sessionScope.foo}`; `#request.foo` → `${requestScope.foo}`;
-  `#application.foo` → `${applicationScope.foo}`
-- `%{expr}` → `${expr}` only when `expr` is a plain property path
-- Value-stack expressions with no EL equivalent — top-of-stack access, indexed OGNL projections
-  (`list.{?#this.x}`), method calls with arguments, `#attr` — must be emitted as
-  `TODO(migration)` with the original expression preserved verbatim in a comment.
-  **Never guess an EL equivalent for a non-trivial OGNL expression.** A wrong expression renders
-  blank or wrong data with no error.
-
-Rule 5 — Every URL in the markup must match a migrated endpoint from the bindings you were given,
-after the `url_compat` decision. A link to a path with no handler is a broken page, and it will not
-be caught by any compiler.
-
-Rule 6 — Scriptlets (`<% %>`, `<%= %>`). Do not rewrite them into EL unless the expression is a
+Rule 3 — Scriptlets (`<% %>`, `<%= %>`). Do not rewrite them into EL unless the expression is a
 trivial property read. Flag every scriptlet containing logic. They still work; a bad rewrite does
 not.
 
-Rule 7 — Do not restructure markup. No reformatting, no div reorganisation, no class or id
+Rule 4 — Do not restructure markup. No reformatting, no div reorganisation, no class or id
 changes, no accessibility or style "improvements", no whitespace normalisation in
 whitespace-sensitive regions (`<pre>`, inline scripts, textareas).
 
@@ -109,34 +71,31 @@ Respond ONLY with valid JSON:
 
 ## review
 
-Score on 5 checks (total 100).
+Score on 4 checks (total 100).
 
-Check 1 — Escaping preserved (30 pts):
-Every output that the original taglib escaped by default is still escaped. An `<s:property>` or
-`<bean:write>` that became a bare `${...}` on user-controlled data is a **stored XSS regression**
-and scores 0 for this check. This is weighted highest deliberately: it is the one error in this
-pack that creates a vulnerability rather than a visible bug.
+Check 1 — Framework taglib preserved (40 pts):
+Every `<s:...>` tag, the `/struts-tags` declaration, and every OGNL expression are byte-identical
+to the original. Any Struts tag rewritten into JSTL, Spring form tags or a bare `${...}` scores 0
+for this check. This is weighted highest deliberately: the application still runs on Struts, so
+removing a tag removes the code rendering the page — and converting an escaping `<s:property>` to
+a bare `${...}` is a stored XSS regression on top of it. The same applies to any Struts 1
+`html:`/`bean:`/`logic:`/`nested:` taglib still present.
 
-Check 2 — Expression correctness (25 pts):
-Every expression is either a correct EL equivalent against a model attribute the controller
-actually exposes, or flagged `TODO(migration)` with the original preserved. A guessed equivalent
-for a non-trivial OGNL expression scores 0 — flagging is strictly better than guessing here.
+Check 2 — JSTL URIs migrated (35 pts):
+Every `java.sun.com/jsp/jstl/*` URI is now the matching `jakarta.tags.*` URI, and none is left
+behind. Jakarta EE 10 does not serve the old URIs, so a missed one fails at render. Full 35 or 0.
 
-Check 3 — Taglib URIs and framework tag removal (20 pts):
-Every JSTL URI is `jakarta.tags.*`; no `java.sun.com` URI and no framework taglib declaration
-remains; no `<s:`, `<html:`, `<bean:`, `<logic:` or `<nested:` tag survives. Full 20 or 0.
+Check 3 — Expressions and scriptlets untouched (15 pts):
+EL expressions, scriptlets and `<%= %>` blocks are unchanged, except that a scriptlet containing
+logic may be flagged. No scriptlet was rewritten into EL beyond a trivial property read.
 
-Check 4 — URLs resolve (15 pts):
-Every link, form action and redirect target corresponds to a migrated endpoint under the active
-`url_compat` decision.
-
-Check 5 — Markup untouched (10 pts):
+Check 4 — Markup untouched (10 pts):
 Structure, classes, ids, inline scripts and whitespace-sensitive content unchanged apart from the
-substitutions above.
+URI substitutions above.
 
 Scoring: PASS >= 80, RETRY 50-79, MANUAL < 50.
 
 Respond ONLY with valid JSON:
 {"score": <0-100>, "verdict": "PASS"|"RETRY"|"MANUAL", "feedback": "<actionable>",
- "checks": {"escaping_preserved": <0-30>, "expression_correctness": <0-25>, "taglib_uris": <0-20>,
-            "urls_resolve": <0-15>, "markup_untouched": <0-10>}}
+ "checks": {"taglib_preserved": <0-40>, "jstl_uris": <0-35>, "expressions_untouched": <0-15>,
+            "markup_untouched": <0-10>}}
