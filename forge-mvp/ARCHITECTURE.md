@@ -345,25 +345,35 @@ forge-mvp/
       file_scanner.py  file_writer.py  report.py  java_checks.py  telemetry.py  cost.py
   infrastructure/
     create_dynamodb.py             # dev table creation (non-Terraform)
-  tests/                           # 580+ tests, fully mocked (conftest.mocked_aws / mocked_testgen)
+  tests/                           # 721 tests, fully mocked (conftest.mocked_aws / mocked_testgen)
 ```
 
 ---
 
-## 11. Known gaps (Phase 0)
+## 11. Known gaps
 
-These are deliberate Phase-0 limitations, not bugs. The actionable backlog lives in
-[TODO.md](TODO.md).
+Deliberate limitations, not bugs. The actionable backlog lives in [TODO.md](TODO.md).
+
+- **Nobody has measured whether the output is good.** The suite mocks `ChatBedrockConverse`, so it
+  proves orchestration, not migration quality. There is no recorded pass rate from a real
+  multi-file run anywhere in the repository. This is the largest open question about the system.
 
 - **Build gate is per file unless `mode: maven`.** A whole-module compile after a batch is the
   reliable form; per-file `javac` needs the classpath configured.
-- **Project context is extractor-by-extractor.** Packs whose context is `web_bootstrap` get the
-  full descriptor set (§12). Packs naming an unbuilt extractor (`struts_routing_table`,
-  `spring_bean_graph`, `view_bindings`, `reactor`, `test_subject`) either run without context or
-  are refused if they need a selector.
+- **Four runnable packs run without the context they declare.** Runnability turns on *selectors*,
+  not on context availability, so a pack whose file set is pure globs runs even when its declared
+  extractor is unbuilt — `build-maven-modernize` (`reactor`), `spring-to-spring6`
+  (`spring_bean_graph`), `jsp-jstl-modernize` (`view_bindings`), `junit4-to-junit5`
+  (`test_subject`). The transform sees only each file's own bytes, and the reviewer loses the
+  descriptors it would have cross-checked against. `degraded_phases()` reports them,
+  `--list-packs` labels them, and each affected unit carries `context_missing: true`. A pack that
+  needs a *selector* is refused outright instead.
 - **The profile is written but not yet consumed.** `--discover` produces `forge-profile.yaml`;
-  a run still takes one `--phase` at a time.
-- **`routing_parity` is skipped** until the `struts_routing_table` extractor exists.
+  a run still takes one `--phase` at a time. The chat leader sequences the plan instead (§16).
+- **Packs do not compose.** Each reads the original source, so two over the same file would have
+  the second replace the first. Refused by `PackOverlap`; chat chains instead (§16).
+- **`routing_parity` is declared by `struts2-modernize` and skipped**, because the
+  `struts_routing_table` extractor does not exist.
 - **Review is single-user.** The web UI (§13) runs on loopback for one engineer with one job at
   a time; the static review page + `--apply-decisions` is the CI-friendly form. There is no
   shared, multi-user review service.
@@ -421,7 +431,8 @@ service layer.
 `generate_tests()`, `apply()`, `feedback()`. Progress is an `on_event(dict)` callback with a `type`
 key — `start`, `skipped`, `file`, `snapshot`, `queue`, `acceptance`, `summary`, `cancelled`,
 `nothing`, `apply_outcome`, `apply_done`, `testgen_start`, `testgen_unit`, `testgen_summary`,
-`testgen_cancelled`. The CLI's `_print_event` reproduces its historical stdout from those events;
+`testgen_cancelled`, plus `chained` and `context_missing` (§16). The CLI's `_print_event`
+reproduces its historical stdout from those events;
 `tests/test_service.py::test_cli_prints_exactly_the_historical_lines` pins it. "Nothing to do" is
 `NoEligibleFiles`, which the CLI turns into exit 0. `run_migration` takes a `threading.Event` for
 cancellation, checked between units; on cancel the report and queue are still written, because held
@@ -617,3 +628,158 @@ defaults to. Name a model there and it must also be in `model_pricing`, or the c
 `test_discover_without_intent_makes_no_model_call` pins that contract.
 
 Full detail: [INTENT.md](INTENT.md).
+
+---
+
+## 16. The leader agent
+
+`migrate.py --ui` opens a chat. A model sequences the work there: it reads the user's sentence,
+picks which tool to call next, explains what came back, and stops to ask before anything costs
+money. `forge/leader/` is that agent.
+
+This reverses a standing rule. `CLAUDE.md` used to say *"do not add a model-driven leader"*, and the
+objection behind it is still the right objection — a mechanical question handed to a model, at the
+layer where a wrong answer is hardest to debug. What changed is the **scope of the question**, and
+the split is enforced in code rather than in the prompt.
+
+```
+   THE MODEL DECIDES                    CODE DECIDES — unchanged
+   ─────────────────                    ────────────────────────
+   which tool to call next          │   which packs exist for a repo
+   which pack to run when           │     resolve_packs over detect evidence
+   when to stop and ask             │   which files a pack takes
+   how to explain a result          │     scan_java_files · globs · scope
+   which decisions to PROPOSE       │   everything inside a run
+                                    │     route_reviewer · max_retries · hold gate
+                                    │   what a decision may be  (DECISION_OPTIONS)
+                                    │   the risk ceiling        (never from a prompt)
+                                    │   whether an approval happens (always a click)
+```
+
+Four locks make that hold:
+
+1. **`selected_packs` is the bound.** A pack the leader names that discovery did not select never
+   reaches `service`. `activations` is the wrong bound — it still lists packs an intent plan
+   deliberately excluded.
+2. **`forge/graph.py` is untouched.** Unit order, `route_reviewer`, `max_retries` and `must_hold`
+   are the same code as before. The leader chooses *which run*, never what happens inside one.
+3. **Spend and mutation are a click.** Anything over `leader.confirm_above_usd` parks as a card;
+   `apply_review_decisions` and `land_on_branch` are confirmed whatever the estimate, because an
+   approval is a human's signature on someone else's code.
+4. **`risk_ceiling` never comes from a prompt.** The toolbox overwrites it with the config value
+   after every `resolve_intent` — an intent decision carries provenance `prompt`, which outranks
+   config, so a sentence containing "don't bother reviewing" could otherwise have yielded
+   `risk_ceiling: auto` and sent every HIGH-risk unit straight to disk.
+
+### One turn
+
+```
+POST /api/chat {message}
+   │  request thread: validate, convo.bind(source, output), registry.start("chat")
+   ▼  job thread
+   ├─ emit turn_start ──────────────────────────── the stream is self-sufficient on reload
+   │
+   ├─▶ STEP ─────────────────────────────────────────────────────────────┐
+   │     messages = [System(_SYSTEM + state_block)] + trimmed_history()  │
+   │     for chunk in bound.stream(messages):                            │
+   │         emit assistant_delta        (coalesced ≥24 chars / newline) │
+   │                                                                     │
+   │     ┌─── ADMISSION GATE ───────────────────────────────┐            │
+   │     │ execute tool calls ONLY when the stream completed │            │
+   │     │ normally, stopReason ∈ {tool_use, end_turn}, and  │            │
+   │     │ cancel is not set — otherwise drop them all       │            │
+   │     └───────────────────────────────────────────────────┘           │
+   │                                                                     │
+   │     for each kept call: tool_start ▶ execute ▶ cards ▶ tool_result   │
+   └──────────────────────────────────────────── repeat ≤ leader.max_steps
+   └─ emit usage {leader_calls, leader_cost_usd, spend_usd}
+```
+
+**Why the gate is an allow-list and not a deny-list.** `parse_partial_json` silently *repairs*
+truncated tool arguments: `{"pack":"javax-to-jakarta","dry_r` accumulates into a valid-looking
+`{"pack":"javax-to-jakarta"}` — with `dry_run` gone. Pressing Stop on a proposed dry run could
+otherwise have started the real one.
+
+History is LangChain messages and is never the raw chunk: a `tool_use` block with no input delta
+raises `KeyError` on replay. Every `toolUse` gets a matching `toolResult`, including invalid ones,
+because Bedrock rejects a `toolResult` with no `toolUse`.
+
+### The twelve tools
+
+`set_project`, `profile_project`, `resolve_intent`, `estimate_pack`, `run_pack`,
+`check_acceptance`, `list_held_files`, `apply_review_decisions`, `generate_tests`, `pack_feedback`,
+`list_artifacts`, `land_on_branch`.
+
+Every one is a wrapper over `forge/service.py` — "add behaviour to the service, never to a route or
+a CLI branch" applies to a tool too. None of them raises: a failure is an `ok: false` observation,
+so a broken tool costs a sentence rather than the job. A run that succeeded and whose *cards* then
+failed to render still returns the run result; paid work is never discarded by a rendering bug.
+
+### The trust boundary
+
+The sharpest edge in the design, and where most of the pre-build critique's blockers lived. The
+same data is reduced two ways by `forge/leader/cards.py`:
+
+```
+        ┌──────────────────────── THE MODEL ────────────────────────┐
+        │  counts · pack ids · statuses · risk tiers · verdicts     │
+        │  scores · $ · file PATHS · rule-generated risk reasons    │
+        └─────────────────────────▲─────────────────────────────────┘
+   ┌──────────────────────────────┴──────────────────────────────────┐
+   │  original · transformed · diff        ──▶ dropped               │
+   │  review_feedback on a build FAIL      ──▶ verdict only          │
+   │      (javac output echoes source)                               │
+   │  guardrail_findings                   ──▶ {count, kinds}        │
+   │      (a sensitiveInformation finding embeds the matched         │
+   │       secret VERBATIM)                                          │
+   │  acceptance evidence                  ──▶ counts only           │
+   └──────────────────────────────▲──────────────────────────────────┘
+        ┌─────────────────────────┴─────────────────────────────────┐
+        │  THE BROWSER — diffs, reviewer feedback, full evidence    │
+        └───────────────────────────────────────────────────────────┘
+```
+
+Same rule as [GUARDRAILS.md](GUARDRAILS.md) §7, one layer up: *a model is never the control that
+decides what a model may see.* One test plants a marker in every field that carries file bytes and
+asserts it reaches no observation, no `ToolMessage` and not the state block — while the browser's
+card still carries it.
+
+### Review cards carry a run stamp
+
+Every run overwrites the one `manual-review-queue.json`, transcripts keep cards indefinitely, and
+`decisions.find_entry` falls back to a *unique basename* match. Without the stamp, scrolling up and
+approving an old card for `src/Foo.java` could apply a different pack's transform to a different
+file. `apply_decisions` refuses when `queue["run"]` no longer matches, and drops any decision whose
+pack disagrees with the entry's.
+
+### Chaining — how a ten-pack plan runs unattended
+
+Packs do not compose. `run_migration` scans `source_dir` and the transform opens that path, so the
+second pack over the same files reads the *original* and its output replaces the first pack's work.
+`forge/utils/run_manifest.py` records which pack wrote which file and raises `PackOverlap` before
+any spend.
+
+Refusing is right for the CLI, where the operator can pick another `--output-dir`. It is not enough
+for chat: the user says "migrate my app" and nothing else, and AMS needs five packs over the same
+336 Java files. So `run_migration(chain=True)` materialises the merged view of source ⊕ output —
+`forge/verify/merged_tree.py`, the same helper acceptance uses — into a temp tree and runs from
+there. The pack transforms the previous pack's result, and the overlap guard is skipped, because
+overwriting is the point when the input was that output.
+
+The leader turns it on from the manifest rather than from `convo.completed`, so a chat resumed
+against a directory an earlier session wrote chains too. The run emits `chained`, since a run that
+silently changed what it read would be impossible to debug. The manifest also records files a pack
+*retired*, so a descriptor an earlier pack replaced is not handed to the next one.
+
+### Conversation state
+
+`forge/leader/convo.py` keeps two histories, deliberately apart. `history` is what goes back to the
+model — LangChain messages, nothing else. `transcript` is what the browser renders on reload: user
+turns, replies, tool rows, cards. A card may carry a diff; an observation in `history` never does.
+
+Both are in memory for the process lifetime, mirroring `JobRegistry`. A conversation that outlived
+the server would be a promise the rest of the UI does not make. `trimmed_history` cuts only at a
+`HumanMessage` boundary, because a `toolResult` without its `toolUse` is rejected.
+
+A chat turn is a job in the *existing* single registry, so the thread-safety invariant that protects
+the graph, DynamoDB and the extract cache holds without a second scheduler.
