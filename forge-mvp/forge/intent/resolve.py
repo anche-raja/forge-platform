@@ -155,9 +155,9 @@ def reconcile(
     # ── rule 6: coherence, via the existing (previously unused) helper ───────
     # Narrowed to dependencies that *were* available and got dropped anyway. An
     # edge pointing at a pack the repository never had is the benign either/or
-    # case `missing_dependencies` warns about, and so is the losing half of the
-    # route decision — `jsp-jstl-modernize` names both Struts packs precisely
-    # because it must follow whichever one runs.
+    # case `missing_dependencies` warns about, and so is the losing half of a
+    # route decision: a view pack that must follow whichever framework pack runs
+    # names them all, and only one of them ever will.
     gaps = {
         pid: [d for d in deps if d in activated and d not in route_dropped]
         for pid, deps in registry.missing_dependencies(sorted(selected)).items()
