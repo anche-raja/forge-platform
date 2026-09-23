@@ -201,6 +201,13 @@ The DOCTYPE is a real DTD — 6.5 or the existing one, **never an invented 7.0**
 `parameters` renamed to `attributes`. No Spring MVC annotation, no controller conversion, no
 business-logic change: this is a version upgrade, not a framework migration.
 
+Checks that do not apply: a check that does not apply to this file earns its full points. A check
+applies when the file contains what it is about, or when this file is where the transform had to
+introduce it; it does not apply when there is nothing here for it to judge (a check about Java
+code, on a descriptor that holds none). Name the checks that did not apply in `feedback`. Never
+score a check 0 for having nothing to examine: 0 is for a subject that is present and wrong, or
+missing where this file had to supply it.
+
 Scoring: PASS >= 80, RETRY 50-79, MANUAL < 50.
 
 Respond ONLY with valid JSON:

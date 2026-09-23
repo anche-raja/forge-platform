@@ -187,6 +187,12 @@ Check 2 — Logger semantics preserved (40 pts): ...
 > capped at 80 against a pass threshold of 80, one point from manual review, on every JSP in the
 > project. Read the two sections against each other before you ship.
 
+> **A check that does not apply earns its full points.** A pack's files are not all alike: a Struts
+> descriptor has no action setters, a child `pom.xml` inherits its Java level and BOMs from the
+> parent. Scored as failures, those checks sent `struts-services.xml` to 10 and seven AMS child
+> poms below 50. Every complete pack carries the same "Checks that do not apply" paragraph before
+> its `Scoring:` line — copy it, and `tests/test_packs.py` checks it is there.
+
 ---
 
 ## The other fields

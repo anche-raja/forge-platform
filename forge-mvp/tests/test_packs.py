@@ -468,6 +468,26 @@ def test_complete_pack_rubric_sums_to_100(pack_id, library):
 
 
 @pytest.mark.parametrize("pack_id", [p.id for p in load_packs().complete])
+def test_complete_pack_rubric_gives_a_check_that_does_not_apply_its_full_points(pack_id, library):
+    """Issue #18: struts-services.xml scored 10 because the only check that applied
+    was worth 10. A check with nothing in the file to judge is not a failed check."""
+    review = " ".join(library[pack_id].review_prompt.split())
+    assert "a check that does not apply to this file earns its full points" in review
+    assert "Never score a check 0 for having nothing to examine" in review
+    # The rule sits in the rubric, ahead of the verdict bands the model reads last.
+    assert review.index("earns its full points") < review.index("Scoring: PASS")
+
+
+def test_build_rubric_credits_what_a_child_module_inherits(library):
+    """Issue #18: 7 of 10 AMS child poms scored 0-45 on settings their parent holds."""
+    review = " ".join(library["build-maven-modernize"].review_prompt.split())
+    assert "score only what this pom itself declares" in review
+    assert "inherits `maven.compiler.release`, the BOM imports or plugin versions" in review
+    # ...without letting a child's own stale declarations through.
+    assert "What the child does declare is still judged" in review
+
+
+@pytest.mark.parametrize("pack_id", [p.id for p in load_packs().complete])
 def test_packs_that_rewrite_java_state_the_jdk_javax_carve_out(pack_id, library):
     """Telling a model 'zero javax.* allowed' without the JDK carve-out invites
     it to rewrite javax.sql to jakarta.sql and break the build.
