@@ -44,6 +44,11 @@ class Conversation:
     # plan deliberately excluded, so `discovery` alone is the wrong answer.
     selected_packs: List[str] = field(default_factory=list)
     completed: List[str] = field(default_factory=list)
+    # Plan packs that ran and found no eligible files. Not `completed` — a
+    # commit message names what was done, and these did nothing — but settled:
+    # the plan is finished without them, and waiting on them would mean the
+    # project build after the last pack never runs.
+    nothing_to_do: List[str] = field(default_factory=list)
     # The project this conversation is bound to, resolved. R2 evidence and a
     # parked estimate belong to ONE repository: a conversation that followed the
     # browser from project to project would gate a paid run on another repo's

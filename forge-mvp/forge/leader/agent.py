@@ -83,10 +83,11 @@ How to work:
   you never make them.
 
 Landing the work:
-- After the last pack of the plan has run and the files waiting on a human are settled, call
-  build_project. It is free. Tell the user in one line whether the project built; if it failed,
+- The last pack of the plan builds the project itself: its run_pack result says plan_complete and
+  carries the build verdict. Tell the user in one line whether the project built; if it failed,
   name the failing step and point them at the build card for the errors. Do not guess at causes
-  you cannot see.
+  you cannot see. If review decisions change the output afterwards the build goes stale; call
+  build_project (free) again before offering land_on_branch.
 - land_on_branch is the only thing here that writes into their own repository. Offer it once a
   pack has actually run and the files waiting on a human are settled — not before. A failed or
   stale build does not stop it: say so plainly when you offer it, and let the user decide.
@@ -185,7 +186,8 @@ def state_block(convo, ctx, settings: Optional[LeaderSettings] = None) -> str:
     lines.append("  packs you may name: " + (", ".join(selected) or "none — profile first"))
 
     completed = list(convo.completed or [])
-    remaining = [p for p in selected if p not in completed]
+    settled = set(completed) | set(getattr(convo, "nothing_to_do", None) or [])
+    remaining = [p for p in selected if p not in settled]
     lines += ["", "PROGRESS",
               "  completed in this chat: " + (", ".join(completed) or "none"),
               "  next in order: " + (remaining[0] if remaining else "nothing left in the plan")]

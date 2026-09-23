@@ -575,7 +575,8 @@ def test_a_card_that_will_not_render_never_discards_a_paid_run(ctx):
     """The run is bought and the files are written. Reporting a rendering bug as
     a failed run is how the model is talked into running it a second time."""
     _plant_queue(ctx)
-    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    # A pack still to run, so the plan stays open and no build card follows.
+    convo = _seed(Conversation(), ["javax-to-jakarta", "java21"])
     with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
          patch.object(cards, "review_file_card", side_effect=KeyError("transformed")):
         outcome = _box(ctx, convo).execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
@@ -602,7 +603,8 @@ def test_a_tool_is_not_entered_once_stop_has_been_pressed(ctx):
 def test_the_relay_stamps_service_events_and_never_forwards_a_terminal_one(ctx):
     """``done`` and ``error`` belong to the job registry. Relaying a tool's own
     would close the browser's EventSource halfway through the turn."""
-    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    # A pack still to run, so no project build adds its own events.
+    convo = _seed(Conversation(), ["javax-to-jakarta", "java21"])
     events = []
 
     def run(*args, **kwargs):
@@ -618,6 +620,87 @@ def test_the_relay_stamps_service_events_and_never_forwards_a_terminal_one(ctx):
     assert [e["type"] for e in events] == ["start"]
     assert events[0]["via"] == "tool" and events[0]["tool_id"] == "t9"
     assert events[0]["phase"] == "javax-to-jakarta", "the event's own fields are untouched"
+
+
+# ─── the end of a plan builds the project (#21) ──────────────────────────────
+
+COMPILER_MARKER = "C0MPILER_LINE_7f31"
+
+
+def _build_record(outcome="fail"):
+    return {"outcome": outcome, "detail": "mvn install failed (exit 1)", "failed_step": "mvn install",
+            "tail": [f"[ERROR] Other.java:[1,5] {COMPILER_MARKER}"], "java_home": None, "seconds": 3.0,
+            "steps": ["mvn install"], "built_at": "2026-09-23T10:00:00+00:00"}
+
+
+def test_the_last_pack_of_the_plan_builds_the_project_without_being_asked(ctx):
+    """The first ten-pack run went from the last pack to the review queue and
+    offered landing unbuilt, because only the prompt said to build."""
+    convo = _seed(Conversation(), ["javax-to-jakarta", "java21"])
+    box = _box(ctx, convo, confirm_above_usd=0.0)
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch("forge.service.build_project", return_value=_build_record()) as build:
+        first = box.execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+        build.assert_not_called()
+        assert first.observation["plan_complete"] is False and "build" not in first.observation
+
+        last = box.execute("run_pack", {"pack": "java21"}, tool_id="t2")
+        assert build.call_count == 1
+
+    args = build.call_args
+    assert args.args[:2] == (ctx.source_dir, ctx.output_dir), "the same call build_project makes"
+    assert last.ok is True and last.observation["plan_complete"] is True
+    assert last.observation["build"] == {"outcome": "fail", "stale": False, "detail": "mvn install failed (exit 1)",
+                                         "failed_step": "mvn install", "built_at": "2026-09-23T10:00:00+00:00"}
+    assert COMPILER_MARKER not in to_json(last.observation), "the leader sees the verdict, never javac"
+    assert last.cards[-1]["kind"] == "build" and COMPILER_MARKER in json.dumps(last.cards[-1])
+    assert "build: fail" in last.summary
+    assert convo.completed == ["javax-to-jakarta", "java21"]
+
+
+def test_a_build_that_dies_never_discards_the_last_paid_run(ctx):
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch("forge.service.build_project", side_effect=OSError("disk full")):
+        outcome = _box(ctx, convo).execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+    assert outcome.ok is True and outcome.observation["status"] == "done"
+    assert outcome.observation["plan_complete"] is True
+    assert outcome.observation["build_error"] == "OSError: disk full"
+    assert convo.completed == ["javax-to-jakarta"] and convo.spend_usd == 0.42
+
+
+def test_a_pack_with_nothing_to_do_or_that_cannot_run_never_holds_the_plan_open(ctx):
+    """A plan that ends on an empty pack is still finished, and a selected pack
+    that is not runnable today can never be run to finish it."""
+    convo = _seed(Conversation(), ["javax-to-jakarta", "not-a-runnable-pack", "java21"])
+    box = _box(ctx, convo)
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch("forge.service.build_project", return_value=_build_record("pass")) as build:
+        box.execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+        build.assert_not_called()
+    with patch("forge.service.run_migration", side_effect=service.NoEligibleFiles("No eligible files")), \
+         patch("forge.service.build_project", return_value=_build_record("pass")) as build:
+        empty = box.execute("run_pack", {"pack": "java21"}, tool_id="t2")
+        assert build.call_count == 1
+    assert empty.observation["status"] == "nothing" and empty.observation["plan_complete"] is True
+    assert empty.observation["build"]["outcome"] == "pass" and empty.cards[-1]["kind"] == "build"
+    assert convo.completed == ["javax-to-jakarta"] and convo.nothing_to_do == ["java21"]
+
+
+def test_a_plan_where_nothing_ran_or_a_stopped_run_builds_nothing(ctx):
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    with patch("forge.service.run_migration", side_effect=service.NoEligibleFiles("No eligible files")), \
+         patch("forge.service.build_project") as build:
+        outcome = _box(ctx, convo).execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+        build.assert_not_called()
+    assert outcome.observation["plan_complete"] is True, "nothing was written, so there is nothing to build"
+
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    with patch("forge.service.run_migration", return_value=_run_result(ctx, cancelled=True)), \
+         patch("forge.service.build_project") as build:
+        stopped = _box(ctx, convo).execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t2")
+        build.assert_not_called()
+    assert stopped.observation["status"] == "cancelled" and "plan_complete" not in stopped.observation
 
 
 # ─── R9: the leader cannot lower the hold gate ───────────────────────────────

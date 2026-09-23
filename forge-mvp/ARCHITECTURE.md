@@ -737,7 +737,10 @@ dependency order, into an isolated local repository (`~/.forge/m2`), on the JDK
 `/usr/libexec/java_home` reports for `target_java_version`. It writes `project-build.json`;
 `land_on_branch`'s confirmation card shows that verdict — passed, failed, not run, or **stale**
 when the migrated files changed after the build — and never refuses on it. The leader sees the
-verdict and the failing step, never the compiler output, which goes to the card only.
+verdict and the failing step, never the compiler output, which goes to the card only. The build
+after the last pack is not left to the prompt: when `run_pack` settles the last runnable pack of
+the plan (`selected_packs` minus `completed` and the packs that found nothing to do), it runs the
+same build itself and returns `plan_complete: true` with the verdict.
 
 Every one is a wrapper over `forge/service.py` — "add behaviour to the service, never to a route or
 a CLI branch" applies to a tool too. None of them raises: a failure is an `ok: false` observation,
