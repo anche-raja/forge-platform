@@ -318,9 +318,10 @@ the stop reason is in `{tool_use, end_turn}`, and cancel is not set.
 yielded `risk_ceiling: auto` — which `must_hold` reads to write every HIGH-risk unit straight to
 disk with no human in the loop. The toolbox writes the config's value back, every time.
 
-**Review cards carry a run stamp.** Every run overwrites the one queue file, transcripts keep cards
-forever, and `find_entry` falls back to a unique-basename match. Without the stamp, scrolling up and
-approving an old card could apply a different pack's transform to a different file.
+**Review cards carry a run stamp.** The one queue file accumulates across packs, transcripts keep
+cards forever, and `find_entry` falls back to a unique-basename match. Without the stamp, scrolling
+up and approving an old card could apply a different pack's transform to a different file. The stamp
+is per entry, so an earlier pack's card stays valid while later packs run.
 
 **`landing.py` refuses rather than repairs.** Not a git work tree, a dirty tree, an existing branch,
 a bad ref name — each is a distinct message. It never stashes, never forces, never amends, never
@@ -356,7 +357,7 @@ work. This is also the most deeply Java-coupled subsystem after the profiler.
 | `forge/utils/cost.py` | 52 | Token accounting from `usage_metadata`. |
 | `forge/utils/telemetry.py` | 97 | CloudWatch metrics. |
 | `forge/utils/llm_json.py` | 26 | Extracts JSON from a model reply. |
-| `forge/utils/report.py` | 83 | `migration-report.md`. |
+| `forge/utils/report.py` | 250 | `migration-report.md`, `migration-report-<pack>.md`, `migration-summary.md`. |
 | `forge/utils/fs.py` | 19 | Excluded directories, test-path predicate. |
 
 **`cost.py` fails open, and that is worth knowing.** A model missing from `model_pricing` accrues

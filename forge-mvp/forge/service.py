@@ -465,7 +465,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     from forge.review_queue import QUEUE_NAME, write_queue, write_review_page
     from forge.state_store.dynamodb import DynamoDBStateManager
     from forge.utils.file_scanner import scan_java_files
-    from forge.utils.report import generate_report
+    from forge.utils.report import REPORT_NAME, generate_report, pack_report_name, record_pack_run
     from forge.utils.telemetry import MetricsEmitter
 
     clear_context_cache()
@@ -582,17 +582,24 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
 
     # The review queue: what the pipeline could not settle — and, in a dry run,
     # everything it would have done, since a first trial exists to look at that.
-    queue = write_queue(str(output_root), all_statuses, source_dir, phase=phase, dry_run=dry_run)
+    # It accumulates across the packs of a plan: another pack's held files stay
+    # on the page until a human decides them (review_queue.merge_queue).
+    queue = write_queue(str(output_root), all_statuses, source_dir, phase=phase, dry_run=dry_run,
+                        accumulate=True)
     page_path: Optional[str] = None
     if queue["entries"]:
         page_path = str(write_review_page(str(output_root), queue))
         emit(on_event, {"type": "queue", "path": str(output_root / QUEUE_NAME), "page": page_path,
                         "count": len(queue["entries"])})
 
-    report_path = output_root / "migration-report.md"
-    generate_report(output_path=str(report_path), phase=phase, source_dir=source_dir, file_statuses=all_statuses,
-                    bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost, skipped=skipped,
-                    passed_over=passed_over)
+    # This pack's report, kept until the pack runs again, and the same text as
+    # the latest-run report every earlier reader knows by name.
+    pack_report_path = output_root / pack_report_name(phase)
+    generate_report(output_path=str(pack_report_path), phase=phase, source_dir=source_dir,
+                    file_statuses=all_statuses, bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost,
+                    skipped=skipped, passed_over=passed_over)
+    report_path = output_root / REPORT_NAME
+    report_path.write_text(pack_report_path.read_text(encoding="utf-8"), encoding="utf-8")
 
     deleted = [d for fs in all_statuses for d in (fs.get("deleted_files") or [])]
 
@@ -624,7 +631,13 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         "cost_usd": round(total_cost, 6),
         "passed_over": passed_over,
     }
-    emit(on_event, {"type": "summary", **totals, "report": str(report_path)})
+    record_pack_run(str(output_root), phase, {
+        "run": queue["run"], "dry_run": dry_run, "cancelled": cancelled, "totals": totals,
+        "acceptance": acceptance_outcome.report.verdict if acceptance_outcome and acceptance_outcome.report else None,
+        "report": pack_report_path.name,
+    })
+    summary_path = refresh_summary(str(output_root))
+    emit(on_event, {"type": "summary", **totals, "report": str(report_path), "plan_summary": str(summary_path)})
 
     # The chained copy has done its job; everything downstream reads output_dir.
     if _chain_dir is not None:
@@ -633,7 +646,8 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     return RunResult(
         phase=phase, source_dir=source_dir, output_dir=str(output_root), dry_run=dry_run,
         statuses=all_statuses, totals=totals, skipped=list(skipped), queue=queue,
-        paths={"report": str(report_path), "queue": str(output_root / QUEUE_NAME), "page": page_path,
+        paths={"report": str(report_path), "pack_report": str(pack_report_path), "summary": str(summary_path),
+               "queue": str(output_root / QUEUE_NAME), "page": page_path,
                "snapshot": snapshot_path,
                "acceptance": str(acceptance_outcome.path) if acceptance_outcome and acceptance_outcome.path else None,
                "testgen": testgen_result.paths["report"] if testgen_result else None,
@@ -679,6 +693,8 @@ def build_project(source_dir: str, output_dir: str, config: ForgeConfig, *, on_e
     out.mkdir(parents=True, exist_ok=True)
     (out / PROJECT_BUILD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
     _write_build_section(out / "migration-report.md", record)
+    # The build is about the whole plan, not the last pack: the summary carries it.
+    refresh_summary(str(out))
     emit(on_event, {"type": "build", **{k: record[k] for k in
                     ("outcome", "detail", "failed_step", "tail", "java_home", "seconds", "steps")}})
     return record
@@ -702,15 +718,33 @@ def build_status(source_dir: str, output_dir: str) -> dict:
     return {**record, "stale": record.get("fingerprint") != current}
 
 
+def refresh_summary(output_dir: str) -> Path:
+    """Regenerate ``migration-summary.md``: every pack's row, the queue now, the last build.
+
+    Called after every run, build and applied decision, so the plan-level view
+    never describes a state that has since moved. Costs no model call.
+    """
+    from forge.review_queue import load_queue
+    from forge.utils.report import write_summary
+
+    try:
+        queue = load_queue(output_dir)
+    except (OSError, ValueError):
+        queue = None
+    build = None
+    try:
+        record = json.loads((Path(output_dir) / PROJECT_BUILD_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        record = None
+    if isinstance(record, dict):
+        build = build_status(str(record["source_dir"]), output_dir) if record.get("source_dir") else record
+    return write_summary(output_dir, queue=queue, build=build)
+
+
 def _write_build_section(report: Path, record: dict) -> None:
-    lines = [_BUILD_SECTION, "",
-             f"- **Result:** {record['outcome'].upper()} — {record['detail']}",
-             f"- **JDK:** {record.get('java_home') or '(default)'}",
-             f"- **Built at:** {record['built_at']} ({record.get('seconds', 0)}s)", ""]
-    lines += [f"- {s}" for s in record.get("steps") or []]
-    if record.get("tail"):
-        lines += ["", "```", *record["tail"], "```"]
-    section = "\n".join(lines) + "\n"
+    from forge.utils.report import build_section
+
+    section = build_section(record)
     text = report.read_text(encoding="utf-8") if report.is_file() else "# FORGE Migration Report\n"
     if _BUILD_SECTION in text:
         head, rest = text.split(_BUILD_SECTION, 1)
@@ -736,9 +770,20 @@ def acceptance(phase: str, source_dir: str, output_dir: str, config: ForgeConfig
     if dry_run:
         return AcceptanceOutcome(None, None, "skipped — a dry run writes nothing, so there is no post-migration tree to check", 0)
 
+    from forge.utils.report import pack_acceptance_name, pack_report_name, update_pack_row
+
     decisions = config.get("decisions") or {}
     report = _run([spec], source_dir, output_dir, decisions, deleted=deleted, run_build=run_build)
     path = write_acceptance(report, output_dir)
+    # migration-acceptance.json is the latest check; this pack's copy survives the next pack's.
+    out = Path(output_dir)
+    (out / pack_acceptance_name(phase)).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    per_pack = out / pack_report_name(phase)
+    if per_pack.is_file():
+        per_pack.write_text(per_pack.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + report.to_markdown(),
+                            encoding="utf-8")
+    update_pack_row(output_dir, phase, acceptance=report.verdict)
+    refresh_summary(output_dir)
     return AcceptanceOutcome(report, path, None, 0 if report.verdict == "PASS" else 1)
 
 
@@ -872,8 +917,8 @@ def apply(decisions: Sequence[Any], source_dir: str, output_dir: str, config: Fo
     are unusable — the caller decides how to report that.
     """
     from forge.decisions import (Decision, append_report_section, applied_section, apply_decisions,
-                                 decisions_from, write_applied_log)
-    from forge.review_queue import load_queue, write_queue, write_review_page
+                                 decisions_from, remaining_entries, write_applied_log)
+    from forge.review_queue import REVIEW_STATUSES, load_queue, new_run_stamp, save_queue, write_review_page
     from forge.state_store.dynamodb import DynamoDBStateManager
     from forge.utils.telemetry import MetricsEmitter
     from forge.verify.build_verifier import BuildVerifier
@@ -925,9 +970,11 @@ def apply(decisions: Sequence[Any], source_dir: str, output_dir: str, config: Fo
             run_manifest.record(output_dir, fs.get("phase") or phase or "java21", fs["written_paths"],
                                 deleted=fs.get("deleted_files") or ())
 
+    resolved: Dict[tuple, Any] = {}
     outcomes, remaining = apply_decisions(
         decided, queue, source_dir=source_dir, output_dir=output_dir,
         put_status=put_status, verify_build=verify_build, rerun=rerun, dry_run=dry_run,
+        resolved_out=resolved,
     )
     for o in outcomes:
         emit(on_event, {"type": "apply_outcome", "file": o.file, "decision": o.decision, "applied": o.applied,
@@ -936,11 +983,20 @@ def apply(decisions: Sequence[Any], source_dir: str, output_dir: str, config: Fo
     queue_after = None
     log_path = None
     if not dry_run:
-        queue_after = write_queue(output_dir, remaining, source_dir, phase=queue.get("phase", ""), run_id=queue.get("run"))
+        # Undecided entries are kept verbatim -- other packs' included. An entry
+        # a retry put back in the queue has new content, so it and the queue get
+        # a new stamp; approving or rejecting only removes, and leaves both alone
+        # so every other card on screen stays valid.
+        reheld = any(fs.get("status") in REVIEW_STATUSES for fs in resolved.values())
+        run_after = new_run_stamp(queue) if reheld else queue.get("run")
+        entries = remaining_entries(queue, resolved, source_dir=source_dir, output_dir=output_dir, run=run_after)
+        queue_after = save_queue(output_dir, {**queue, "run": run_after, "entries": entries})
         if queue_after["entries"]:
             write_review_page(output_dir, queue_after)
-        append_report_section(output_dir, applied_section(outcomes))
+        append_report_section(output_dir, applied_section(outcomes),
+                              packs=[str(fs.get("phase") or "") for fs in resolved.values()])
         log_path = write_applied_log(output_dir, run or queue.get("run", ""), decided, outcomes)
+        refresh_summary(output_dir)
         emit(on_event, {"type": "apply_done", "remaining": len(queue_after["entries"]), "log": str(log_path)})
     return ApplyResult(outcomes, remaining, queue_after, log_path, all(o.applied for o in outcomes))
 

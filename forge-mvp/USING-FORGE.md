@@ -258,6 +258,17 @@ Everything FORGE produces lands in the output directory (`./migrated` by default
 tree, a report of what happened and what it cost, and the review queue. Ask for *"the artifacts"* in
 chat and it lists them with download links.
 
+A plan runs several packs into that one directory, and nothing a pack writes is overwritten by the
+next one:
+
+| File | What it holds |
+|---|---|
+| `migration-summary.md` | One row per pack — files, passed, manual, blocked, held, still awaiting review, cost, acceptance — and the project build. Rewritten after every run, build and decision. |
+| `migration-report-<pack>.md` | That pack's own report, from its latest run |
+| `migration-acceptance-<pack>.json` | That pack's acceptance record |
+| `migration-report.md`, `migration-acceptance.json` | Whichever pack ran last |
+| `manual-review-queue.json`, `migration-review.html` | Every file still waiting on you, from every pack. Running a pack again replaces only that pack's entries. |
+
 ---
 
 ## For engineers extending FORGE

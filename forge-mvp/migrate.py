@@ -89,6 +89,8 @@ def _print_event(event: dict) -> None:
         print(f"\nSummary: {event['passed']} passed | {event['manual']} manual | {event['blocked']} blocked"
               f"{held_str} | {event['bedrock_calls']} Bedrock calls")
         print(f"Report: {event['report']}")
+        if event.get("plan_summary"):
+            print(f"Plan summary: {event['plan_summary']}")
 
 
 # ─── commands ─────────────────────────────────────────────────────────────────

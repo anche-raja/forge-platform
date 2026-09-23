@@ -680,7 +680,7 @@ class Toolbox:
 
     def _review_cards(self):
         """(cards, card_error). Never raises — see R6 and the run_pack handler."""
-        from forge.review_queue import REVIEW_STATUSES, load_queue
+        from forge.review_queue import REVIEW_STATUSES, entry_run, load_queue
 
         try:
             queue = load_queue(self.ctx.output_dir)
@@ -689,10 +689,9 @@ class Toolbox:
         except Exception as e:  # noqa: BLE001
             return [], type(e).__name__
         try:
-            run = str(queue.get("run") or "")
             entries = [e for e in (queue.get("entries") or [])
                        if isinstance(e, dict) and e.get("status") in REVIEW_STATUSES]
-            built = [cards.review_file_card(e, run=run) for e in entries[:CARD_CAP]]
+            built = [cards.review_file_card(e, run=entry_run(e, queue)) for e in entries[:CARD_CAP]]
             if len(entries) > CARD_CAP:
                 built.append(cards.review_more_card(CARD_CAP, len(entries)))
             return built, None
@@ -988,7 +987,7 @@ class Toolbox:
         return ToolOutcome(True, observation, [cards.acceptance_card(pack, outcome)], f"{pack}: {verdict}")
 
     def _list_held_files(self, args: dict, tool_id: str) -> ToolOutcome:
-        from forge.review_queue import REVIEW_STATUSES, load_queue
+        from forge.review_queue import REVIEW_STATUSES, entry_run, load_queue
 
         try:
             queue = load_queue(self.ctx.output_dir)
@@ -1008,7 +1007,7 @@ class Toolbox:
             "by_status": dict(Counter(str(e.get("status")) for e in entries)),
             "entries": [cards.entry_obs(e) for e in rows],
         }
-        built = [cards.review_file_card(e, run=run) for e in rows]
+        built = [cards.review_file_card(e, run=entry_run(e, queue)) for e in rows]
         if len(entries) > CARD_CAP:
             built.append(cards.review_more_card(CARD_CAP, len(entries)))
         return ToolOutcome(True, observation, built, f"{len(entries)} file(s) waiting on a human")
@@ -1031,36 +1030,44 @@ class Toolbox:
         except (FileNotFoundError, ValueError) as e:
             return self._fail(str(e))
 
-        # The queue is one file per output_dir, rewritten by every run. A card
-        # from an earlier run still looks live in the transcript, and
-        # service.apply matches on path alone — approving it would promote a
-        # transform the human never saw.
-        if str(queue.get("run") or "") != run:
+        # The queue accumulates across packs, and each entry carries the run
+        # that produced it. A card is current when it shows the queue as it is
+        # now, or when its own entry is unchanged since — so an earlier pack's
+        # card survives the next pack's run. A card from before its entry was
+        # replaced (the pack re-ran, a retry re-held it) still looks live in
+        # the transcript; approving it would promote a transform the human
+        # never saw.
+        from forge.review_queue import entry_run
+
+        queue_run = str(queue.get("run") or "")
+        entries = [e for e in (queue.get("entries") or []) if isinstance(e, dict)]
+        if run != queue_run and not any(entry_run(e, queue) == run for e in entries):
             return self._fail("the review queue changed since those files were shown — "
                               "ask for the held files again")
 
-        by_path: Dict[str, dict] = {}
-        for entry in queue.get("entries") or []:
-            if not isinstance(entry, dict):
-                continue
-            for key in (entry.get("rel_path"), entry.get("file_path")):
-                if key:
-                    by_path.setdefault(str(key), entry)
+        by_path: Dict[str, List[dict]] = {}
+        for entry in entries:
+            for key in dict.fromkeys(k for k in (entry.get("rel_path"), entry.get("file_path")) if k):
+                by_path.setdefault(str(key), []).append(entry)
 
         kept, rejected, seen = [], [], set()
         for d in decided:
             row = {"file": d.file, "pack": d.pack, "decision": d.decision}
-            entry = by_path.get(d.file)
-            if entry is None:
+            held = by_path.get(d.file) or []
+            entry = next((e for e in held if str(e.get("pack") or "") == d.pack), None)
+            if not held:
                 # Deliberately no basename fallback: find_entry would approve a
                 # same-named file in another directory, a diff nobody saw.
                 rejected.append({**row, "reason": "not in the current review queue under that exact path"})
-            elif str(entry.get("pack") or "") != d.pack:
-                rejected.append({**row, "reason": f"that file is held by pack '{entry.get('pack')}'"})
-            elif d.file in seen:
+            elif entry is None:
+                rejected.append({**row, "reason": f"that file is held by pack '{held[0].get('pack')}'"})
+            elif run != queue_run and entry_run(entry, queue) != run:
+                rejected.append({**row, "reason": "that file changed since it was shown — ask for the held "
+                                                  "files again"})
+            elif (d.pack, d.file) in seen:
                 rejected.append({**row, "reason": "duplicate decision for the same file"})
             else:
-                seen.add(d.file)
+                seen.add((d.pack, d.file))
                 kept.append(d)
 
         if not kept:

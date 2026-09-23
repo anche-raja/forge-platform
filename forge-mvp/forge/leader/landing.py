@@ -69,6 +69,8 @@ ARTIFACT_NAMES = frozenset({
     "decisions-applied.jsonl",
     "pack-feedback.md",
     "project-build.json",
+    "migration-summary.md",
+    "migration-summary.json",
 })
 
 # The line the repository's own history carries on work Claude had a hand in.
@@ -114,6 +116,10 @@ def is_artifact(rel: str) -> bool:
         return True
     # The run manifest: FORGE's bookkeeping, and it once landed as an added file.
     if rel == run_manifest.MANIFEST_NAME:
+        return True
+    # One report and one acceptance record per pack, and the plan summary.
+    from forge.utils.report import is_report_artifact
+    if is_report_artifact(rel):
         return True
     return rel in ARTIFACT_NAMES
 
