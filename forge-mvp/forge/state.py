@@ -23,6 +23,9 @@ class FileStatus(TypedDict):
     deleted_files: List[str]
     build_verdict: Optional[Literal["PASS", "FAIL", "SKIPPED"]]
     build_output: Optional[str]
+    # javac's parse of the transform output, before review (forge/verify/syntax.py)
+    syntax_verdict: Optional[Literal["PASS", "FAIL", "SKIPPED"]]
+    syntax_errors: List[str]
     transform_model: Optional[str]
     review_model: Optional[str]
     error: Optional[str]
@@ -88,6 +91,8 @@ def make_file_status(file_path: str, phase: str) -> FileStatus:
         deleted_files=[],
         build_verdict=None,
         build_output=None,
+        syntax_verdict=None,
+        syntax_errors=[],
         transform_model=None,
         review_model=None,
         error=None,

@@ -125,6 +125,8 @@ signal that the pack itself should change.
 
 ## Landing on a branch
 
+**Broken output is caught file by file.** Every migrated Java file is parsed by the Java compiler before it is reviewed. A file the model damaged, with a stray brace for example, is sent back to the model with the compiler's error and fixed automatically.
+
 **First, FORGE builds the project.** After the last pack, the chat compiles your source with the
 migrated files laid over it, using the project's own build: each Maven reactor in dependency order,
 on the JDK your target Java version names. A compile catches what no reviewer can — a file a pack

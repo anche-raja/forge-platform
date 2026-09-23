@@ -77,7 +77,8 @@ terraform apply
 
 Original spec in `forge-mvp/PHASE0-SPEC.md`. Key design points:
 
-- **LangGraph graph**: `guardrails_pre → java_upgrade → java_reviewer → guardrails_post → write_file → verify_build → update_state`
+- **LangGraph graph**: `guardrails_pre → java_upgrade → syntax_check → java_reviewer → guardrails_post → write_file → verify_build → update_state`
+- **Syntax check before review** (`syntax_check: true`; off when the key is absent): javac parses each Java output stopped at the PARSE stage (no classpath), XML is checked for well-formedness. A failure retries with javac's errors as the feedback and costs no review call; no javac is SKIPPED, never FAIL. `forge/verify/syntax.py`.
 - **Parallel files**: `max_parallel_files` (8 in the generated agents.yaml, 1 when absent) runs that many files of a pack at once; results stay in scan order, cancel starts nothing new, Maven build verification stays sequential. See ARCHITECTURE §8.
 - **Packs select by content**: javax-to-jakarta, struts2, spring6 and java21 take only Java files matching what they change (`content_match`), not `**/*.java`. A `content_match` hit is HIGH risk only when the entry says `risk: high`.
 - **Project build before landing**: `build_project` (chat) / `--build-project` (CLI) compiles source + output with the project's own build — Maven reactors in order into `~/.forge/m2`, or `project_build.command` — and writes `project-build.json`. Landing shows the verdict (passed / failed / not run / stale) and never refuses on it. The leader sees the verdict, never compiler output.

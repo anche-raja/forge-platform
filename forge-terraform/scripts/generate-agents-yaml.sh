@@ -251,6 +251,14 @@ secret_scan:
     min_bits: 4.0
   allow: []
 
+# ─── Syntax check (before review) ────────────────────────────────────────────
+# javac parses every migrated Java file (parse stage only: no classpath, so a
+# missing dependency is not an error) and XML is checked for well-formedness.
+# A file that does not parse goes back to the model with javac's errors and
+# costs no review call. Uses the JDK project_build resolves; no javac -> the
+# check is skipped and noted, never a failure.
+syntax_check: true
+
 # ─── Project build (the last check before landing) ───────────────────────────
 # `migrate.py <src> --build-project` and the chat's build_project tool compile
 # source + output with the project's own build. Leave everything empty to

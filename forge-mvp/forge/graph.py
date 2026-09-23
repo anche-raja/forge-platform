@@ -9,6 +9,7 @@ from forge.state import ForgeState
 from forge.state_store.dynamodb import DynamoDBSaver
 from forge.utils.file_writer import stage_output, write_output
 from forge.utils.telemetry import get_logger
+from forge.verify import syntax
 from forge.verify.build_verifier import BuildVerifier
 
 _log = get_logger(__name__)
@@ -28,6 +29,45 @@ def build_graph(config: ForgeConfig):
 
     def java_upgrade(state: ForgeState) -> ForgeState:
         return upgrade_agent.run(state)
+
+    check_syntax = syntax.enabled(config)
+    _SYNTAX_ERROR = "Transform output does not parse"
+    _SYNTAX_SKIPPED = "syntax check skipped: no javac found for the project's JDK"
+
+    def syntax_check(state: ForgeState) -> ForgeState:
+        """javac parses the transform output before a reviewer is paid to read it.
+
+        A model sometimes damages a file it otherwise migrated correctly -- a
+        stray brace, stray characters after one -- and a reviewer reading for
+        meaning passes it. A FAIL goes back through the same retry loop as a
+        low score, with javac's errors as the feedback. A unit the transform
+        already sent to manual review passes through untouched.
+        """
+        file_status = dict(state["current_file"])
+        if not check_syntax or file_status.get("status") == "MANUAL_REVIEW":
+            return state
+        # This attempt's verdict replaces the last one's, so a retry that
+        # parses does not carry the previous failure's error forward.
+        if str(file_status.get("error") or "").startswith(_SYNTAX_ERROR):
+            file_status["error"] = None
+        files = (file_status.get("transform_output") or {}).get("files") or {}
+        verdict, errors = syntax.check_files(files, config)
+        file_status["syntax_verdict"] = verdict
+        file_status["syntax_errors"] = errors
+        findings = list(file_status.get("guardrail_findings") or [])
+        if verdict == syntax.FAIL:
+            _log.info("%s does not parse (attempt %d)", file_status["file_path"],
+                      (file_status.get("retry_count") or 0) + 1)
+            file_status["error"] = f"{_SYNTAX_ERROR}: {errors[0]}"
+            file_status["review_feedback"] = (
+                "Your output does not parse. Return the whole file again with exactly these errors "
+                "fixed, and change nothing else:\n" + "\n".join(errors)
+            )
+            findings += [f"syntax: {e}" for e in errors[:3]]
+        elif verdict == syntax.SKIPPED and _SYNTAX_SKIPPED not in findings:
+            findings.append(_SYNTAX_SKIPPED)
+        file_status["guardrail_findings"] = findings
+        return {**state, "current_file": file_status}
 
     def java_reviewer(state: ForgeState) -> ForgeState:
         return reviewer.review(state)
@@ -137,6 +177,14 @@ def build_graph(config: ForgeConfig):
             return "increment_retry"
         return "manual_queue"
 
+    def route_syntax(state: ForgeState) -> str:
+        fs = state["current_file"]
+        if fs.get("syntax_verdict") != syntax.FAIL or fs.get("status") == "MANUAL_REVIEW":
+            return "java_reviewer"
+        if (fs.get("retry_count") or 0) < config.get("max_retries", 2):
+            return "increment_retry"
+        return "manual_queue"
+
     def route_verify(state: ForgeState) -> str:
         fs = state["current_file"]
         if fs.get("build_verdict") != "FAIL":
@@ -160,6 +208,7 @@ def build_graph(config: ForgeConfig):
 
     graph.add_node("guardrails_pre", guardrails_pre)
     graph.add_node("java_upgrade", java_upgrade)
+    graph.add_node("syntax_check", syntax_check)
     graph.add_node("java_reviewer", java_reviewer)
     graph.add_node("guardrails_post", guardrails_post)
     graph.add_node("write_file", write_file)
@@ -176,7 +225,12 @@ def build_graph(config: ForgeConfig):
         "blocked": "blocked",
         "java_upgrade": "java_upgrade",
     })
-    graph.add_edge("java_upgrade", "java_reviewer")
+    graph.add_edge("java_upgrade", "syntax_check")
+    graph.add_conditional_edges("syntax_check", route_syntax, {
+        "java_reviewer": "java_reviewer",
+        "increment_retry": "increment_retry",
+        "manual_queue": "manual_queue",
+    })
     graph.add_conditional_edges("java_reviewer", route_reviewer, {
         "guardrails_post": "guardrails_post",
         "increment_retry": "increment_retry",

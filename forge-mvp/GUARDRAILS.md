@@ -111,6 +111,24 @@ Three details the picture carries that prose does not:
 Clean output sets status `TRANSFORMING`. `route_pre` sends `BLOCKED` to the `blocked` node and
 everything else to `java_upgrade`.
 
+## Between the transform and the review: `syntax_check`
+
+[forge/verify/syntax.py](forge/verify/syntax.py), on when `syntax_check: true`.
+
+A model sometimes damages a file it otherwise migrated correctly: a stray `}`, or characters pasted
+after a brace. A reviewer reading for meaning passes it. On AMS, three java8-to-java21 outputs
+scored PASS and did not compile. So before any review is paid for, `javac` parses every Java file
+in the output, stopped at the PARSE stage. It resolves no symbols and needs no classpath. XML files
+are checked for well-formedness.
+
+| Result | What happens |
+|---|---|
+| FAIL | `review_feedback` becomes javac's errors and the unit retries; after `max_retries`, `MANUAL_REVIEW` with the first error |
+| SKIPPED | No javac for the project's JDK. A finding is recorded and the unit goes on to review: a toolchain gap is not a bad migration |
+| PASS | On to review |
+
+Local, deterministic, no network, about 0.2 s per file.
+
 ## 5. `guardrails_post` — after the transform
 
 [forge/agents/guardrails_post.py](forge/agents/guardrails_post.py)
