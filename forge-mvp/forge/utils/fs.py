@@ -32,6 +32,9 @@ EXCLUDED_DIRS = frozenset({
     "target", "build", "out", "bin",
     "node_modules", ".git", ".svn", ".hg",
     ".idea", ".vscode", ".gradle", ".mvn",
+    # Agent tooling keeps whole checkouts here (.claude/worktrees/...); read as
+    # source they doubled every piece of discovery evidence on AMS.
+    ".claude",
     "generated", "generated-sources", "generated-test-sources",
 }) | FORGE_OUTPUT_DIR_NAMES
 
