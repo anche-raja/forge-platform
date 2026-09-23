@@ -142,6 +142,18 @@ signal that the pack itself should change.
 
 ---
 
+## Unit tests, by default
+
+When the last pack finishes, FORGE writes JUnit 5 + Mockito tests for the classes the migration
+wrote — two model calls per class, one to write and one to review, the same cross-check as the
+migration. A class that already has a test, an interface or an abstract class is skipped, and the
+report says why. It happens before the project build, so the build compiles the new tests.
+
+It costs money, so it follows the same rule as a pack: over `leader.confirm_above_usd` it waits for
+your click, and the project is built first so you still see a verdict. Confirming writes the tests
+and builds again. Turn it off with `test_generation.after_plan: false` in agents.yaml; you can still
+ask for tests any time (*"generate tests"*). The results are in `test-generation-report.md`.
+
 ## Landing on a branch
 
 **Broken output is caught file by file.** Every migrated Java file is parsed by the Java compiler before it is reviewed. A file the model damaged, with a stray brace for example, is sent back to the model with the compiler's error and fixed automatically.

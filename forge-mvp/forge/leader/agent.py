@@ -88,6 +88,12 @@ How to work:
   literal that is not a real secret. After that change a retry re-runs it; rejecting it leaves
   the file unmigrated. HELD and MANUAL_REVIEW files are the ones with a transform to decide on.
 
+Unit tests:
+- When the last pack of the plan finishes, FORGE writes JUnit 5 tests for the migrated classes by
+  default (test_generation.after_plan), then builds. If run_pack's result says the tests are waiting
+  for a click, tell the user what it will cost and END THE TURN; confirming it writes the tests and
+  builds again. Do not call generate_tests yourself on top of that.
+
 Landing the work:
 - The last pack of the plan builds the project itself: its run_pack result says plan_complete and
   carries the build verdict. Tell the user in one line whether the project built; if it failed,

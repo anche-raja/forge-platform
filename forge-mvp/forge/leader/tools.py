@@ -995,8 +995,9 @@ class Toolbox:
             observation: Dict[str, Any] = {"status": "nothing", "pack": pack, "message": cards.cap(e)}
             nothing_cards: List[dict] = []
             nothing_parts = [f"{pack}: nothing to do"]
-            self._finish_plan(tool_id, observation, nothing_cards, nothing_parts)
-            return ToolOutcome(True, observation, nothing_cards, " · ".join(nothing_parts))
+            pending = self._finish_plan(tool_id, observation, nothing_cards, nothing_parts)
+            return ToolOutcome(True, observation, nothing_cards, " · ".join(nothing_parts),
+                               needs_confirmation=pending is not None, pending_id=pending)
         except service.PackOverlap as e:
             # ok:false, so the leader reports it and asks rather than retrying:
             # the fix is a combined phase or a chained output dir, and both are
@@ -1043,9 +1044,9 @@ class Toolbox:
             parts.append(model.split(".", 2)[-1] if model.count(".") >= 2 else model)
         if card_error:
             parts.append(f"card_error: {card_error}")
-        if status == "done":
-            self._finish_plan(tool_id, observation, built, parts)
-        return ToolOutcome(True, observation, built, " · ".join(parts))
+        pending = self._finish_plan(tool_id, observation, built, parts) if status == "done" else None
+        return ToolOutcome(True, observation, built, " · ".join(parts),
+                           needs_confirmation=pending is not None, pending_id=pending)
 
     def _plan_remaining(self) -> List[str]:
         """The plan's packs this chat has not settled yet, in plan order.
@@ -1061,7 +1062,17 @@ class Toolbox:
             selected = list(self.convo.selected_packs or [])
         return [p for p in selected if p in runnable and p not in settled]
 
-    def _finish_plan(self, tool_id: str, observation: dict, built: List[dict], parts: List[str]) -> None:
+    def _tests_after_plan(self) -> bool:
+        """``test_generation.after_plan``: write unit tests once the whole plan has run.
+
+        Off unless agents.yaml turns it on (the generated config does), and
+        never when test generation itself is disabled.
+        """
+        tg = (self.effective_config().get("test_generation") or {})
+        return bool(tg.get("enabled", True)) and bool(tg.get("after_plan", False))
+
+    def _finish_plan(self, tool_id: str, observation: dict, built: List[dict],
+                     parts: List[str]) -> Optional[str]:
         """After the last pack of the plan, build the project: in code, not in the prompt.
 
         The prompt used to be the only thing that said so, and the first full
@@ -1074,18 +1085,43 @@ class Toolbox:
         remaining = self._plan_remaining()
         observation["plan_complete"] = not remaining
         if remaining or not self.convo.completed:
-            return
+            return None
         if self.cancel is not None and self.cancel.is_set():
-            return
+            return None
+
+        # Unit tests by default (test_generation.after_plan). They spend, so
+        # they pass the same gate a generate_tests call would: under
+        # leader.confirm_above_usd they run now, before the build, so the one
+        # build also compiles them; over it, the build runs first and a
+        # confirmation card is parked -- confirming it writes the tests and
+        # builds again (see _generate_tests). Either way the plan ends built.
+        pending: Optional[str] = None
+        if self._tests_after_plan():
+            gated = self._gate("generate_tests", {})
+            if gated is None:
+                tests = self._generate_tests({}, tool_id, rebuild=False)
+                observation["tests"] = tests.observation
+                built.extend(tests.cards)
+                parts.append(tests.summary)
+            else:
+                pending = gated.pending_id
+                observation["tests"] = {"status": "needs_confirmation", "pending_id": pending,
+                                        **{k: gated.observation.get(k) for k in ("est_usd", "title")}}
+                parts.append("tests: waiting for your click")
+
         try:
             record = self._build(tool_id)
         except Exception as e:  # noqa: BLE001 — R6: the run above is paid for and stands
             observation["build_error"] = cards.cap(f"{type(e).__name__}: {e}")
             parts.append("build: error")
-            return
-        observation["build"] = cards.build_status_obs(record)
-        built.append(cards.build_card(record))
-        parts.append(f"build: {record.get('outcome')}")
+        else:
+            observation["build"] = cards.build_status_obs(record)
+            built.append(cards.build_card(record))
+            parts.append(f"build: {record.get('outcome')}")
+        if pending is not None:
+            # Parked last, so the card the user must click sits below the build.
+            built.extend(gated.cards)
+        return pending
 
     def _check_acceptance(self, args: dict, tool_id: str) -> ToolOutcome:
         from forge import service
@@ -1208,7 +1244,7 @@ class Toolbox:
         return ToolOutcome(True, observation, [],
                            f"{applied} of {len(decided)} applied, {observation['remaining']} left")
 
-    def _generate_tests(self, args: dict, tool_id: str) -> ToolOutcome:
+    def _generate_tests(self, args: dict, tool_id: str, *, rebuild: bool = True) -> ToolOutcome:
         from forge import service
 
         result = service.generate_tests(self.ctx.source_dir, self.ctx.output_dir, self.effective_config(),
@@ -1225,8 +1261,21 @@ class Toolbox:
         self._accrue_rest(tool_id, totals.get("cost_usd"))
         card = cards.tests_card(totals, data.get("dependencies"),
                                 cards.file_href(self.ctx.output_dir, "test-generation-report.md"))
-        return ToolOutcome(True, observation, [card],
-                           f"{totals.get('generated', 0)} test(s) generated, {totals.get('held', 0)} held")
+        built = [card]
+        summary = f"{totals.get('generated', 0)} test(s) generated, {totals.get('held', 0)} held"
+        # New tests change the output, so a build of the finished plan is now
+        # stale. Rebuild -- free, and it compiles the tests too (mvn install
+        # -DskipTests still compiles test sources).
+        if (rebuild and totals.get("generated") and self.convo.completed and not self._plan_remaining()
+                and not (self.cancel is not None and self.cancel.is_set())):
+            try:
+                record = self._build(tool_id)
+                observation["build"] = cards.build_status_obs(record)
+                built.append(cards.build_card(record))
+                summary += f" · build: {record.get('outcome')}"
+            except Exception as e:  # noqa: BLE001 — the tests are written and paid for
+                observation["build_error"] = cards.cap(f"{type(e).__name__}: {e}")
+        return ToolOutcome(True, observation, built, summary)
 
     def _pack_feedback(self, args: dict, tool_id: str) -> ToolOutcome:
         from forge import service

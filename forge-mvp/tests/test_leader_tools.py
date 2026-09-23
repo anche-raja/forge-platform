@@ -1009,3 +1009,66 @@ def test_an_unbound_state_block_names_set_project_and_reads_no_queue(ctx, tmp_pa
     assert "set_project" in block and "no project set yet" in block
     assert "someone-elses" not in block, "a queue in the server's cwd is not this chat's"
     assert "profile_project" not in block, "profile_project can only refuse while unbound"
+
+
+# ─── unit tests by default at the end of the plan (test_generation.after_plan) ─
+
+class _TestGenResult:
+    def __init__(self, generated=3):
+        self.generated = generated
+
+    def to_json(self):
+        return {"totals": {"generated": self.generated, "held": 0, "cost_usd": 0.12}, "dependencies": [],
+                "skipped": 0, "cancelled": False, "dry_run": False, "style": "junit5"}
+
+
+def _tests_ctx(project, tmp_path, after_plan=True):
+    config = write_config(tmp_path, test_generation={"enabled": True, "after_plan": after_plan})
+    return ProjectContext(source_dir=str(project), output_dir=str(tmp_path / "out"),
+                          config=config, base_config=config)
+
+
+def test_under_the_spend_limit_the_plan_writes_tests_then_builds_once(project, tmp_path):
+    ctx = _tests_ctx(project, tmp_path)
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    order = []
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch("forge.service.generate_tests", side_effect=lambda *a, **k: order.append("tests") or _TestGenResult()), \
+         patch("forge.service.build_project", side_effect=lambda *a, **k: order.append("build") or _build_record("pass")):
+        last = _box(ctx, convo, confirm_above_usd=0.0).execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+    assert order == ["tests", "build"], "one build, and it compiles the new tests"
+    assert last.needs_confirmation is False
+    assert last.observation["tests"]["totals"]["generated"] == 3
+    assert [c["kind"] for c in last.cards][-2:] == ["tests", "build"]
+
+
+def test_over_the_spend_limit_the_plan_builds_and_parks_the_tests_for_a_click(project, tmp_path):
+    ctx = _tests_ctx(project, tmp_path)
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch.object(Toolbox, "_test_targets", return_value=100), \
+         patch("forge.service.generate_tests", return_value=_TestGenResult()) as gen, \
+         patch("forge.service.build_project", return_value=_build_record("pass")) as build:
+        box = _box(ctx, convo, confirm_above_usd=1.0)
+        last = box.execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+        gen.assert_not_called()
+        assert build.call_count == 1
+        assert last.needs_confirmation is True and last.pending_id
+        assert last.observation["tests"]["status"] == "needs_confirmation"
+        assert last.cards[-1]["kind"] == "confirm" and last.cards[-1]["tool"] == "generate_tests"
+
+        confirmed = box.execute("generate_tests", {}, tool_id="t2", confirmed=True)
+        assert gen.call_count == 1
+        assert build.call_count == 2, "new tests make the last build stale, so it builds again"
+        assert [c["kind"] for c in confirmed.cards] == ["tests", "build"]
+
+
+def test_without_after_plan_the_plan_writes_no_tests(project, tmp_path):
+    ctx = _tests_ctx(project, tmp_path, after_plan=False)
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch("forge.service.generate_tests") as gen, \
+         patch("forge.service.build_project", return_value=_build_record("pass")):
+        last = _box(ctx, convo, confirm_above_usd=0.0).execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+    gen.assert_not_called()
+    assert "tests" not in last.observation

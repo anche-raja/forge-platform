@@ -243,6 +243,10 @@ build_verification:
 #                           toolchain, so it is off by default.
 test_generation:
   enabled: true
+  # In the chat, write unit tests for the migrated classes once the whole plan
+  # has run -- before the project build, so the build compiles them. Spend
+  # over leader.confirm_above_usd still waits for a click.
+  after_plan: true
   style: "junit5"
   model: ""
   review_model: ""
