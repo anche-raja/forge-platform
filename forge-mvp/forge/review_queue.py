@@ -94,28 +94,121 @@ def build_entry(fs: FileStatus, source_dir: str, output_dir: str) -> dict:
     return entry
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def new_run_stamp(queue: Optional[dict] = None) -> str:
+    """A run stamp no entry of ``queue`` already carries.
+
+    A card is judged current by its entry's stamp, so two runs inside one
+    second must not share one: the second would make the first's cards look
+    current for content they never showed. Seconds normally; microseconds only
+    on a collision.
+    """
+    taken = set()
+    if queue:
+        taken.add(str(queue.get("run") or ""))
+        taken |= {str(e.get("run") or "") for e in queue.get("entries") or [] if isinstance(e, dict)}
+    stamp = _now()
+    if stamp in taken:
+        stamp = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    return stamp
+
+
 def build_queue(statuses: Sequence[FileStatus], source_dir: str, output_dir: str, *, phase: str = "",
                 run_id: Optional[str] = None, dry_run: bool = False) -> dict:
+    run = run_id or _now()
+    entries = []
+    for fs in statuses:
+        if needs_review(fs, dry_run=dry_run):
+            # Stamped per entry: an accumulated queue holds several packs'
+            # runs, and a review card is stale only when ITS entry changed.
+            entries.append({**build_entry(fs, source_dir, output_dir), "run": run, "dry_run": dry_run})
     return {
         "version": 2,
-        "run": run_id or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "run": run,
         "phase": phase,
         "source_dir": str(Path(source_dir).resolve()),
         "output_dir": str(Path(output_dir).resolve()),
         "dry_run": dry_run,
-        "entries": [build_entry(fs, source_dir, output_dir) for fs in statuses if needs_review(fs, dry_run=dry_run)],
+        "entries": entries,
     }
 
 
-def write_queue(output_dir: str, statuses: Sequence[FileStatus], source_dir: str, *, phase: str = "",
-                dry_run: bool = False, run_id: Optional[str] = None) -> dict:
-    """Write the queue and return it. An empty queue is still written, so a
-    reader never mistakes a stale file for this run's."""
-    queue = build_queue(statuses, source_dir, output_dir, phase=phase, run_id=run_id, dry_run=dry_run)
+def entry_key(entry: dict) -> tuple:
+    """What identifies an entry in an accumulated queue: the pack and the file."""
+    return (str(entry.get("pack") or ""), str(entry.get("rel_path") or entry.get("file_path") or ""))
+
+
+def entry_run(entry: dict, queue: dict) -> str:
+    """The run that produced ``entry`` -- its own stamp, or the queue's for an older file."""
+    return str(entry.get("run") or queue.get("run") or "")
+
+
+def merge_queue(previous: Optional[dict], fresh: dict) -> dict:
+    """``fresh`` with the entries of other packs from ``previous`` kept ahead of it.
+
+    A plan runs many packs into one output directory, and the queue used to be
+    rewritten by each: after ten packs, held files from the first nine had
+    dropped off the review page. The rule is by pack:
+
+    - another pack's entries stay until a human decides them;
+    - a real run of a pack replaces all of that pack's entries;
+    - a dry run replaces only that pack's *dry-run* entries -- it must not push
+      a real held file (staged, waiting on a human) off the page. Where the
+      two name the same file, the real entry is the one kept.
+    """
+    if not previous or previous.get("version") != 2:
+        return fresh
+    pack = str(fresh.get("phase") or "")
+    dry = bool(fresh.get("dry_run"))
+    # Staging mirrors the source layout, so a later pack that holds the same
+    # file overwrote the earlier pack's staged copy. The earlier entry keeps
+    # its own transformed text (approve writes from that) but loses the path:
+    # promoting it would ship the later pack's content, and rejecting it would
+    # delete the later pack's staged file.
+    restaged = {str(p) for e in fresh.get("entries") or [] for p in (e.get("held_paths") or [])}
+    kept = []
+    for e in previous.get("entries") or []:
+        if not isinstance(e, dict):
+            continue
+        e = {**e, "run": entry_run(e, previous), "dry_run": bool(e.get("dry_run", previous.get("dry_run")))}
+        if str(e.get("pack") or "") != pack or (dry and not e["dry_run"]):
+            if restaged.intersection(str(p) for p in (e.get("held_paths") or [])):
+                e["held_paths"] = [p for p in e["held_paths"] if str(p) not in restaged]
+            kept.append(e)
+    taken = {entry_key(e) for e in kept}
+    entries = kept + [e for e in fresh.get("entries") or [] if entry_key(e) not in taken]
+    return {**fresh, "entries": entries}
+
+
+def save_queue(output_dir: str, queue: dict) -> dict:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / QUEUE_NAME).write_text(json.dumps(queue, indent=2, default=str), encoding="utf-8")
     return queue
+
+
+def write_queue(output_dir: str, statuses: Sequence[FileStatus], source_dir: str, *, phase: str = "",
+                dry_run: bool = False, run_id: Optional[str] = None, accumulate: bool = False) -> dict:
+    """Write the queue and return it. An empty queue is still written, so a
+    reader never mistakes a stale file for this run's.
+
+    ``accumulate`` keeps other packs' undecided entries (:func:`merge_queue`);
+    that is what a pack run does. Without it the file holds only ``statuses``.
+    """
+    previous = None
+    if accumulate:
+        try:
+            previous = load_queue(output_dir)
+        except (OSError, ValueError):
+            previous = None
+    queue = build_queue(statuses, source_dir, output_dir, phase=phase,
+                        run_id=run_id or new_run_stamp(previous), dry_run=dry_run)
+    if accumulate:
+        queue = merge_queue(previous, queue)
+    return save_queue(output_dir, queue)
 
 
 def load_queue(output_dir: str) -> dict:
@@ -225,6 +318,8 @@ def _entry_html(i: int, e: dict) -> str:
         parts.append(f"<span class=\"tag\">build {_esc(e.get('build_verdict'))}</span>")
     if e.get("retry_count"):
         parts.append(f"<span class=\"tag\">retries {_esc(e.get('retry_count'))}</span>")
+    if e.get("dry_run"):
+        parts.append("<span class=\"tag\">dry run — not written</span>")
     parts.append("</div>")
 
     reasons = e.get("risk_reasons") or []
@@ -278,11 +373,14 @@ def render_review_page(queue: dict) -> str:
     for e in entries:
         by_status[e.get("status", "?")] = by_status.get(e.get("status", "?"), 0) + 1
     counts = " · ".join(f"{k} {v}" for k, v in sorted(by_status.items()))
+    # An accumulated queue spans packs; name them all, in the order they appear.
+    packs = list(dict.fromkeys(str(e.get("pack")) for e in entries if e.get("pack"))) or [queue.get("phase")]
+    title = ", ".join(str(p) for p in packs if p) or ""
     head = (f"<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-            f"<title>FORGE review — {_esc(queue.get('phase'))}</title><style>{_CSS}</style></head>"
+            f"<title>FORGE review — {_esc(title)}</title><style>{_CSS}</style></head>"
             f"<body data-run=\"{_esc(queue.get('run'))}\"><main>")
-    intro = (f"<h1>FORGE review — {_esc(queue.get('phase'))}</h1>"
+    intro = (f"<h1>FORGE review — {_esc(title)}</h1>"
              f"<div class=\"meta\">run {_esc(queue.get('run'))}"
              + (" · <strong>dry run</strong> — nothing was written; approve to write from the transformed text" if queue.get("dry_run") else "")
              + f" · {len(entries)} file(s): {_esc(counts) or 'none'}<br>source {_esc(queue.get('source_dir'))} · output {_esc(queue.get('output_dir'))}</div>")

@@ -27,7 +27,8 @@ KEEPALIVE_SECONDS = 15.0        # tests shrink this
 from forge.intent.vocabulary import DECISION_OPTIONS  # noqa: E402
 
 ARTIFACTS = [
-    ("migration-report.md", "Migration report"),
+    ("migration-summary.md", "Plan summary (every pack)"),
+    ("migration-report.md", "Migration report (latest run)"),
     ("migration-review.html", "Review page (static)"),
     ("manual-review-queue.json", "Review queue"),
     ("migration-context.json", "Context snapshot"),

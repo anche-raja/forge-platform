@@ -125,6 +125,22 @@ def test_approve_promotes_the_staged_file_and_marks_done(tmp_path, project, caps
     assert json.loads(log[0])["decision"] == "approve" and json.loads(log[0])["applied"] is True
 
 
+def test_an_approved_file_is_recorded_in_the_run_manifest(tmp_path, project):
+    """Landing takes only recorded files (#25), so an approval must be recorded.
+
+    Before this, the seven pom.xml files approved on AMS were in the output and
+    not in ``.forge-writes.json`` -- invisible to the next pack's overlap guard
+    and to anything that asks what FORGE wrote.
+    """
+    from forge.utils import run_manifest
+
+    cfg, out = _migrate(tmp_path, project)
+    assert OUT_FILE.as_posix() not in run_manifest.load(str(out)), "held, so not yet written"
+    path = _decide(out, {"file": str(OUT_FILE), "pack": "javax-to-jakarta", "decision": "approve"})
+    _apply(tmp_path, project, cfg, out, path)
+    assert run_manifest.load(str(out))[OUT_FILE.as_posix()] == "javax-to-jakarta"
+
+
 def test_approve_of_a_manual_review_entry_writes_from_the_transformed_text(tmp_path, project):
     cfg, out = _migrate(tmp_path, project, review_scores=(20,))   # everything scores MANUAL
     queue = json.loads((out / "manual-review-queue.json").read_text(encoding="utf-8"))

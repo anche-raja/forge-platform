@@ -214,6 +214,7 @@ def test_cli_prints_exactly_the_historical_lines(tmp_path, project, capsys):
         "[2/2] UserAction.java → DONE, score: 95",
         "Summary: 2 passed | 0 manual | 0 blocked | 6 Bedrock calls",
         f"Report: {out / 'migration-report.md'}",
+        f"Plan summary: {out / 'migration-summary.md'}",
     ]
 
 

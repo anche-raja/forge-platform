@@ -142,6 +142,11 @@ signal that the pack itself should change.
 
 **Broken output is caught file by file.** Every migrated Java file is parsed by the Java compiler before it is reviewed. A file the model damaged, with a stray brace for example, is sent back to the model with the compiler's error and fixed automatically.
 
+Damage an *earlier* run left behind is caught too. Before each pack that builds on the last one,
+FORGE parses every file it has already written. One that no longer parses is moved aside to
+`.forge-staging/.damaged/` (never deleted — even one you approved), the file reads as your original
+again, and `migration-summary.md` names the pack that wrote it so you can run that pack again.
+
 **First, FORGE builds the project.** After the last pack, the chat compiles your source with the
 migrated files laid over it, using the project's own build: each Maven reactor in dependency order,
 on the JDK your target Java version names. A compile catches what no reviewer can — a file a pack
@@ -168,6 +173,13 @@ because the work tree is never clean. Add `migrated/` to your `.gitignore`.
 
 FORGE's own working files — reports, the review queue — are never committed. The review queue holds
 copies of your source, so it must not end up in a commit.
+
+Only files a FORGE run wrote (recorded in `.forge-writes.json`) or a reviewer approved are
+committed. Anything else sitting in the output directory — a file copied in by hand, a leftover
+test fixture — is left where it is and listed in the landing result, so you can decide what it is.
+`.DS_Store` and similar operating-system files are never landed. A migrated file your repository's
+`.gitignore` excludes is left out and named too; all of this is decided before the branch is
+created, so a refused landing leaves your repository exactly as it was.
 
 ---
 
@@ -250,6 +262,17 @@ The settings most worth knowing:
 Everything FORGE produces lands in the output directory (`./migrated` by default): the migrated
 tree, a report of what happened and what it cost, and the review queue. Ask for *"the artifacts"* in
 chat and it lists them with download links.
+
+A plan runs several packs into that one directory, and nothing a pack writes is overwritten by the
+next one:
+
+| File | What it holds |
+|---|---|
+| `migration-summary.md` | One row per pack — files, passed, manual, blocked, held, still awaiting review, cost, acceptance — and the project build. Rewritten after every run, build and decision. |
+| `migration-report-<pack>.md` | That pack's own report, from its latest run |
+| `migration-acceptance-<pack>.json` | That pack's acceptance record |
+| `migration-report.md`, `migration-acceptance.json` | Whichever pack ran last |
+| `manual-review-queue.json`, `migration-review.html` | Every file still waiting on you, from every pack. Running a pack again replaces only that pack's entries. |
 
 ---
 

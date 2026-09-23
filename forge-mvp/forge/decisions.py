@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from forge.review_queue import entry_to_file_status
+from forge.review_queue import REVIEW_STATUSES, build_entry, entry_key, entry_to_file_status
 from forge.state import FileStatus
 from forge.utils.file_writer import discard_staged, promote_staged, write_files
 from forge.utils.telemetry import get_logger
@@ -66,8 +66,15 @@ def load_decisions(path: str) -> Tuple[str, List[Decision]]:
 
 
 def find_entry(queue: dict, decision: Decision) -> Optional[dict]:
-    """Match by relative path, then absolute, then a unique basename."""
+    """Match by relative path, then absolute, then a unique basename.
+
+    The queue accumulates across packs, so two packs can hold the same file;
+    a decision that names its pack (the review page and the chat always do)
+    only ever matches that pack's entry.
+    """
     entries = queue.get("entries", [])
+    if decision.pack:
+        entries = [e for e in entries if str(e.get("pack") or decision.pack) == decision.pack]
     for e in entries:
         if e.get("rel_path") == decision.file or e.get("file_path") == decision.file:
             return e
@@ -92,10 +99,16 @@ def apply_decisions(
     verify_build: Callable[[List[str]], dict],
     rerun: Callable[[dict, Decision], FileStatus],
     dry_run: bool = False,
+    resolved_out: Optional[Dict[tuple, FileStatus]] = None,
 ) -> Tuple[List[Outcome], List[FileStatus]]:
-    """Apply every decision. Returns the outcomes and the statuses still needing review."""
+    """Apply every decision. Returns the outcomes and the statuses still needing review.
+
+    ``resolved_out``, when given, is filled with ``{entry_key: status after}``
+    for every entry a decision touched -- what :func:`remaining_entries` needs
+    to rewrite the queue without rebuilding the entries nobody decided.
+    """
     outcomes: List[Outcome] = []
-    resolved: Dict[str, FileStatus] = {}   # rel_path -> status after the decision
+    resolved: Dict[tuple, FileStatus] = {} if resolved_out is None else resolved_out
 
     for d in decisions:
         entry = find_entry(queue, d)
@@ -103,6 +116,7 @@ def apply_decisions(
             outcomes.append(Outcome(d.file, d.decision, False, "?", "not in the review queue"))
             continue
         rel = entry["rel_path"]
+        key = entry_key(entry)
         fs = entry_to_file_status(entry)
         held = [p for p in (entry.get("held_paths") or []) if Path(p).is_file()]
 
@@ -134,7 +148,7 @@ def apply_decisions(
                     detail += f"; build FAIL (approval stands)"
                 elif result.get("verdict"):
                     detail += f"; build {result['verdict']}"
-            resolved[rel] = fs
+            resolved[key] = fs
             outcomes.append(Outcome(rel, d.decision, True, "DONE", detail))
 
         elif d.decision == "reject":
@@ -144,7 +158,7 @@ def apply_decisions(
             fs["held_paths"] = []
             fs["error"] = f"Rejected by reviewer: {d.note}" if d.note else "Rejected by reviewer"
             _stamp(fs, d)
-            resolved[rel] = fs
+            resolved[key] = fs
             outcomes.append(Outcome(rel, d.decision, True, "REJECTED", "discarded" + (f" — {d.note}" if d.note else "")))
 
         else:  # retry
@@ -153,28 +167,97 @@ def apply_decisions(
             if dry_run:
                 fs["status"] = entry.get("status", "?")
                 _stamp(fs, d)
-                resolved[rel] = fs
+                resolved[key] = fs
                 outcomes.append(Outcome(rel, d.decision, True, fs["status"], "dry run — would re-run with the note"))
                 continue
             new_fs = rerun(entry, d)
-            resolved[rel] = new_fs
+            resolved[key] = new_fs
             outcomes.append(Outcome(rel, d.decision, True, new_fs.get("status", "?"),
                                     f"re-ran with the note; now {new_fs.get('status')}"
                                     + (f", score {new_fs['review_score']}" if new_fs.get("review_score") is not None else "")))
 
         if not dry_run:
-            put_status(resolved[rel])
+            put_status(resolved[key])
 
     remaining: List[FileStatus] = []
     for entry in queue.get("entries", []):
-        rel = entry["rel_path"]
-        if rel in resolved:
-            fs = resolved[rel]
-            if fs.get("status") in ("HELD", "MANUAL_REVIEW", "BLOCKED"):
+        key = entry_key(entry)
+        if key in resolved:
+            fs = resolved[key]
+            if fs.get("status") in REVIEW_STATUSES:
                 remaining.append(fs)
         else:
             remaining.append(entry_to_file_status(entry))
     return outcomes, remaining
+
+
+def remaining_entries(queue: dict, resolved: Dict[tuple, FileStatus], *, source_dir: str,
+                      output_dir: str, run: str) -> List[dict]:
+    """The queue's entries after the decisions: undecided ones verbatim, re-held ones rebuilt.
+
+    Verbatim matters. An entry from a chained run points at a temporary copy
+    of the source that is gone by now, so rebuilding it would lose its
+    relative path and its original text. A retried unit that is back in the
+    queue has new content, so it gets a new ``run`` stamp and any card that
+    showed the old transform goes stale.
+    """
+    out: List[dict] = []
+    for entry in queue.get("entries", []):
+        key = entry_key(entry)
+        if key not in resolved:
+            out.append(entry)
+            continue
+        fs = resolved[key]
+        if fs.get("status") not in REVIEW_STATUSES:
+            continue
+        rebuilt = build_entry(fs, source_dir, output_dir)
+        rebuilt["rel_path"] = entry.get("rel_path") or rebuilt["rel_path"]
+        if rebuilt.get("original") is None:
+            rebuilt["original"], rebuilt["original_truncated"] = entry.get("original"), entry.get("original_truncated")
+        rebuilt["run"] = run
+        rebuilt["dry_run"] = bool(entry.get("dry_run"))
+        out.append(rebuilt)
+    return out
+
+
+def _json_objects(text: str):
+    """Every JSON object in a JSONL log, even two run together on one line.
+
+    The real AMS log starts with a test fixture glued to the first approval
+    (no newline between them); reading it line by line would drop that approval.
+    """
+    decoder = json.JSONDecoder()
+    i, n = 0, len(text)
+    while i < n:
+        while i < n and text[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            return
+        try:
+            obj, i = decoder.raw_decode(text, i)
+        except ValueError:
+            nxt = text.find("\n", i)
+            if nxt < 0:
+                return
+            i = nxt + 1
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def approved_files(output_dir: str) -> set:
+    """Relative paths a human approved, per ``decisions-applied.jsonl``. Never raises."""
+    try:
+        text = (Path(output_dir).expanduser() / APPLIED_LOG).read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    found = set()
+    for row in _json_objects(text):
+        if row.get("decision") == "approve" and row.get("applied"):
+            rel = str(row.get("file") or "").replace("\\", "/")
+            if rel and not rel.startswith("/") and ".." not in rel.split("/"):
+                found.add(rel)
+    return found
 
 
 def write_applied_log(output_dir: str, run: str, decisions: Sequence[Decision], outcomes: Sequence[Outcome]) -> Path:
@@ -198,7 +281,15 @@ def applied_section(outcomes: Sequence[Outcome]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def append_report_section(output_dir: str, text: str) -> None:
-    md = Path(output_dir) / "migration-report.md"
-    existing = md.read_text(encoding="utf-8").rstrip("\n") + "\n\n" if md.is_file() else ""
-    md.write_text(existing + text, encoding="utf-8")
+def append_report_section(output_dir: str, text: str, packs: Sequence[str] = ()) -> None:
+    """Append to the latest-run report, and to the per-pack report of each pack decided."""
+    from forge.utils.report import REPORT_NAME, pack_report_name
+
+    targets = [Path(output_dir) / REPORT_NAME]
+    for pack in dict.fromkeys(p for p in packs if p):
+        per_pack = Path(output_dir) / pack_report_name(pack)
+        if per_pack.is_file():
+            targets.append(per_pack)
+    for md in targets:
+        existing = md.read_text(encoding="utf-8").rstrip("\n") + "\n\n" if md.is_file() else ""
+        md.write_text(existing + text, encoding="utf-8")

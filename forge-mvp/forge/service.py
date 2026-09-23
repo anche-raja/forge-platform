@@ -465,7 +465,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     from forge.review_queue import QUEUE_NAME, write_queue, write_review_page
     from forge.state_store.dynamodb import DynamoDBStateManager
     from forge.utils.file_scanner import scan_java_files
-    from forge.utils.report import generate_report
+    from forge.utils.report import REPORT_NAME, clear_reverted, generate_report, pack_report_name, record_pack_run
     from forge.utils.telemetry import MetricsEmitter
 
     clear_context_cache()
@@ -480,8 +480,17 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # extractors, writer — works on real paths, and mirroring the source layout
     # means `write_output`'s relative paths still land correctly in output_dir.
     _chain_dir: Optional[tempfile.TemporaryDirectory] = None
+    damaged: List[dict] = []
     if chain and not resume:
+        from forge.verify import syntax
         from forge.verify.merged_tree import MergedTree
+
+        # Before the view is built: a file an earlier run damaged would
+        # otherwise be read as this pack's input and carried forward. A dry
+        # run only reports it, because a dry run changes nothing on disk.
+        if syntax.enabled(config) and Path(output_dir).is_dir():
+            damaged = check_output(source_dir, output_dir, config, repair=not dry_run, found_by=phase,
+                                   on_event=on_event)["damaged"]
         _chain_dir = tempfile.TemporaryDirectory(prefix="forge-chain-")
         merged = MergedTree(source_dir, output_dir, deleted=run_manifest.deleted_paths(output_dir))
         source_dir = str(merged.materialize(_chain_dir.name).resolve())
@@ -519,6 +528,10 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # Generated targets run after the real files so the descriptors they are
     # built from have already been migrated in this run.
     units = [(f, False) for f in files] + [(g, True) for g in generated]
+    if damaged:
+        chosen = {run_manifest._rel(source_dir, u) for u, _ in units}
+        for d in damaged:
+            d["selected"] = d["file"] in chosen
 
     # Before anything is spent: would this pack overwrite a different pack's
     # work? Packs read the original source, so it would replace rather than
@@ -582,17 +595,24 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
 
     # The review queue: what the pipeline could not settle — and, in a dry run,
     # everything it would have done, since a first trial exists to look at that.
-    queue = write_queue(str(output_root), all_statuses, source_dir, phase=phase, dry_run=dry_run)
+    # It accumulates across the packs of a plan: another pack's held files stay
+    # on the page until a human decides them (review_queue.merge_queue).
+    queue = write_queue(str(output_root), all_statuses, source_dir, phase=phase, dry_run=dry_run,
+                        accumulate=True)
     page_path: Optional[str] = None
     if queue["entries"]:
         page_path = str(write_review_page(str(output_root), queue))
         emit(on_event, {"type": "queue", "path": str(output_root / QUEUE_NAME), "page": page_path,
                         "count": len(queue["entries"])})
 
-    report_path = output_root / "migration-report.md"
-    generate_report(output_path=str(report_path), phase=phase, source_dir=source_dir, file_statuses=all_statuses,
-                    bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost, skipped=skipped,
-                    passed_over=passed_over)
+    # This pack's report, kept until the pack runs again, and the same text as
+    # the latest-run report every earlier reader knows by name.
+    pack_report_path = output_root / pack_report_name(phase)
+    generate_report(output_path=str(pack_report_path), phase=phase, source_dir=source_dir,
+                    file_statuses=all_statuses, bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost,
+                    skipped=skipped, passed_over=passed_over, damaged=damaged)
+    report_path = output_root / REPORT_NAME
+    report_path.write_text(pack_report_path.read_text(encoding="utf-8"), encoding="utf-8")
 
     deleted = [d for fs in all_statuses for d in (fs.get("deleted_files") or [])]
 
@@ -624,7 +644,17 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         "cost_usd": round(total_cost, 6),
         "passed_over": passed_over,
     }
-    emit(on_event, {"type": "summary", **totals, "report": str(report_path)})
+    if not dry_run and not cancelled:
+        # This pack has now run over the reverted view, so whatever it had to
+        # redo on a file an earlier check reverted is redone.
+        clear_reverted(str(output_root), phase)
+    record_pack_run(str(output_root), phase, {
+        "run": queue["run"], "dry_run": dry_run, "cancelled": cancelled, "totals": totals,
+        "acceptance": acceptance_outcome.report.verdict if acceptance_outcome and acceptance_outcome.report else None,
+        "report": pack_report_path.name,
+    })
+    summary_path = refresh_summary(str(output_root))
+    emit(on_event, {"type": "summary", **totals, "report": str(report_path), "plan_summary": str(summary_path)})
 
     # The chained copy has done its job; everything downstream reads output_dir.
     if _chain_dir is not None:
@@ -633,13 +663,87 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     return RunResult(
         phase=phase, source_dir=source_dir, output_dir=str(output_root), dry_run=dry_run,
         statuses=all_statuses, totals=totals, skipped=list(skipped), queue=queue,
-        paths={"report": str(report_path), "queue": str(output_root / QUEUE_NAME), "page": page_path,
+        paths={"report": str(report_path), "pack_report": str(pack_report_path), "summary": str(summary_path),
+               "queue": str(output_root / QUEUE_NAME), "page": page_path,
                "snapshot": snapshot_path,
                "acceptance": str(acceptance_outcome.path) if acceptance_outcome and acceptance_outcome.path else None,
                "testgen": testgen_result.paths["report"] if testgen_result else None,
                "generated_tests": testgen_result.paths["record"] if testgen_result else None},
         acceptance=acceptance_outcome, cancelled=cancelled, testgen=testgen_result,
     )
+
+
+# ─── damage an earlier run left behind ────────────────────────────────────────
+
+# Where a damaged output file is moved, under the staging tree: every walker
+# (merged view, landing, project build, test generation) already skips it.
+DAMAGED_DIR = ".damaged"
+
+
+def check_output(source_dir: str, output_dir: str, config: ForgeConfig, *, repair: bool = False,
+                 found_by: str = "", on_event: OnEvent = None) -> dict:
+    """Parse every Java and XML file FORGE wrote into ``output_dir``; revert the ones that fail.
+
+    Chaining reads the output as the next pack's input, and the per-file syntax
+    check only ever sees fresh model output — so a file an earlier run damaged
+    (``}ßßß`` after a brace, a doubled ``}``) was carried forward by every pack
+    after it, the content filter passing over it because nothing was left to
+    modernise. This checks only what ``.forge-writes.json`` says FORGE wrote,
+    never the rest of the source.
+
+    A file whose original does not parse either is reported and left where
+    it is: there is nothing better to revert to, and it is the source that
+    needs fixing.
+
+    With ``repair`` the damaged copy is *moved*, never deleted, to
+    ``.forge-staging/.damaged/<path>`` — a human-approved file included, and
+    flagged as such — and its manifest entry is dropped, so the merged view
+    falls back to the original source. Every file is named in a
+    ``damaged_output`` event and in ``migration-summary.md`` with the pack that
+    wrote it, which has to run again to redo its changes. Costs no model call.
+    """
+    from forge.decisions import approved_files
+    from forge.utils.file_writer import staging_root
+    from forge.utils.report import record_reverted
+    from forge.verify import syntax
+
+    out = Path(output_dir)
+    owners = run_manifest.load(output_dir) if out.is_dir() else {}
+    rels = sorted(r for r in owners if r.lower().endswith((".java", ".xml", ".xmi", ".tld")))
+    if not rels:
+        return {"verdict": syntax.PASS, "checked": 0, "damaged": [], "unparseable_in_source": []}
+    verdict, found = syntax.check_tree(str(out), rels, config)
+    if verdict == syntax.SKIPPED:
+        emit(on_event, {"type": "output_check_skipped",
+                        "reason": "no javac to parse the earlier output with; damage from earlier runs is not checked"})
+    as_source: Dict[str, List[str]] = {}
+    if found:
+        _, as_source = syntax.check_tree(str(Path(source_dir).resolve()), sorted(found), config)
+
+    approved = approved_files(output_dir)
+    damaged: List[dict] = []
+    for rel in sorted(found):
+        # Reverting to an original that is broken too would change nothing,
+        # so that file stays where it is -- and is still reported, because it
+        # still fails the build. (On AMS it was: a half-finished landing had
+        # copied the damaged output back over the source.)
+        source_broken = rel in as_source
+        entry = {"file": rel, "pack": owners.get(rel), "errors": list(found[rel][:5]),
+                 "approved": rel in approved, "found_by": found_by, "moved_to": None,
+                 "source_broken": source_broken, "dry_run": not repair}
+        if repair and not source_broken:
+            target = staging_root(output_dir) / DAMAGED_DIR / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            (out / rel).replace(target)
+            entry["moved_to"] = f"{target.relative_to(out.resolve()).as_posix()}"
+        damaged.append(entry)
+        emit(on_event, {"type": "damaged_output", **entry})
+    reverted = [d for d in damaged if d["moved_to"]]
+    if reverted:
+        run_manifest.forget(output_dir, [d["file"] for d in reverted])
+        record_reverted(output_dir, reverted)
+        refresh_summary(output_dir)
+    return {"verdict": verdict, "checked": len(rels), "damaged": damaged, "reverted": reverted}
 
 
 # ─── project build ────────────────────────────────────────────────────────────
@@ -679,6 +783,8 @@ def build_project(source_dir: str, output_dir: str, config: ForgeConfig, *, on_e
     out.mkdir(parents=True, exist_ok=True)
     (out / PROJECT_BUILD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
     _write_build_section(out / "migration-report.md", record)
+    # The build is about the whole plan, not the last pack: the summary carries it.
+    refresh_summary(str(out))
     emit(on_event, {"type": "build", **{k: record[k] for k in
                     ("outcome", "detail", "failed_step", "tail", "java_home", "seconds", "steps")}})
     return record
@@ -702,15 +808,33 @@ def build_status(source_dir: str, output_dir: str) -> dict:
     return {**record, "stale": record.get("fingerprint") != current}
 
 
+def refresh_summary(output_dir: str) -> Path:
+    """Regenerate ``migration-summary.md``: every pack's row, the queue now, the last build.
+
+    Called after every run, build and applied decision, so the plan-level view
+    never describes a state that has since moved. Costs no model call.
+    """
+    from forge.review_queue import load_queue
+    from forge.utils.report import write_summary
+
+    try:
+        queue = load_queue(output_dir)
+    except (OSError, ValueError):
+        queue = None
+    build = None
+    try:
+        record = json.loads((Path(output_dir) / PROJECT_BUILD_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        record = None
+    if isinstance(record, dict):
+        build = build_status(str(record["source_dir"]), output_dir) if record.get("source_dir") else record
+    return write_summary(output_dir, queue=queue, build=build)
+
+
 def _write_build_section(report: Path, record: dict) -> None:
-    lines = [_BUILD_SECTION, "",
-             f"- **Result:** {record['outcome'].upper()} — {record['detail']}",
-             f"- **JDK:** {record.get('java_home') or '(default)'}",
-             f"- **Built at:** {record['built_at']} ({record.get('seconds', 0)}s)", ""]
-    lines += [f"- {s}" for s in record.get("steps") or []]
-    if record.get("tail"):
-        lines += ["", "```", *record["tail"], "```"]
-    section = "\n".join(lines) + "\n"
+    from forge.utils.report import build_section
+
+    section = build_section(record)
     text = report.read_text(encoding="utf-8") if report.is_file() else "# FORGE Migration Report\n"
     if _BUILD_SECTION in text:
         head, rest = text.split(_BUILD_SECTION, 1)
@@ -736,9 +860,20 @@ def acceptance(phase: str, source_dir: str, output_dir: str, config: ForgeConfig
     if dry_run:
         return AcceptanceOutcome(None, None, "skipped — a dry run writes nothing, so there is no post-migration tree to check", 0)
 
+    from forge.utils.report import pack_acceptance_name, pack_report_name, update_pack_row
+
     decisions = config.get("decisions") or {}
     report = _run([spec], source_dir, output_dir, decisions, deleted=deleted, run_build=run_build)
     path = write_acceptance(report, output_dir)
+    # migration-acceptance.json is the latest check; this pack's copy survives the next pack's.
+    out = Path(output_dir)
+    (out / pack_acceptance_name(phase)).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    per_pack = out / pack_report_name(phase)
+    if per_pack.is_file():
+        per_pack.write_text(per_pack.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + report.to_markdown(),
+                            encoding="utf-8")
+    update_pack_row(output_dir, phase, acceptance=report.verdict)
+    refresh_summary(output_dir)
     return AcceptanceOutcome(report, path, None, 0 if report.verdict == "PASS" else 1)
 
 
@@ -872,8 +1007,8 @@ def apply(decisions: Sequence[Any], source_dir: str, output_dir: str, config: Fo
     are unusable — the caller decides how to report that.
     """
     from forge.decisions import (Decision, append_report_section, applied_section, apply_decisions,
-                                 decisions_from, write_applied_log)
-    from forge.review_queue import load_queue, write_queue, write_review_page
+                                 decisions_from, remaining_entries, write_applied_log)
+    from forge.review_queue import REVIEW_STATUSES, load_queue, new_run_stamp, save_queue, write_review_page
     from forge.state_store.dynamodb import DynamoDBStateManager
     from forge.utils.telemetry import MetricsEmitter
     from forge.verify.build_verifier import BuildVerifier
@@ -916,9 +1051,20 @@ def apply(decisions: Sequence[Any], source_dir: str, output_dir: str, config: Fo
     def verify_build(written):
         return verifier.verify({"dry_run": False, "output_dir": output_dir, "current_file": {"written_paths": written}})
 
+    def put_status(fs) -> None:
+        state_manager.put_file_status(fs)
+        # An approved or retried-to-DONE unit is now in the output tree, so it
+        # is recorded like any run's write: landing takes only recorded files,
+        # and the next pack's overlap guard needs to know who owns it.
+        if fs.get("status") == "DONE" and fs.get("written_paths"):
+            run_manifest.record(output_dir, fs.get("phase") or phase or "java21", fs["written_paths"],
+                                deleted=fs.get("deleted_files") or ())
+
+    resolved: Dict[tuple, Any] = {}
     outcomes, remaining = apply_decisions(
         decided, queue, source_dir=source_dir, output_dir=output_dir,
-        put_status=state_manager.put_file_status, verify_build=verify_build, rerun=rerun, dry_run=dry_run,
+        put_status=put_status, verify_build=verify_build, rerun=rerun, dry_run=dry_run,
+        resolved_out=resolved,
     )
     for o in outcomes:
         emit(on_event, {"type": "apply_outcome", "file": o.file, "decision": o.decision, "applied": o.applied,
@@ -927,11 +1073,20 @@ def apply(decisions: Sequence[Any], source_dir: str, output_dir: str, config: Fo
     queue_after = None
     log_path = None
     if not dry_run:
-        queue_after = write_queue(output_dir, remaining, source_dir, phase=queue.get("phase", ""), run_id=queue.get("run"))
+        # Undecided entries are kept verbatim -- other packs' included. An entry
+        # a retry put back in the queue has new content, so it and the queue get
+        # a new stamp; approving or rejecting only removes, and leaves both alone
+        # so every other card on screen stays valid.
+        reheld = any(fs.get("status") in REVIEW_STATUSES for fs in resolved.values())
+        run_after = new_run_stamp(queue) if reheld else queue.get("run")
+        entries = remaining_entries(queue, resolved, source_dir=source_dir, output_dir=output_dir, run=run_after)
+        queue_after = save_queue(output_dir, {**queue, "run": run_after, "entries": entries})
         if queue_after["entries"]:
             write_review_page(output_dir, queue_after)
-        append_report_section(output_dir, applied_section(outcomes))
+        append_report_section(output_dir, applied_section(outcomes),
+                              packs=[str(fs.get("phase") or "") for fs in resolved.values()])
         log_path = write_applied_log(output_dir, run or queue.get("run", ""), decided, outcomes)
+        refresh_summary(output_dir)
         emit(on_event, {"type": "apply_done", "remaining": len(queue_after["entries"]), "log": str(log_path)})
     return ApplyResult(outcomes, remaining, queue_after, log_path, all(o.applied for o in outcomes))
 

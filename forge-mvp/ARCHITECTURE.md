@@ -214,11 +214,13 @@ Per-file audit fields persisted: `review_score`, `review_verdict`, `retry_count`
 | `forge-migration-state-dev` (DynamoDB) | Per-file final status / audit trail | PK `file_path`; GSIs `status-index`, `phase-status-index` |
 | `forge-langgraph-checkpoints-dev` (DynamoDB) | LangGraph checkpointer (resumable runs) | PK `thread_id` + SK `checkpoint_id` |
 | `./migrated/` (local FS) | Transformed output, package paths preserved | — |
-| `manual-review-queue.json` (local) | v2: every unit a human must look at — original, transformed, verdicts, risk reasons; written in dry-run too | `forge/review_queue.py` |
-| `migration-review.html` (local) | Static review page: side-by-side + diff + decision widget → `decisions.json` | `forge/review_queue.py` |
+| `manual-review-queue.json` (local) | v2: every unit a human must look at — original, transformed, verdicts, risk reasons; written in dry-run too. Accumulates across the packs of a plan: keyed by pack + `rel_path`, each entry stamped with the `run` that produced it; a newer run of a pack replaces only that pack's entries, and a dry run never displaces a real held one | `forge/review_queue.py` |
+| `migration-review.html` (local) | Static review page over the whole accumulated queue: side-by-side + diff + decision widget → `decisions.json` | `forge/review_queue.py` |
 | `./migrated/.forge-staging/` (local) | Held units, in migrated layout, until approved | `forge/utils/file_writer.py` |
 | `decisions-applied.jsonl`, `pack-feedback.md` (local) | Decision audit log; notes grouped by pack and rule | `forge/decisions.py`, `forge/feedback_report.py` |
-| `migration-report.md` (local) | Run summary | written by `forge/utils/report.py` |
+| `migration-report-<pack>.md`, `migration-acceptance-<pack>.json` (local) | One pack's latest run and acceptance record, kept until that pack runs again | `forge/utils/report.py`, `forge/service.py` |
+| `migration-report.md`, `migration-acceptance.json` (local) | The latest run, whichever pack it was (kept for compatibility) | `forge/utils/report.py` |
+| `migration-summary.md` (+ `migration-summary.json`) (local) | Plan-level summary: one row per pack (files, passed, manual, blocked, held, awaiting review now, cost, acceptance) and the project build; regenerated after every run, build and applied decision | `forge/utils/report.py` |
 
 Tables: create with [infrastructure/create_dynamodb.py](infrastructure/create_dynamodb.py) (dev)
 or `forge-terraform/modules/foundation` (prod).
@@ -792,11 +794,14 @@ without being shown what matched.
 
 ### Review cards carry a run stamp
 
-Every run overwrites the one `manual-review-queue.json`, transcripts keep cards indefinitely, and
-`decisions.find_entry` falls back to a *unique basename* match. Without the stamp, scrolling up and
-approving an old card for `src/Foo.java` could apply a different pack's transform to a different
-file. `apply_decisions` refuses when `queue["run"]` no longer matches, and drops any decision whose
-pack disagrees with the entry's.
+The one `manual-review-queue.json` accumulates across packs, transcripts keep cards indefinitely,
+and `decisions.find_entry` falls back to a *unique basename* match. Without the stamp, scrolling up
+and approving an old card for `src/Foo.java` could apply a different pack's transform to a different
+file. Each entry carries the `run` that produced it and each card carries its entry's stamp, so an
+earlier pack's card stays valid while later packs run. `apply_review_decisions` accepts a decision
+when its stamp is the queue's current `run` (the leader's `list_held_files` answer) or its entry's
+own; it refuses a card whose entry was replaced since (the pack re-ran, a retry re-held it), and
+drops any decision whose pack disagrees with the entry's.
 
 ### Chaining — how a ten-pack plan runs unattended
 
@@ -816,6 +821,22 @@ The leader turns it on from the manifest rather than from `convo.completed`, so 
 against a directory an earlier session wrote chains too. The run emits `chained`, since a run that
 silently changed what it read would be impossible to debug. The manifest also records files a pack
 *retired*, so a descriptor an earlier pack replaced is not handed to the next one.
+
+**Damage an earlier run wrote is re-checked before it is read.** The `syntax_check` node only sees
+fresh model output, and a pack's content filter passes over a file with nothing left to modernise —
+so on AMS three files a java8-to-java21 run had damaged (`}ßßß`, a doubled `}`) were carried by
+every later pack into the project build. With `syntax_check: true`, a chained run first calls
+`service.check_output`: one javac over every Java file `.forge-writes.json` says FORGE wrote (a
+quarter of a second for AMS's 297; `syntax.check_tree`), XML for well-formedness. A copy that does
+not parse is **moved** — never deleted, a human-approved one included — to
+`.forge-staging/.damaged/<path>`, and its manifest entry dropped, so the merged view reads the
+original again and this pack re-migrates it if it selects it. Each file is a `damaged_output` event
+(with `approved: true` when a human had signed it off), a section of the run's report, and a row in
+`migration-summary.md` naming the pack that wrote it, which has to run again to redo its changes —
+also when this pack does not select the file at all. The row stays until that pack runs. A file
+whose original does not parse either is reported and left in place: there is nothing better to
+revert to. A dry run reports and moves nothing. Errors javac gives for a newer language feature
+than its JDK ("preview feature", "not supported in -source") are the toolchain, not damage.
 
 ### Conversation state
 

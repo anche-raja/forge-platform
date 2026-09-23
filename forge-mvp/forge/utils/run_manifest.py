@@ -81,6 +81,24 @@ def record(output_dir: str, phase: str, written: Sequence[str],
         pass
 
 
+def forget(output_dir: str, rels: Sequence[str]) -> None:
+    """Drop ``rels`` from the writes: the output no longer holds FORGE's copy of them.
+
+    Used when a damaged file is moved out of the output tree, so the chained
+    view falls back to the original and no pack is still recorded as its owner.
+    """
+    manifest = _read(output_dir)
+    gone = [r for r in rels if r in manifest["writes"]]
+    if not gone:
+        return
+    for rel in gone:
+        del manifest["writes"][rel]
+    try:
+        _path(output_dir).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _rel(output_dir: str, path: str) -> str:
     root = Path(output_dir).resolve()
     p = Path(path)

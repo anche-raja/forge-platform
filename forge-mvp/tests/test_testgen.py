@@ -502,6 +502,7 @@ def test_the_cli_prints_the_test_generation_lines(tmp_path, project, capsys):
         f"Test report: {out / 'test-generation-report.md'}",
         "Summary: 1 passed | 0 manual | 0 blocked | 3 Bedrock calls",
         f"Report: {out / 'migration-report.md'}",
+        f"Plan summary: {out / 'migration-summary.md'}",
     ]
 
 
