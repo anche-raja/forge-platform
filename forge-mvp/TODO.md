@@ -45,7 +45,9 @@ Actionable backlog for the next development cycle. Context for each item lives i
       run exists anywhere. Run one AMS module end to end and publish the numbers — pass / manual /
       blocked counts, the score distribution against the threshold of 80, real cost per file, and
       how long human review actually took. Publish them **including if they are bad**; a pilot
-      written up only on success is not a measurement. At ~$0.024/file this is a $2-3 experiment.
+      written up only on success is not a measurement. At Sonnet 4.5's measured ~$0.024/file this
+      was a $2-3 experiment; at the $0.07/file the leader plans with on Opus 4.8, budget about three
+      times that.
       Two signals say do it before committing to a full run: files have scored *exactly* 80 against
       a `pass_threshold` of 80 three times, and `java8-to-java21` failed to return valid JSON twice
       out of two attempts on Sonnet 4.5.
@@ -67,9 +69,11 @@ Actionable backlog for the next development cycle. Context for each item lives i
 
 ## P3 — Cost & config hardening
 
-- [ ] **Add `--estimate-cost`** to [migrate.py](migrate.py). It already counts `bedrock_calls`, and
-      the per-unit cost is now measured rather than assumed: **$0.0080 fixed + $0.0000066/byte** on
-      Sonnet 4.5, calibrated on two real runs. That puts all ten packs across AMS at ~$45.
+- [ ] **Add `--estimate-cost`** to [migrate.py](migrate.py). It already counts `bedrock_calls`. The
+      per-unit calibration, **$0.0080 fixed + $0.0000066/byte** from two real runs, was measured on
+      Sonnet 4.5 and put all ten packs across AMS (1,480 units then) at ~$45. The transform model
+      has been Opus 4.8 since `ae398f7`, so recalibrate on it before this flag reports a number;
+      until then the chat plans at a flat `leader.unit_cost_usd` of $0.07/unit (GUARDRAILS.md §8).
 - [ ] **Cheaper guardrail checks.** `guardrails_pre` / `guardrails_post` use the transform model for
       their LLM pass. Switching those two to Haiku 4.5 cuts per-file cost with little quality loss
       on a yes/no safety check.

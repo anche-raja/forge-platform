@@ -167,7 +167,7 @@ forge-platform/
 │   ├── ARCHITECTURE.md    Engine architecture, §12 packs/extractors, §13 web UI, §14 test generation
 │   ├── GUARDRAILS.md      The six checks every file passes, and what each one costs
 │   ├── INTENT.md          Intent → pack selection: the two boundaries and the eight rules
-│   └── tests/             721 tests, fully mocked — no AWS needed
+│   └── tests/             Fully mocked — no AWS needed
 │
 └── prompts/               Runtime prompts, and the contract they are written against
     ├── README.md
@@ -337,7 +337,7 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 ## Status
 
 - ✅ **Phase 0 infra** — Terraform reviewed end to end (IAM covers inference profiles, guardrail tuned for source code, Phase 6 modules opt-in). Deployed to whichever account you apply it to; `generate-agents-yaml.sh` reads the outputs
-- ✅ **Phase 0 pipeline** — complete, 721 tests passing (`cd forge-mvp && pytest`, no AWS required)
+- ✅ **Phase 0 pipeline** — complete, full test suite passing (`cd forge-mvp && pytest`, no AWS required)
 - ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
 - ✅ **Phases** — `java21` built in; 10 runnable packs on top (4 without their declared context)

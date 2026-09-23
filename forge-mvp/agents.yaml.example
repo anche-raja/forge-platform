@@ -110,9 +110,10 @@ leader:
   max_steps: 8
   max_tokens: 2048
   confirm_above_usd: 1.0
-  # The documented average cost of one migrated file (GUARDRAILS.md §8): three
-  # model calls, about $0.07. Estimates only — what a run actually cost comes
-  # from `estimated_cost_usd`, accrued per real call.
+  # What the chat plans with per migrated file: three model calls with Opus 4.8
+  # transforming, about $0.07 (GUARDRAILS.md §8). A planning figure, not a
+  # measurement — what a run actually cost comes from `estimated_cost_usd`,
+  # accrued per real call.
   unit_cost_usd: 0.07
   history_messages: 40
 

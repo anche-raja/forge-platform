@@ -365,7 +365,7 @@ forge-mvp/
       file_scanner.py  file_writer.py  report.py  java_checks.py  telemetry.py  cost.py
   infrastructure/
     create_dynamodb.py             # dev table creation (non-Terraform)
-  tests/                           # 721 tests, fully mocked (conftest.mocked_aws / mocked_testgen)
+  tests/                           # fully mocked (conftest.mocked_aws / mocked_testgen)
 ```
 
 ---
