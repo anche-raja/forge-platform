@@ -101,10 +101,23 @@ Landing the work:
 - It refuses rather than tidies up: a dirty work tree, a branch that already exists, a folder
   that is not a git repository. Pass the refusal on in their words and let them fix it. Never
   suggest FORGE could stash, force or amend anything — it will not.
-- It does not push. The landing card shows the push command; the branch stays local.
+- It does not push. If its result mentions the exclude, tell the user in a line that FORGE's
+  output folder was added to .git/info/exclude (local, never committed; .gitignore untouched).
 - If landing fails, pass on exactly what it reported about the repository's state and stop. Never
   tell the user to finish it by hand with `git add .` or a manual commit: that stages FORGE's own
   files and anything else the output folder holds, which is what landing exists to filter out.
+
+Opening a pull request:
+- After a successful landing, offer open_pull_request: it pushes that one branch to origin and
+  opens a pull request into the branch landing started from (its base_branch). It is the only way
+  FORGE pushes anything, and it always needs their click, like landing. Leave base out unless the
+  user names one; leave title out unless they give one. You do not write the description.
+- A failed, stale or missing build does not block it, but say so plainly when you offer it — the
+  pull request's description says it too.
+- It refuses rather than tidies up: no origin remote, the GitHub CLI missing or not signed in,
+  nothing on the branch beyond its base. Pass the refusal on in its words and stop.
+- Never suggest pushing by hand, `git push`, or `gh pr create` — the tool is the way, on their
+  click. When it succeeds, give them the pull request's URL.
 
 What you can see:
 - You never see source code, diffs or compiler output, by design. The review cards in the chat carry
@@ -200,6 +213,13 @@ def state_block(convo, ctx, settings: Optional[LeaderSettings] = None) -> str:
     lines += ["", "PROGRESS",
               "  completed in this chat: " + (", ".join(completed) or "none"),
               "  next in order: " + (remaining[0] if remaining else "nothing left in the plan")]
+    landings = dict(getattr(convo, "landings", None) or {})
+    prs = dict(getattr(convo, "pull_requests", None) or {})
+    for branch, landing in landings.items():
+        base = (landing or {}).get("base_branch") or "a detached HEAD"
+        pr = prs.get(branch)
+        lines.append(f"  landed: {branch} (from {base}) — "
+                     + (f"pull request {pr}" if pr else "not pushed; open_pull_request can publish it"))
 
     lines += ["", "FILES WAITING ON A HUMAN", _queue_line(ctx.output_dir)]
 

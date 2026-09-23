@@ -1,4 +1,4 @@
-"""The closed catalogue: the only thirteen things the leader can do.
+"""The closed catalogue: the only fourteen things the leader can do.
 
 Everything here is a wrapper over :mod:`forge.service`. No behaviour lives in
 this file — "add behaviour to the service, never to a route or a CLI branch"
@@ -23,7 +23,7 @@ worth spelling out is a run that succeeded and whose *cards* then failed to
 render: the run result is still returned. Paid work is never discarded by a
 rendering bug.
 
-Two of the thirteen are new in increment 2 and invert an assumption the first one
+Two of the fourteen are new in increment 2 and invert an assumption the first one
 made. A chat no longer arrives with a project attached: the owner's objection to
 the wizard was *"I requested to change with prompt instead of this project
 setup"*, so ``set_project`` exists and every other tool refuses with
@@ -33,6 +33,12 @@ repository instead of asking which folder the user means. And ``land_on_branch``
 is the only tool that writes outside ``output_dir``; like
 ``apply_review_decisions`` it is gated whatever it costs, because the click is
 the signature and no estimate can stand in for one.
+
+``open_pull_request`` is the one step further out: it pushes the branch this
+chat landed to ``origin`` and opens a pull request with ``gh``. It is the only
+way FORGE pushes anything, and it is gated exactly like ``land_on_branch`` —
+always a click, $0.00 — because what it authorises is publishing someone's code
+to a place other people read (:mod:`forge.leader.pull_request`).
 
 The observations are built by :mod:`forge.leader.cards`, which is the only
 place a queue entry, a guardrail finding or an acceptance result becomes
@@ -282,7 +288,8 @@ TOOL_DEFS: List[dict] = [
             "them. This is the only thing FORGE does that writes outside the output directory, so "
             "it ALWAYS needs the user to press Confirm. It refuses rather than repairs: the work "
             "tree must be clean and the branch must not exist, and it never stashes, never forces "
-            "and never pushes. Propose it once a pack has run and the held files are settled."
+            "and never pushes (open_pull_request does that, on its own click). Propose it once a "
+            "pack has run and the held files are settled."
         ),
         "parameters": {
             "type": "object",
@@ -297,6 +304,35 @@ TOOL_DEFS: List[dict] = [
                 },
             },
             "required": ["branch"],
+        },
+    },
+    {
+        "name": "open_pull_request",
+        "description": (
+            "Push the branch land_on_branch created in this chat to the repository's origin remote "
+            "and open a GitHub pull request for it, into the branch landing started from. This is "
+            "the only way FORGE pushes anything, so it ALWAYS needs the user to press Confirm. It "
+            "refuses rather than repairs: no origin remote, the GitHub CLI missing or not signed in, "
+            "or nothing on the branch beyond its base. It never forces and pushes only that branch. "
+            "The description is written by FORGE from its own records; you do not write it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string",
+                    "description": "The landed branch. Leave it out for the one this chat landed last.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Pull request title. Leave it out for one naming the packs.",
+                },
+                "base": {
+                    "type": "string",
+                    "description": "The branch to merge into. Leave it out for the branch landing "
+                                   "started from — only pass one if the user names it.",
+                },
+            },
         },
     },
 ]
@@ -570,6 +606,25 @@ class Toolbox:
                 build = {"outcome": "not_run", "stale": False}
             return self._park(name, args, 0.0, title, units=count, build=build)
 
+        if name == "open_pull_request":
+            # land_on_branch's reasoning, one step further out: this publishes
+            # the user's code. $0.00, and confirmed anyway.
+            branch, base = self._pr_target(args)
+            if not branch:
+                title = "Push the landed branch to origin and open a pull request"
+            else:
+                title = f"Push branch '{branch}' to origin and open a PR into '{base or '?'}'"
+            from forge import service
+            try:
+                build = service.build_status(self.ctx.source_dir, self.ctx.output_dir)
+            except Exception:  # noqa: BLE001 — a missing verdict is "not run", never a failed turn
+                build = {"outcome": "not_run", "stale": False}
+            try:
+                preview = self._pr_body(branch, base, build) if branch else None
+            except Exception:  # noqa: BLE001 — a preview is not worth a failed turn
+                preview = None
+            return self._park(name, args, 0.0, title, build=build, preview=preview)
+
         if name not in _SPENDING_TOOLS:
             return None
         ceiling = float(self.settings.confirm_above_usd or 0.0)
@@ -591,10 +646,10 @@ class Toolbox:
 
     def _park(self, name: str, args: dict, est: float, title: str, *,
               units: Optional[int] = None, decisions: Optional[list] = None,
-              build: Optional[dict] = None) -> ToolOutcome:
+              build: Optional[dict] = None, preview: Optional[str] = None) -> ToolOutcome:
         pending_id = self.convo.add_pending(name, args, est, title)
         card = cards.confirm_card(pending_id, name, title, args, est, units=units, decisions=decisions,
-                                  build=build)
+                                  build=build, preview=preview)
         observation = {
             "status": "needs_confirmation", "pending_id": pending_id, "tool": name,
             "est_usd": round(float(est), 4), "title": title,
@@ -1324,6 +1379,69 @@ class Toolbox:
                            f"({result['commit']}) — not pushed")
 
 
+    # ── the pull request ─────────────────────────────────────────────────────
+
+    def _pr_target(self, args: dict):
+        """``(branch, base)``: the named branch or the last one landed here, and its base."""
+        branch = str(args.get("branch") or "").strip() or str(self.convo.last_landed or "")
+        landing = (self.convo.landings or {}).get(branch) or {}
+        base = str(args.get("base") or "").strip() or str(landing.get("base_branch") or "")
+        return branch, base
+
+    def _pr_body(self, branch: str, base: str, build: dict) -> str:
+        from forge.leader import pull_request
+
+        landing = (self.convo.landings or {}).get(branch) or {}
+        return pull_request.pr_body(
+            branch=branch, base=base, commit=str(landing.get("commit") or ""),
+            packs=[str(p) for p in (self.convo.completed or [])],
+            rows=pull_request.pack_rows(self.ctx.output_dir),
+            awaiting=pull_request.awaiting_review(self.ctx.output_dir), build=build)
+
+    def _open_pull_request(self, args: dict, tool_id: str) -> ToolOutcome:
+        """Push the landed branch and open a PR. Confirmed, refusing, and never forced.
+
+        The body is FORGE's, built from its records by :func:`pull_request.pr_body`
+        — the leader cannot write it, and it carries no source, diff or compiler
+        output. The observation is the URL, the branch and the base: nothing else
+        comes back from a place other people read.
+        """
+        from forge import service
+        from forge.leader import pull_request
+
+        branch, base = self._pr_target(args)
+        try:
+            build = service.build_status(self.ctx.source_dir, self.ctx.output_dir)
+        except Exception:  # noqa: BLE001 — no record is "not run", which the body says plainly
+            build = {"outcome": "not_run", "stale": False}
+        title = str(args.get("title") or "").strip() or pull_request.default_title(self.convo.completed or [])
+        body = self._pr_body(branch, base, build) if branch else ""
+        result = pull_request.open_pull_request(
+            self.ctx.source_dir, branch, base, title=title, body=body,
+            landed=list((self.convo.landings or {}).keys()), runner=PR_RUNNER)
+        if not result.get("ok"):
+            observation = {"error": cards.cap(result.get("error"), LANDING_ERROR_CAP)
+                           or "the pull request was refused"}
+            state = cards.cap(result.get("state"), LANDING_ERROR_CAP)
+            if state:
+                observation["state"] = state
+            return ToolOutcome(False, observation, [], observation["error"])
+
+        with self.convo.lock:
+            self.convo.pull_requests[result["branch"]] = result["url"]
+        observation = {"url": result["url"], "branch": result["branch"], "base": result["base"]}
+        card = cards.pull_request_card({**result, "title": title, "build": build})
+        said = "already open" if result.get("existing") else "opened"
+        return ToolOutcome(True, observation, [card],
+                           f"pull request {said}: {result['url']} ({result['branch']} -> {result['base']})")
+
+
+# The runner open_pull_request shells out through: None is the real git and gh.
+# Module state, read at call time, so a test can put a fake `git`/`gh` in
+# without the tool growing a parameter a model could see.
+PR_RUNNER: Optional[Callable] = None
+
+
 _HANDLERS: Dict[str, Callable[[Toolbox, dict, str], ToolOutcome]] = {
     "set_project": Toolbox._set_project,
     "profile_project": Toolbox._profile_project,
@@ -1338,6 +1456,7 @@ _HANDLERS: Dict[str, Callable[[Toolbox, dict, str], ToolOutcome]] = {
     "list_artifacts": Toolbox._list_artifacts,
     "build_project": Toolbox._build_project,
     "land_on_branch": Toolbox._land_on_branch,
+    "open_pull_request": Toolbox._open_pull_request,
 }
 
 assert set(_HANDLERS) == set(TOOL_NAMES), "every catalogue entry needs a handler"
@@ -1376,6 +1495,8 @@ def tool_title(name: str, args: Any) -> str:
         return "List what the run wrote"
     if name == "land_on_branch":
         return f"Land the migration on branch {args.get('branch') or '?'}"
+    if name == "open_pull_request":
+        return f"Open a pull request for {args.get('branch') or 'the landed branch'}"
     return name
 
 

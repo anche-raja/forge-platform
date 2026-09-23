@@ -49,8 +49,12 @@ FORGE runs the next pack. It **builds on what the last pack produced**, so the J
 
 > **you** — put it on a branch
 
-> **FORGE** — Landed 372 files on `forge/jakarta-migration`, commit `a1b2c3d`. Nothing was pushed —
-> run `git push -u origin forge/jakarta-migration` when you're ready.
+> **FORGE** — Landed 372 files on `forge/jakarta-migration` (from `h2-native`), commit `a1b2c3d`.
+> Nothing was pushed. Want a pull request? *[confirmation card]*
+
+> **you** — *[clicks Confirm]*
+
+> **FORGE** — Pull request opened: https://github.com/you/ams/pull/42
 
 ---
 
@@ -158,7 +162,19 @@ yet**, or **stale** — the migrated files changed after the build, so ask for a
 build does not block landing; the decision is yours.
 
 Say *"put it on a branch"*. FORGE creates the branch, copies the migrated files in, and makes one
-commit. It **never pushes** — it hands you the push command.
+commit. Landing itself **never pushes**.
+
+**Opening a pull request.** After a landing, FORGE offers to open a pull request. It pushes **only
+that branch**, only when you press **Confirm**: `git push -u origin <branch>` (never forced), then
+`gh pr create` into the branch you were on when you landed (`h2-native` on AMS) — say another base
+if you want one. This is the only way FORGE ever pushes anything. The description is written by
+FORGE from its own records — the packs that ran, per-pack totals, how many files still wait on a
+human, and the project build verdict, said plainly when it **failed**, was **not run**, or is
+**stale** — and never contains your source, a diff or compiler output. You see it on the
+confirmation card before you click. It refuses, with nothing pushed, when the repository has no
+`origin` remote, when the GitHub CLI (`gh`) is missing or not signed in (`gh auth login`), or when
+the branch has nothing beyond its base; if a pull request for the branch is already open, you get
+its link.
 
 It refuses rather than forcing its way past a problem:
 

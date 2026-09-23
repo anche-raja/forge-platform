@@ -501,7 +501,9 @@ check, records the branch it started from as `base_branch`, and never lands or d
 under the output directory. Intent still costs one model call and discovery is still
 free; the difference is that `resolve_intent` is a tool the leader chooses rather than a step the
 user clicks. `land_on_branch` is the one thing in FORGE that writes into the user's own repository:
-a new branch, one commit, never a push, and always a click.
+a new branch, one commit, never a push, and always a click. `open_pull_request` is the only thing
+that pushes: the branch this chat landed, to `origin`, never forced, then `gh pr create` into the
+landing's `base_branch` — and it is always a click too (`forge/leader/pull_request.py`).
 
 The routes above all remain — the CLI and the tests use them and they are the service layer's HTTP
 face — but the browser now calls only `/api/chat`, `/api/runs/{id}/events`, `/api/review` (to ask
@@ -695,8 +697,9 @@ Four locks make that hold:
 2. **`forge/graph.py` is untouched.** Unit order, `route_reviewer`, `max_retries` and `must_hold`
    are the same code as before. The leader chooses *which run*, never what happens inside one.
 3. **Spend and mutation are a click.** Anything over `leader.confirm_above_usd` parks as a card;
-   `apply_review_decisions` and `land_on_branch` are confirmed whatever the estimate, because an
-   approval is a human's signature on someone else's code.
+   `apply_review_decisions`, `land_on_branch` and `open_pull_request` are confirmed whatever the
+   estimate, because an approval is a human's signature on someone else's code — and publishing it
+   is the same signature.
 4. **`risk_ceiling` never comes from a prompt.** The toolbox overwrites it with the config value
    after every `resolve_intent` — an intent decision carries provenance `prompt`, which outranks
    config, so a sentence containing "don't bother reviewing" could otherwise have yielded
@@ -742,11 +745,19 @@ History is LangChain messages and is never the raw chunk: a `tool_use` block wit
 raises `KeyError` on replay. Every `toolUse` gets a matching `toolResult`, including invalid ones,
 because Bedrock rejects a `toolResult` with no `toolUse`.
 
-### The thirteen tools
+### The fourteen tools
 
 `set_project`, `profile_project`, `resolve_intent`, `estimate_pack`, `run_pack`,
 `check_acceptance`, `list_held_files`, `apply_review_decisions`, `generate_tests`, `pack_feedback`,
-`list_artifacts`, `build_project`, `land_on_branch`.
+`list_artifacts`, `build_project`, `land_on_branch`, `open_pull_request`.
+
+FORGE pushes only through `open_pull_request`, and only on the user's click. It refuses, with no
+side effects, when this chat landed nothing (or the branch is gone), there is no `origin`, `gh` is
+missing or not authenticated, or the branch has no commits beyond its base; it pushes exactly
+`git push -u origin <branch>` and opens the PR with `gh pr create --body-file`. The body is built
+by code from `convo.completed`, `migration-summary.json`, the review queue count and
+`service.build_status` — never source, diffs or compiler output — and the observation is the URL,
+the branch and the base. An already-open PR for the branch is returned, not an error.
 
 `build_project` compiles source + output with the project's own build
 ([forge/verify/project_build.py](forge/verify/project_build.py)): `project_build.command` if set,

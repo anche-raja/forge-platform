@@ -860,6 +860,7 @@
     else if (kind === 'feedback') { feedbackCard(el, card); }
     else if (kind === 'artifacts') { artifactsCard(el, card); }
     else if (kind === 'land') { landCard(el, card); }
+    else if (kind === 'pull_request') { prCard(el, card); }
     else if (kind === 'build') { buildCard(el, card); }
     else { noteCard(el, kind || 'card', 'This page does not know that card.'); }
     fit();
@@ -1056,6 +1057,8 @@
         + '<p class="hint mono">' + esc(args) + '</p></details>' : '')
       + table
       + (card.build ? buildLine(card.build) : '')
+      + (card.preview ? '<details><summary class="hint">The description FORGE will publish with it</summary>'
+        + '<pre class="c-preview">' + esc(card.preview) + '</pre></details>' : '')
       + '<div class="row"><button type="button" class="primary c-act" data-do="confirm">Run</button>'
       + '<button type="button" class="c-act" data-do="decline">Not now</button>'
       + '<span class="hint c-answer"></span></div>');
@@ -1459,12 +1462,28 @@
       + block('Files committed', files)
       + block('Files removed', arr(card.deleted_files).map(function (f) { return str(f); }))
       + '<p class="hint">' + esc(card.note || 'nothing was pushed — the branch is local until you push it')
-      + ' Nothing was amended and nothing was forced. When you have read the commit:</p>'
+      + ' Nothing was amended and nothing was forced. To push it yourself instead:</p>'
       + '<pre class="c-push"></pre>'
       + '<div class="row"><button type="button" class="c-copy">Copy the command</button><span class="hint c-copied"></span></div>');
     var command = str(card.push_command);
     el.querySelector('.c-push').textContent = command;   // a branch name is user text
     el.querySelector('.c-copy').onclick = function () { copy(command, el.querySelector('.c-copied')); };
+  }
+
+  // The one card that links off the machine. The URL is gh's output, so it is
+  // only ever an https link set as a property, never markup, and it opens in a
+  // new tab with no referrer and no handle back on this page.
+  function prCard(el, card) {
+    var url = str(card.url);
+    var safe = /^https:\/\/[^\s"'<>]+$/.test(url) ? url : '';
+    html(el, head(card.existing ? 'Pull request already open' : 'Pull request opened')
+      + '<p><span class="mono">' + esc(card.branch) + '</span> into <span class="mono">' + esc(card.base) + '</span>'
+      + (card.title ? ' — ' + esc(card.title) : '') + '</p>'
+      + '<p><a class="c-prlink" target="_blank" rel="noopener noreferrer"></a></p>'
+      + (card.build ? buildLine(card.build) : '')
+      + '<p class="hint">FORGE pushed this one branch to origin, without forcing, and wrote the description from its own records.</p>');
+    var a = el.querySelector('.c-prlink');
+    if (safe) { a.href = safe; a.textContent = safe; } else { a.textContent = url || '(no link came back)'; }
   }
 
   function copy(text, said) {

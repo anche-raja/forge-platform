@@ -116,7 +116,7 @@ def test_the_catalogue_is_closed_and_every_entry_converts_for_bedrock(ctx):
     assert set(TOOL_NAMES) == {
         "set_project", "profile_project", "resolve_intent", "estimate_pack", "run_pack",
         "check_acceptance", "list_held_files", "apply_review_decisions", "generate_tests",
-        "pack_feedback", "list_artifacts", "build_project", "land_on_branch"}
+        "pack_feedback", "list_artifacts", "build_project", "land_on_branch", "open_pull_request"}
     for spec in TOOL_DEFS:
         name = spec["name"]
         assert spec.get("description"), f"{name} has no description"
@@ -832,6 +832,7 @@ _MINIMAL_ARGS = {
     "list_artifacts": {},
     "build_project": {},
     "land_on_branch": {"branch": "forge/jakarta"},
+    "open_pull_request": {},
 }
 
 

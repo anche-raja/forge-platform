@@ -196,7 +196,7 @@ def estimate_card(pack: str, units: int, generated: int, est_usd: float, unit_co
 
 def confirm_card(pending_id: str, tool: str, title: str, args: dict, est_usd: float, *,
                  units: Optional[int] = None, decisions: Optional[list] = None,
-                 build: Optional[dict] = None) -> dict:
+                 build: Optional[dict] = None, preview: Optional[str] = None) -> dict:
     """What the click asserts, in full.
 
     ``decisions`` is verbatim — including each ``note``, which reaches the
@@ -211,6 +211,10 @@ def confirm_card(pending_id: str, tool: str, title: str, args: dict, est_usd: fl
         # Landing shows the last build of this output beside the button: the
         # click is the user's to make, with or without a green build.
         card["build"] = build_status_obs(build)
+    if preview:
+        # open_pull_request: the description that will be published, so the
+        # click is on what other people will read. FORGE's own markdown.
+        card["preview"] = str(preview)
     return card
 
 
@@ -410,7 +414,23 @@ def land_card(result: dict) -> dict:
         "files": files[:LAND_FILE_CAP],
         "files_truncated": max(0, len(files) - LAND_FILE_CAP),
         "deleted_files": [str(f) for f in (result.get("deleted_files") or [])][:LAND_FILE_CAP],
-        "note": "nothing was pushed — the branch is local until you push it",
+        "note": "nothing was pushed — the branch is local until you ask FORGE to open a pull request, "
+                "which pushes it only on your click",
+    }
+
+
+def pull_request_card(result: dict) -> dict:
+    """The pull request FORGE opened (or found already open), and the build it was opened with."""
+    result = result if isinstance(result, dict) else {}
+    build = result.get("build")
+    return {
+        "kind": "pull_request",
+        "url": str(result.get("url") or ""),
+        "branch": result.get("branch"),
+        "base": result.get("base"),
+        "title": result.get("title"),
+        "existing": bool(result.get("existing")),
+        "build": build_status_obs(build) if isinstance(build, dict) else None,
     }
 
 

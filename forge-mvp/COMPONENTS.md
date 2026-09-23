@@ -281,15 +281,16 @@ compile consumes one of the *same* retries the reviewer uses.
 | Module | Lines | What it does |
 |---|---|---|
 | `forge/leader/agent.py` | 545 | Stream → admission gate → execute → observe, up to `max_steps`. |
-| `forge/leader/tools.py` | 1215 | The 12 tools, and every gate. |
+| `forge/leader/tools.py` | 1510 | The 14 tools, and every gate. |
 | `forge/leader/cards.py` | 345 | Card builders, and the reducers that decide what the model may see. |
 | `forge/leader/convo.py` | 224 | Two histories: one for the model, one for the browser. |
-| `forge/leader/landing.py` | 416 | `land_on_branch`. |
+| `forge/leader/landing.py` | 632 | `land_on_branch`. |
+| `forge/leader/pull_request.py` | 335 | `open_pull_request`: push the landed branch, `gh pr create`. |
 | `forge/leader/settings.py` | 68 | The `leader:` config block. |
 
-The thirteen tools: `set_project`, `profile_project`, `resolve_intent`, `estimate_pack`, `run_pack`,
+The fourteen tools: `set_project`, `profile_project`, `resolve_intent`, `estimate_pack`, `run_pack`,
 `check_acceptance`, `list_held_files`, `apply_review_decisions`, `generate_tests`, `pack_feedback`,
-`list_artifacts`, `build_project`, `land_on_branch`.
+`list_artifacts`, `build_project`, `land_on_branch`, `open_pull_request`.
 
 **The model sequences; it does not decide what is true.** It chooses which tool to call and when to
 stop and ask. It cannot decide which packs exist (evidence does), which files a pack takes, what
@@ -325,7 +326,7 @@ is per entry, so an earlier pack's card stays valid while later packs run.
 
 **`landing.py` refuses rather than repairs.** Not a git work tree, a dirty tree, an existing branch,
 a bad ref name — each is a distinct message. It never stashes, never forces, never amends, never
-pushes. It stages only the paths it copied, never `-A`. It never commits FORGE's own artifacts, and
+pushes (FORGE pushes only through `open_pull_request`, on the user's click). It stages only the paths it copied, never `-A`. It never commits FORGE's own artifacts, and
 a test cross-checks `ARTIFACT_NAMES` against `ui/app.py`'s `ARTIFACTS` so a new artifact cannot
 silently start being committed. It copies only files the run manifest (`.forge-writes.json`) or an
 approval in `decisions-applied.jsonl` accounts for; any other file in the output directory is left

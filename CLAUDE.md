@@ -286,8 +286,11 @@ the repository contains. The split is enforced in code, not in the prompt:
   `max_retries`, `must_hold` — is the same code as before. The leader chooses *which run*, never
   what happens in one.
 - **Money and mutation are a click.** Anything over `leader.confirm_above_usd` parks until a human
-  confirms; applying review decisions and `land_on_branch` are always confirmed, whatever the
-  estimate.
+  confirms; applying review decisions, `land_on_branch` and `open_pull_request` are always
+  confirmed, whatever the estimate. FORGE pushes only through `open_pull_request`, only on the
+  user's click: the branch this chat landed, to `origin`, never forced, then `gh pr create` into
+  the branch landing started from, with a body FORGE builds from its own records (no source,
+  diffs or compiler output).
 - **`risk_ceiling` never comes from a prompt.** The toolbox overwrites it with the config's value
   after every `resolve_intent`, because a model-authored intent sentence outranking config would
   disable the hold gate.
