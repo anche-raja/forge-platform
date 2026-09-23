@@ -16,7 +16,7 @@ from typing import Optional
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from forge.config import ForgeConfig
+from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
 from forge.phases import get_testgen_spec
 from forge.review.base_reviewer import BaseReviewer
 from forge.testgen.settings import TestGenSettings
@@ -41,6 +41,8 @@ class TestReviewer(BaseReviewer):
         self.llm = ChatBedrockConverse(
             model=self.settings.review_model or config.review_model,
             region_name=config.aws_region,
+            max_tokens=model_max_tokens(config, self.settings.review_model or config.review_model),
+            config=bedrock_client_config(config),
         )
 
     def review(self, state: TestGenState) -> TestGenState:

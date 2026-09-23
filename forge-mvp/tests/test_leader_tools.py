@@ -412,14 +412,61 @@ def test_setting_confirm_above_usd_to_zero_is_the_owner_turning_the_gate_off(ctx
     assert outcome.needs_confirmation is False and convo.pending == {}
 
 
-def test_a_dry_run_is_gated_exactly_like_a_real_one(ctx):
-    """It still calls the models, so it still costs the money."""
+def test_there_is_no_dry_run_in_the_chat(ctx):
+    """The owner removed dry runs: the tool does not offer one, and a stale
+    dry_run argument is ignored rather than obeyed."""
+    run_pack = next(t for t in TOOL_DEFS if t["name"] == "run_pack")
+    assert "dry_run" not in run_pack["parameters"]["properties"]
     convo = _seed(Conversation(), ["javax-to-jakarta"])
-    box = _box(ctx, convo, confirm_above_usd=0.05)
-    outcome = box.execute("run_pack", {"pack": "javax-to-jakarta", "dry_run": True}, tool_id="t1")
-    assert outcome.needs_confirmation is True
-    assert outcome.observation["est_usd"] == 0.14
-    assert "Dry-run" in outcome.observation["title"]
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)) as run:
+        outcome = _box(ctx, convo, confirm_above_usd=0.0).execute(
+            "run_pack", {"pack": "javax-to-jakarta", "dry_run": True}, tool_id="t1")
+        assert run.call_args.kwargs["dry_run"] is False
+    assert outcome.observation["dry_run"] is False and convo.completed == ["javax-to-jakarta"]
+
+
+def test_a_run_says_which_model_did_the_transform(ctx):
+    """A trial run must never be mistaken for a full one."""
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)):
+        outcome = _box(ctx, convo, confirm_above_usd=0.0).execute(
+            "run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+    model = ctx.config.transform_model
+    assert outcome.observation["transform_model"] == model
+    assert model.split(".", 2)[-1] in outcome.summary
+
+
+def test_spend_reaches_the_chat_per_unit_and_is_not_counted_twice(ctx):
+    """The rail showed "pipeline $0.000" through a whole run, and kept it when a
+    run died after paying for most of its units."""
+    events = []
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+
+    def fake_run(*args, on_event=None, **kwargs):
+        on_event({"type": "file", "index": 1, "total": 2, "cost_usd": 0.2})
+        assert convo.spend_usd == 0.2, "spend lands while the run is still going"
+        on_event({"type": "file", "index": 2, "total": 2, "cost_usd": 0.2})
+        return _run_result(ctx)   # its total is 0.42: 0.02 the units did not report
+
+    with patch("forge.service.run_migration", side_effect=fake_run):
+        _box(ctx, convo, events=events, confirm_above_usd=0.0).execute(
+            "run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+    assert convo.spend_usd == 0.42
+    usage = [e for e in events if e.get("type") == "usage"]
+    assert [u["spend_usd"] for u in usage] == [0.2, 0.4] and all("via" not in u for u in usage)
+
+
+def test_spend_already_incurred_survives_a_run_that_dies(ctx):
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+
+    def dies(*args, on_event=None, **kwargs):
+        on_event({"type": "file", "index": 1, "total": 2, "cost_usd": 0.07})
+        raise RuntimeError("ReadTimeoutError")
+
+    with patch("forge.service.run_migration", side_effect=dies):
+        outcome = _box(ctx, convo, confirm_above_usd=0.0).execute(
+            "run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+    assert outcome.ok is False and convo.spend_usd == 0.07
 
 
 # ─── R5: approval is the human's, at any price ───────────────────────────────

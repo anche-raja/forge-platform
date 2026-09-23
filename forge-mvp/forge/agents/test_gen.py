@@ -13,7 +13,7 @@ from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
-from forge.config import ForgeConfig
+from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
 from forge.phases import get_testgen_spec
 from forge.testgen.context import available_test_libraries, build_source_index, render_context
 from forge.testgen.settings import TestGenSettings
@@ -34,6 +34,8 @@ class TestGenAgent(BaseAgent):
         self.llm = ChatBedrockConverse(
             model=self.settings.model or config.transform_model,
             region_name=config.aws_region,
+            max_tokens=model_max_tokens(config, self.settings.model or config.transform_model),
+            config=bedrock_client_config(config),
         )
         # Built once per run and cached on the instance, like the context
         # extractors: it is derived from the tree, and no unit changes it.

@@ -24,7 +24,7 @@ terraform apply                                  # Phase 0: foundation + observa
 enable_sqs = true      → terraform apply         # before Phase 6 — manual review queue
 enable_sagemaker = true → terraform apply        # future — internal LLM only
 
-After every apply: scripts/generate-agents-yaml.sh {env} > ../forge-mvp/agents.yaml
+After every apply: scripts/generate-agents-yaml.sh {env} --out ../forge-mvp/agents.yaml
 (a guardrail change publishes a new version; agents.yaml pins the number).
 
 ---
@@ -488,7 +488,7 @@ Steps:
 
 Shell script that reads terraform output and writes a ready-to-use agents.yaml.
 Run after terraform apply:
-  ./scripts/generate-agents-yaml.sh dev > ../forge-mvp/agents.yaml
+  ./scripts/generate-agents-yaml.sh dev --out ../forge-mvp/agents.yaml
 
 Script logic:
 1. Run terraform output -json to get all values
@@ -519,7 +519,7 @@ Script logic:
 | 1 | bash scripts/bootstrap-state.sh | Once, before anything |
 | 2 | terraform init | Once |
 | 3 | terraform apply (foundation + observability; flags off) | Phase 0 MVP |
-| 4 | scripts/generate-agents-yaml.sh dev > ../forge-mvp/agents.yaml | Phase 0 MVP |
+| 4 | scripts/generate-agents-yaml.sh dev --out ../forge-mvp/agents.yaml | Phase 0 MVP |
 | 5 | enable_sqs = true → terraform apply | Phase 6 |
 | 6 | enable_sagemaker = true → terraform apply | Future — internal LLM |
 

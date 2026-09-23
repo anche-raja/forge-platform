@@ -118,6 +118,34 @@ def test_bad_requests(client, project, tmp_path):
     assert client.post("/api/runs", json=_run_body(project, tmp_path, client, config="/nope/agents.yaml")).status_code == 400
     assert client.post("/api/runs", json=_run_body(project, tmp_path, client, decisions={"risk_ceiling": "yolo"})).status_code == 400
     assert client.get("/api/runs/nope").status_code == 404
+
+
+def test_a_broken_config_is_a_400_with_its_message_not_a_500(client, project, tmp_path):
+    """An unreadable agents.yaml has to explain itself through the API.
+
+    ConfigError used to escape `_config` on the request thread. FastAPI has no
+    handler for it, so the browser got a plain-text "Internal Server Error"
+    while the one message that says how to repair the file stayed behind in the
+    server's terminal. Every one of these reached the user as a 500.
+    """
+    def status_and_detail(name, text):
+        path = tmp_path / name
+        path.write_text(text, encoding="utf-8")
+        r = client.post("/api/runs", json=_run_body(project, tmp_path, client, config=str(path)))
+        return r.status_code, str(r.json().get("detail", ""))
+
+    # A failed generator run leaves this behind: `> file` truncates before it starts.
+    code, detail = status_and_detail("empty.yaml", "")
+    assert code == 400 and "is empty" in detail
+    assert "--out" in detail, "the message must name the flag that avoids the truncation"
+
+    # agents.yaml.example copied into place, placeholders intact.
+    code, detail = status_and_detail("placeholder.yaml", "guardrail_id: REPLACE_WITH_GUARDRAIL_ID\n")
+    assert code == 400 and "guardrail_id" in detail
+
+    # Valid YAML, wrong shape — a scalar answers `.get` with an AttributeError too.
+    code, detail = status_and_detail("scalar.yaml", "just a string\n")
+    assert code == 400 and "not a YAML mapping" in detail
     assert client.get("/api/runs/nope/events").status_code == 404
 
 

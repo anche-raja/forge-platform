@@ -22,7 +22,7 @@ cd forge-mvp && pip install -r requirements.txt && pytest
 
 # 2. Point it at your deployed infrastructure (see Deployment; `dev` is a label,
 #    the environment comes from your `terraform init` backend key)
-cd .. && ./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
+cd .. && ./forge-terraform/scripts/generate-agents-yaml.sh dev --out forge-mvp/agents.yaml
 
 # 3. Open the chat
 cd forge-mvp && python migrate.py --ui      # http://127.0.0.1:8765
@@ -217,7 +217,7 @@ The Phase 6 manual-review queue and the SageMaker endpoint are opt-in: set `enab
 ### 2. Generate the pipeline config
 
 ```bash
-./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
+./forge-terraform/scripts/generate-agents-yaml.sh dev --out forge-mvp/agents.yaml
 ```
 
 `agents.yaml` carries every resource ID the pipeline needs plus the thresholds, platform

@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from forge.config import ConfigError, ForgeConfig
+from forge.config import (DEFAULT_BEDROCK_READ_TIMEOUT, DEFAULT_MODEL_MAX_TOKENS, ConfigError,
+                          ForgeConfig, bedrock_client_config, model_max_tokens)
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "agents.yaml.example"
 
@@ -87,3 +88,114 @@ def test_the_example_covers_every_key_the_generator_emits():
     documented = set(yaml.safe_load(EXAMPLE.read_text(encoding="utf-8")))
     missing = {k for k in emitted if k not in documented}
     assert not missing, f"generated but undocumented in agents.yaml.example: {sorted(missing)}"
+
+
+def test_every_model_call_sets_an_output_budget():
+    """No ChatBedrockConverse may be built without max_tokens.
+
+    Unset, langchain-aws omits maxTokens from the Converse request and Bedrock
+    applies its own much smaller default. A transform that has to return a whole
+    file inside a JSON envelope is then cut off mid-object -- and on a reasoning
+    model that spends the budget before emitting any text, the content block
+    comes back empty, reaching extract_json as "" and failing as "Expecting
+    value: line 1 column 1 (char 0)". A live run held all 10 POMs of a Maven
+    reactor that way, reported as a parse error that named nothing real.
+
+    A source-level check rather than a mocked one: the bug is a missing
+    argument, and only reading every construction site can prove none regressed.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1] / "forge"
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+            if name != "ChatBedrockConverse":
+                continue
+            if not any(kw.arg == "max_tokens" for kw in node.keywords):
+                offenders.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+
+    assert not offenders, "ChatBedrockConverse built with no max_tokens at: " + ", ".join(offenders)
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("us.amazon.nova-pro-v1:0", 10000),              # Converse rejects anything above
+    ("us.anthropic.claude-opus-4-8", DEFAULT_MODEL_MAX_TOKENS),
+    (None, DEFAULT_MODEL_MAX_TOKENS),
+])
+def test_the_budget_never_exceeds_the_models_own_limit(model, expected):
+    assert model_max_tokens(ForgeConfig(data={}), model) == expected
+
+
+def test_a_smaller_shared_budget_still_wins_and_limits_can_be_overridden():
+    assert model_max_tokens(ForgeConfig(data={"max_tokens": 4096}), "us.amazon.nova-pro-v1:0") == 4096
+    cfg = ForgeConfig(data={"model_output_limits": {"claude-opus": 8192}})
+    assert model_max_tokens(cfg, "us.anthropic.claude-opus-4-8") == 8192
+
+
+def test_every_bedrock_client_sets_a_read_timeout():
+    """No Bedrock client may fall back to botocore's 60s read timeout.
+
+    Converse is not streamed, so a large pom.xml reply sends nothing until it is
+    done, and a live run died with ReadTimeoutError at 60s. Same source-level
+    check as the output budget: the bug is a missing argument.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[1] / "forge"
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+            bedrock_boto = (name == "client" and node.args and isinstance(node.args[0], ast.Constant)
+                            and node.args[0].value == "bedrock-runtime")
+            if name != "ChatBedrockConverse" and not bedrock_boto:
+                continue
+            if not any(kw.arg == "config" for kw in node.keywords):
+                offenders.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+
+    assert not offenders, "Bedrock client built with no config (60s timeout) at: " + ", ".join(offenders)
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, DEFAULT_BEDROCK_READ_TIMEOUT),
+    ("soon", DEFAULT_BEDROCK_READ_TIMEOUT),
+    (5, DEFAULT_BEDROCK_READ_TIMEOUT),      # below botocore's own default; a mistake
+    (900, 900),
+])
+def test_the_read_timeout_falls_back_rather_than_crippling_a_run(raw, expected):
+    cfg = ForgeConfig(data={} if raw is None else {"bedrock_read_timeout": raw})
+    assert bedrock_client_config(cfg).read_timeout == expected
+
+
+def test_the_trial_model_is_documented_and_priced():
+    """Unpriced, a trial run's cost silently accrues as $0.00 -- the one number it is for."""
+    example = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
+    trial = example.get("trial_transform_model")
+    assert trial, "trial_transform_model must be documented"
+    assert trial in (example.get("model_pricing") or {}), f"{trial} is not in model_pricing"
+
+
+def test_the_example_documents_the_output_budget():
+    """The key has to be in the template, or a generated config silently omits it."""
+    example = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
+    assert isinstance(example.get("max_tokens"), int), "max_tokens must be documented"
+    assert example["max_tokens"] >= 8192, "too small to return a few-hundred-line file"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, DEFAULT_MODEL_MAX_TOKENS),      # key absent
+    ("not a number", DEFAULT_MODEL_MAX_TOKENS),
+    (10, DEFAULT_MODEL_MAX_TOKENS),        # too low to return anything; treated as a mistake
+    (32000, 32000),                        # a deliberate raise is honoured
+])
+def test_the_budget_falls_back_rather_than_crippling_a_run(raw, expected):
+    cfg = ForgeConfig(data={} if raw is None else {"max_tokens": raw})
+    assert model_max_tokens(cfg) == expected

@@ -183,7 +183,7 @@ FORGE says so in the run and marks every affected file. **Review those packs' ou
 You need AWS credentials and a generated config:
 
 ```bash
-./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
+./forge-terraform/scripts/generate-agents-yaml.sh dev --out forge-mvp/agents.yaml
 ```
 
 That reads your Terraform outputs. Re-run it after any `terraform apply`.

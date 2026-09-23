@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from forge.config import ForgeConfig
+from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
 from forge.intent.vocabulary import render_vocabulary
 from forge.utils.cost import estimate_cost, usage_from_response
 from forge.utils.llm_json import extract_json
@@ -102,7 +102,9 @@ class IntentAgent:
         self.config = config
         settings = config.get("intent") or {}
         self.model = settings.get("model") or config.transform_model
-        self.llm = ChatBedrockConverse(model=self.model, region_name=config.aws_region)
+        self.llm = ChatBedrockConverse(model=self.model, region_name=config.aws_region,
+                                       max_tokens=model_max_tokens(config, self.model),
+                                       config=bedrock_client_config(config))
         self.bedrock_calls = 0
         self.cost_usd = 0.0
 

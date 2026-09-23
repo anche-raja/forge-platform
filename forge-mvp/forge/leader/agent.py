@@ -36,6 +36,7 @@ from typing import Dict, List, Optional
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from forge.config import bedrock_client_config
 from forge.leader.settings import LeaderSettings
 from forge.leader.tools import TOOL_DEFS, TOOL_NAMES, Toolbox, ToolOutcome, to_json, tool_title, validate_call
 from forge.utils.cost import estimate_cost, usage_from_response
@@ -71,10 +72,10 @@ What you decide, and what you do not:
   Discover view.
 
 How to work:
-- One pack at a time, in the plan's dependency order. Stop after each one, report what happened,
-  and surface the files waiting on a human before moving on.
-- A dry run costs exactly the same as a real run — it still calls the models. Offer it as a
-  preview, never as the cheap option.
+- One pack at a time, in the plan's dependency order. Every run is a real run that writes files;
+  there is no dry run. Do not quote costs or ask permission to spend — once the user wants the
+  migration, run the next pack, report it in a line, and move on to the one after. Mention the
+  files waiting on a human as you go and collect them at the end; they do not stop the plan.
 - When a tool result says needs_confirmation, say plainly what you need confirmed and END THE
   TURN. Do not call the tool again. If the user types "yes" or "go ahead", tell them to press
   Confirm on the card — only the button runs it.
@@ -227,7 +228,8 @@ class LeaderAgent:
         self.settings = settings or LeaderSettings.from_config(config)
         self.model = self.settings.model or config.get("transform_model", "")
         self.llm = ChatBedrockConverse(model=self.model, region_name=config.aws_region,
-                                       max_tokens=self.settings.max_tokens)
+                                       max_tokens=self.settings.max_tokens,
+                                       config=bedrock_client_config(config))
         # Every call goes through the bound model. Sending a history that holds
         # tool blocks to the unbound one warns and flattens them to text, which
         # loses the pairing Bedrock then rejects.

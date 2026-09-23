@@ -44,7 +44,7 @@ terraform apply
 
 ### Generate agents.yaml after apply
 ```bash
-./scripts/generate-agents-yaml.sh dev > ../forge-mvp/agents.yaml
+./scripts/generate-agents-yaml.sh dev --out ../forge-mvp/agents.yaml
 ```
 
 ### Module map

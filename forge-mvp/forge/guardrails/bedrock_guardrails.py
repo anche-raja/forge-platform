@@ -1,12 +1,13 @@
 import boto3
 from typing import Literal
 
-from forge.config import ForgeConfig
+from forge.config import ForgeConfig, bedrock_client_config
 
 
 class BedrockGuardrails:
     def __init__(self, config: ForgeConfig):
-        self.client = boto3.client("bedrock-runtime", region_name=config.aws_region)
+        self.client = boto3.client("bedrock-runtime", region_name=config.aws_region,
+                                   config=bedrock_client_config(config))
         self.guardrail_id = config.guardrail_id
         self.guardrail_version = str(config.guardrail_version)
 

@@ -59,6 +59,8 @@ body[data-step="chat"] .steps { display: flex; flex-direction: column; overflow-
 .steps .c-spend, .steps .c-packs { padding: 0 18px 10px; color: var(--muted); font-size: 12px; min-width: 0; }
 .steps .c-spend b, .steps .c-packs b { display: block; font-size: 17px; line-height: 1.2; color: var(--ink); font-variant-numeric: tabular-nums; }
 .steps .c-spend span, .steps .c-packs span { display: block; }
+.steps .c-trial { display: flex; align-items: center; gap: 8px; padding: 0 18px 10px; font-size: 12px; color: var(--ink); cursor: pointer; min-width: 0; }
+.steps .c-trial input:disabled + span { opacity: .5; }
 .steps .jobbar { margin: 0 18px 10px; text-align: center; }
 /* Truncated from the LEFT: the end of a path is the part that identifies it,
    so `…/forge-mvp` beats `/Users/raja/forge/forge-pl…`. `direction:rtl` moves
@@ -404,3 +406,5 @@ body[data-step="chat"] .c-field:focus-within #c-input:focus-visible { outline: n
   body[data-step="chat"] #c-input { max-height: 118px; }
   body[data-step="chat"] .c-moreframe { height: 68vh; }
 }
+body[data-step="chat"] .c-allwrap { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; cursor: pointer; margin-right: auto; }
+body[data-step="chat"] .c-allwrap input:disabled + span { opacity: .5; }
