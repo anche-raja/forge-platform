@@ -157,7 +157,7 @@ Clean output leaves the status untouched. `route_post` then decides between `man
 | Policy | Contents |
 |---|---|
 | `sensitive_information_policy` | `BLOCK` on `AWS_ACCESS_KEY`, `AWS_SECRET_KEY`, `CREDIT_DEBIT_CARD_NUMBER`, `US_SOCIAL_SECURITY_NUMBER`, `US_BANK_ACCOUNT_NUMBER`, `PASSWORD` |
-| `content_policy` | `HIGH`/`HIGH` on `HATE`, `INSULTS`, `SEXUAL`, `VIOLENCE`, `MISCONDUCT`; `PROMPT_ATTACK` at `HIGH` on input, `NONE` on output |
+| `content_policy` | `PROMPT_ATTACK` only, `HIGH` on input and `NONE` on output. The conversational harm filters (`HATE`, `INSULTS`, `SEXUAL`, `VIOLENCE`, `MISCONDUCT`) are deliberately absent: on AMS, `MISCONDUCT` blocked two ordinary Struts actions (#15) |
 | `word_policy` | Two literal phrases: `ignore previous instructions`, `disregard your system prompt` |
 
 There is **no `regexes_config`** block, and no entity type for certificates or cryptographic keys —

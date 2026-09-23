@@ -163,13 +163,11 @@ any GUARDRAIL_INTERVENED on INPUT as BLOCKED, and ANONYMIZE is an intervention �
 e-mail or a 127.0.0.1 literal would block the file. Only entity types that are genuinely
 secrets belong here.
 
-Content policy filters — set threshold HIGH for:
-  HATE
-  INSULTS
-  SEXUAL
-  VIOLENCE
-  MISCONDUCT
-  PROMPT_ATTACK — this prevents prompt injection via malicious source code comments
+Content policy filters — PROMPT_ATTACK only, HIGH on input, NONE on output. It prevents prompt
+injection via malicious source code comments. Do NOT add HATE, INSULTS, SEXUAL, VIOLENCE or
+MISCONDUCT: they are built for conversational text and business code trips them — MISCONDUCT at
+HIGH blocked two ordinary Struts actions on AMS (issue #15), and the pipeline turns any
+intervention on INPUT into BLOCKED, so the file silently never migrates.
 
 Word policy — blocked phrases:
   "ignore previous instructions"
