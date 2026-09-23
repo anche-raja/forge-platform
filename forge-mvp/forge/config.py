@@ -167,6 +167,26 @@ DEFAULT_BEDROCK_READ_TIMEOUT = 600
 MIN_BEDROCK_READ_TIMEOUT = 60
 
 
+# ─── Files in flight at once ──────────────────────────────────────────────────
+
+# How many units of one pack run at the same time. 1 is strictly sequential,
+# which is also what an agents.yaml without the key gets, so nothing changes
+# until a config asks for it. The ceiling keeps a typo from opening hundreds of
+# Bedrock connections; the Bedrock request quotas are far above it anyway.
+DEFAULT_PARALLEL_FILES = 1
+MAX_PARALLEL_FILES = 32
+
+
+def parallel_files(config) -> int:
+    """``max_parallel_files`` from agents.yaml, clamped to 1..MAX_PARALLEL_FILES."""
+    raw = config.get("max_parallel_files") if config is not None else None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_PARALLEL_FILES
+    return max(1, min(value, MAX_PARALLEL_FILES))
+
+
 def bedrock_client_config(config):
     """The botocore ``Config`` for every Bedrock runtime client.
 
@@ -188,4 +208,7 @@ def bedrock_client_config(config):
         read_timeout=timeout,
         connect_timeout=10,
         retries={"max_attempts": 2, "mode": "adaptive"},
+        # One client is shared by every file in flight; botocore's default pool
+        # of 10 would queue the 11th call behind the others.
+        max_pool_connections=max(10, 2 * parallel_files(config)),
     )

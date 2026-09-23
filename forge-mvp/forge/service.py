@@ -350,6 +350,89 @@ def discover(source_dir: str, output_dir: str, config: Optional[ForgeConfig] = N
 
 # ─── the migration run ────────────────────────────────────────────────────────
 
+# ─── running units, several at a time ─────────────────────────────────────────
+
+class _ProgressRelay:
+    """Forwards ``run_file`` events, renumbering ``file`` events by completion.
+
+    With several files in flight they finish out of scan order, and the
+    ``[k/total]`` a person reads is a progress counter, so ``index`` becomes
+    "k-th to finish". The lock also keeps two workers' events from
+    interleaving mid-emit. With one worker the numbers are the scan indices,
+    exactly as before.
+    """
+
+    def __init__(self, on_event: OnEvent):
+        self._on_event = on_event
+        self._lock = threading.Lock()
+        self._finished = 0
+
+    def __call__(self, event: dict) -> None:
+        with self._lock:
+            if event.get("type") == "file":
+                self._finished += 1
+                event = {**event, "index": self._finished}
+            emit(self._on_event, event)
+
+
+def _workers_for(config) -> int:
+    """``max_parallel_files``, except where parallel files would corrupt each other.
+
+    Maven build verification compiles the whole output tree, so a compile
+    running beside another file's write sees a half-migrated project and
+    feeds a wrong verdict into the retry loop. That mode stays sequential.
+    """
+    from forge.config import parallel_files
+    from forge.utils.telemetry import get_logger
+
+    workers = parallel_files(config)
+    bv = (config.get("build_verification") if config is not None else None) or {}
+    if workers > 1 and bv.get("enabled") and bv.get("mode") == "maven":
+        get_logger(__name__).info("build_verification mode maven: running files one at a time")
+        return 1
+    return workers
+
+
+def _run_units(numbered, one, workers: int, cancel: Optional[threading.Event]):
+    """Run ``one(i, path, generate)`` over ``numbered``; returns ``({i: final}, cancelled)``.
+
+    ``cancel`` is honoured before each unit *starts*: a unit already running
+    finishes and is kept, because its model calls are paid for and a held
+    file is already staged. An exception in any unit ends the run, as it
+    always has; units still in flight are allowed to finish first.
+    """
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+    results: Dict[int, dict] = {}
+    if workers <= 1:
+        for i, (path, generate) in numbered:
+            if cancel is not None and cancel.is_set():
+                return results, True
+            results[i] = one(i, path, generate)
+        return results, False
+
+    cancelled = False
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="forge-unit") as pool:
+        running: Dict[Any, int] = {}
+
+        def collect(done) -> None:
+            for fut in done:
+                results[running.pop(fut)] = fut.result()
+
+        for i, (path, generate) in numbered:
+            while len(running) >= workers:
+                done, _ = wait(running, return_when=FIRST_COMPLETED)
+                collect(done)
+            if cancel is not None and cancel.is_set():
+                cancelled = True
+                break
+            running[pool.submit(one, i, path, generate)] = i
+        while running:
+            done, _ = wait(running, return_when=FIRST_COMPLETED)
+            collect(done)
+    return results, cancelled
+
+
 def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeConfig, *, dry_run: bool = False,
                   single_file: Optional[str] = None, resume: bool = False, no_metrics: bool = False,
                   run_acceptance: bool = False, acceptance_build: bool = False, with_tests: bool = False,
@@ -357,9 +440,11 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
                   on_event: OnEvent = None, cancel: Optional[threading.Event] = None) -> RunResult:
     """One phase over one project — what ``migrate.py --phase`` does.
 
-    Raises ``NoEligibleFiles`` when there is nothing to do. ``cancel`` is
-    checked between units; on cancel the artifacts are still written, because
-    held files are already staged and must not be orphaned.
+    Raises ``NoEligibleFiles`` when there is nothing to do. Units run
+    ``max_parallel_files`` at a time (agents.yaml; 1 when unset). ``cancel``
+    stops new units from starting, and units already running finish; on
+    cancel the artifacts are still written, because held files are already
+    staged and must not be orphaned.
 
     ``with_tests`` runs test generation afterwards, over the files this run
     actually wrote — after acceptance, because a project that did not migrate
@@ -446,24 +531,35 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     emit(on_event, {"type": "start", "phase": phase, "files": len(files), "generated": len(generated),
                     "dry_run": dry_run, "total": total})
 
-    all_statuses: List[FileStatus] = []
-    total_bedrock_calls = 0
-    total_cost = 0.0
-    cancelled = False
-    done_units: List[str] = []
+    workers = _workers_for(config)
 
-    for i, (file_path, generate) in enumerate(units, start=1):
-        if cancel is not None and cancel.is_set():
-            cancelled = True
-            emit(on_event, {"type": "cancelled", "done": i - 1, "total": total})
-            break
-        final = run_file(app, config, state_manager, metrics, file_path=file_path, index=i, total=total,
-                         phase=phase, dry_run=dry_run, source_dir=source_dir, output_dir=output_dir,
-                         generate=generate, on_event=on_event)
-        all_statuses.append(final["current_file"])
-        total_bedrock_calls += final.get("bedrock_calls", 0)
-        total_cost += final.get("estimated_cost_usd", 0.0) or 0.0
-        done_units.append(file_path)
+    def one(i: int, file_path: str, generate: bool) -> dict:
+        return run_file(app, config, state_manager, metrics, file_path=file_path, index=i, total=total,
+                        phase=phase, dry_run=dry_run, source_dir=source_dir, output_dir=output_dir,
+                        generate=generate, on_event=progress)
+
+    progress = _ProgressRelay(on_event)
+    numbered = list(enumerate(units, start=1))
+    try:
+        # Real files first, then generated targets: those are built from the
+        # descriptors the real files migrate, so they must see the finished ones.
+        results, cancelled = _run_units([u for u in numbered if not u[1][1]], one, workers, cancel)
+        if not cancelled:
+            more, cancelled = _run_units([u for u in numbered if u[1][1]], one, workers, cancel)
+            results.update(more)
+    except BaseException:
+        if _chain_dir is not None:
+            _chain_dir.cleanup()
+        raise
+    if cancelled:
+        emit(on_event, {"type": "cancelled", "done": len(results), "total": total})
+
+    # Scan order, whatever order the files finished in, so the report, the
+    # review queue and the manifest read the same way run after run.
+    finals = [results[i] for i in sorted(results)]
+    all_statuses: List[FileStatus] = [f["current_file"] for f in finals]
+    total_bedrock_calls = sum(f.get("bedrock_calls", 0) for f in finals)
+    total_cost = sum(f.get("estimated_cost_usd", 0.0) or 0.0 for f in finals)
 
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)

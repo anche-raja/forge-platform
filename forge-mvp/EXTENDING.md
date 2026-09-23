@@ -116,6 +116,32 @@ Three kinds:
 Globs use FORGE's own matcher, not `fnmatch`: `*` stops at `/`, `**/` crosses directories, and
 `**/*.java` also matches a bare `Foo.java`.
 
+> ### Select only the files your pack can change
+>
+> Every unit costs three model calls, whether or not the pack finds anything to do in it. So do not
+> write `file_glob: "**/*.java"` unless the pack really rewrites every Java file. Describe what the
+> pack changes instead: javax-to-jakarta takes files matching the Jakarta EE `javax.*` packages,
+> struts2-modernize takes files that reference XWork or Struts. On AMS this took the library from
+> about 1,480 units to 420.
+>
+> - `file_glob` and `content_match` are **OR'd**. Adding a `content_match` beside `**/*.java`
+>   narrows nothing; replace the glob.
+> - Derive the pattern from your `## transform` rules. A rule with no trigger in the pattern never
+>   runs, because no file carrying only that rule's target is ever sent.
+> - Over-matching is cheap (one wasted file), under-matching silently skips work. When unsure,
+>   widen the pattern.
+> - Don't anchor on `^import` if a fully qualified use also needs changing.
+>
+> A `content_match` only *selects*. Add `risk: high` when a hit means the file is dangerous, not just
+> relevant — springsec's matcher finds security configuration, so every hit is HIGH risk by rule:
+>
+> ```yaml
+>   - content_match:
+>       glob: "**/*.java"
+>       pattern: 'WebSecurityConfigurerAdapter|@EnableWebSecurity'
+>       risk: high
+> ```
+
 ---
 
 ## The two sections

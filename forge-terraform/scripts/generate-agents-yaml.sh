@@ -251,6 +251,14 @@ secret_scan:
     min_bits: 4.0
   allow: []
 
+# ─── Throughput ──────────────────────────────────────────────────────────────
+# Files of one pack migrated at the same time. Each file is its own graph run,
+# so they are independent; results are still recorded in scan order. 1 is
+# strictly sequential (and what a config without this key gets). Bedrock's
+# request quotas are far above 8 x 3 calls a minute. Maven build verification
+# always runs one file at a time, since mvn compiles the whole output tree.
+max_parallel_files: 8
+
 # ─── Post-transform model check ──────────────────────────────────────────────
 # A third model call after a passing review, asking about regressions and
 # security. The reviewer decides whether a transform is correct; this only

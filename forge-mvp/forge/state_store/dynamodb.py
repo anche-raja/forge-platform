@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterator, List, Optional, Sequence, Tuple, Any
@@ -16,14 +17,39 @@ _log = get_logger(__name__)
 _MAX_TRANSFORM_OUTPUT_BYTES = 350_000
 
 
+class _ThreadLocalTable:
+    """One boto3 ``Table`` per thread, each from its own ``Session``.
+
+    boto3 resources (and the default session that builds them) are not
+    thread-safe, and a run migrates several files at once (``max_parallel_files``),
+    so every worker thread gets its own. Built lazily: a thread that never
+    touches DynamoDB never pays for a session.
+    """
+
+    def __init__(self, region: str, table_name: str):
+        self._region, self._name = region, table_name
+        self._local = threading.local()
+
+    def get(self):
+        table = getattr(self._local, "table", None)
+        if table is None:
+            session = boto3.session.Session()
+            table = session.resource("dynamodb", region_name=self._region).Table(self._name)
+            self._local.table = table
+        return table
+
+
 # ─── Application-level state manager ─────────────────────────────────────────
 
 class DynamoDBStateManager:
     """Tracks file-level migration status in the forge-migration-state table."""
 
     def __init__(self, config: ForgeConfig):
-        self.dynamodb = boto3.resource("dynamodb", region_name=config.aws_region)
-        self.table = self.dynamodb.Table(config.dynamodb_table)
+        self._tables = _ThreadLocalTable(config.aws_region, config.dynamodb_table)
+
+    @property
+    def table(self):
+        return self._tables.get()
 
     def put_file_status(self, file_status: FileStatus) -> None:
         item = {k: v for k, v in file_status.items() if v is not None}
@@ -128,8 +154,11 @@ try:
 
         def __init__(self, config: ForgeConfig):
             super().__init__()
-            dynamodb = boto3.resource("dynamodb", region_name=config.aws_region)
-            self.table = dynamodb.Table(config.dynamodb_checkpoint_table)
+            self._tables = _ThreadLocalTable(config.aws_region, config.dynamodb_checkpoint_table)
+
+        @property
+        def table(self):
+            return self._tables.get()
 
         def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
             thread_id = config["configurable"]["thread_id"]

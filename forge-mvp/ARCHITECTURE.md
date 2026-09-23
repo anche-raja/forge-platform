@@ -250,6 +250,24 @@ In production `agents.yaml` is generated from Terraform outputs via
 generated files via [file_scanner.py](forge/utils/file_scanner.py)), marks them `PENDING`, then
 invokes the graph per file.
 
+**Files run in parallel.** `max_parallel_files` in `agents.yaml` (8 in the generated config, 1 when
+the key is absent) sets how many files of one pack are in flight at once. Each file is its own graph
+invocation with its own state and checkpoint thread, so they do not interact. `service.run_migration`
+keeps what depended on the old sequential loop:
+
+- **Scan order in the record.** Results are collected by scan index, so the report, review queue,
+  run manifest and summary read the same whatever order files finished in.
+- **Progress counts completions.** A `file` event's `index` is "k-th to finish", so `[k/total]`
+  still counts 1..n. With one worker it equals the scan index, byte for byte.
+- **Generated targets last.** They run as a second phase, after every real file has finished.
+- **Cancel starts nothing new.** Files already running finish and are kept.
+- **Maven build verification is sequential.** `mvn` compiles the whole output tree.
+
+Thread safety: boto3 clients are shared (they are thread-safe; the Bedrock connection pool is sized
+to `2 × max_parallel_files`), DynamoDB `Table` resources are per thread because resources are not.
+The one-job-at-a-time rule in the UI is unchanged: it protects *across* runs, since the extract cache
+is cleared at the start of each run.
+
 ```bash
 # Single file
 python migrate.py ./myapp --phase java21 --file src/main/java/com/corp/UserAction.java

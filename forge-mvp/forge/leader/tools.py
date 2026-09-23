@@ -397,6 +397,8 @@ class Toolbox:
         self._emit = emit if callable(emit) else (lambda event: None)
         self.cancel = cancel
         self._relayed_usd: Dict[str, float] = {}
+        # service serialises a run's events, but the tally must not depend on that.
+        self._relay_lock = threading.Lock()
 
     # ── config ───────────────────────────────────────────────────────────────
 
@@ -591,7 +593,8 @@ class Toolbox:
             # for every unit before the one that failed.
             if event.get("type") in ("file", "testgen_unit") and event.get("cost_usd"):
                 usd = float(event.get("cost_usd") or 0.0)
-                self._relayed_usd[tool_id] = self._relayed_usd.get(tool_id, 0.0) + usd
+                with self._relay_lock:
+                    self._relayed_usd[tool_id] = self._relayed_usd.get(tool_id, 0.0) + usd
                 self.convo.accrue_pipeline(usd)
                 self._emit({"type": "usage", "spend_usd": round(self.convo.spend_usd, 6),
                             "leader_cost_usd": round(self.convo.leader_cost_usd, 6)})
@@ -599,7 +602,9 @@ class Toolbox:
 
     def _accrue_rest(self, tool_id: str, total_usd) -> None:
         """Whatever the run's total holds that the per-unit events did not."""
-        rest = float(total_usd or 0.0) - self._relayed_usd.pop(tool_id, 0.0)
+        with self._relay_lock:
+            relayed = self._relayed_usd.pop(tool_id, 0.0)
+        rest = float(total_usd or 0.0) - relayed
         if rest > 1e-9:
             self.convo.accrue_pipeline(rest)
 
