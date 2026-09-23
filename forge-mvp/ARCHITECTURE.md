@@ -156,7 +156,7 @@ review is Nova Pro, which matches.
 | `java_upgrade` | **Opus 4.8** | Transform Java per 5 rules; on retry, injects prior review feedback into the prompt | `transform_output` (JSON: files + manual_flags) |
 | `syntax_check` | local `javac` (parse only) + XML parser | When `syntax_check: true`: every Java file in the output is parsed by javac stopped at the PARSE stage — no classpath, so an unresolved import is not an error — and XML is checked for well-formedness. [forge/verify/syntax.py](forge/verify/syntax.py) | FAIL → `increment_retry` with javac's errors as the feedback (the review is never called on a broken answer), `manual_queue` once retries are spent; PASS / SKIPPED (no javac) → `java_reviewer` |
 | `java_reviewer` | **Nova Pro** | Score 0–100 across 5 weighted checks; emit verdict + feedback | `PASS≥80` / `RETRY 50–79` / `MANUAL<50` |
-| `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Opus 4.8** | Verify zero `javax.*` left, no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
+| `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Opus 4.8** | Verify zero `javax.*` left (`java21`, and `javax-to-jakarta` onwards in pack order), no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
 | `hold_for_review` | local FS | Stage transformed files under `./migrated/.forge-staging/` when `decisions.risk_ceiling` says a human decides first | status `HELD` |
 | `write_file` | local FS | Write transformed files to `./migrated/` preserving package path (no-op on `--dry-run`) | status `DONE` |
 | `manual_queue` | — | Mark file for human review | status `MANUAL_REVIEW` |

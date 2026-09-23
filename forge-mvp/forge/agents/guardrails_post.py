@@ -29,6 +29,37 @@ def post_check_mode(config) -> str:
     mode = raw.strip().lower()
     return mode if mode in POST_CHECK_MODES else DEFAULT_POST_CHECK
 
+
+# The pack that owns "zero Jakarta-EE javax.* left". Step 2 enforces that rule
+# only where it holds: in this pack and every pack the registry orders after it.
+# A pack ordered before it -- java8-to-java21 above all -- runs while the javax
+# imports are still supposed to be there, and the check used to send its files
+# to MANUAL_REVIEW at review 100; javax-to-jakarta then migrated the ORIGINAL
+# file and the Java 21 work was lost (issue #12). The built-in `java21` phase
+# is not a pack: its own Rule 1 is the javax -> jakarta migration, so the check
+# is its invariant too.
+JAVAX_CHECK_FROM = "javax-to-jakarta"
+
+
+def javax_check_applies(phase: str) -> bool:
+    """Whether ``phase`` must leave zero Jakarta-EE ``javax.*`` imports behind.
+
+    Registry order is the rule, not a list of names, so a new pack placed after
+    javax-to-jakarta gets the check without an edit here. Anything the order
+    cannot answer -- a broken library, an unknown phase -- keeps the check:
+    a false hold costs a human a look, a false pass ships ``javax.servlet``
+    into a Jakarta build.
+    """
+    from forge.phases import BUILTIN_PHASE_NAMES, _packs
+
+    if phase in BUILTIN_PHASE_NAMES:
+        return True
+    registry = _packs()
+    order = tuple(registry.order) if registry is not None else ()
+    if phase not in order or JAVAX_CHECK_FROM not in order:
+        return True
+    return order.index(phase) >= order.index(JAVAX_CHECK_FROM)
+
 # Package scope is deliberately NOT part of this prompt. Scope is a pre-flight
 # concern (guardrails_pre), and treating it as a post-transform blocker caused
 # every out-of-scope file to be escalated to manual review even after a passing
@@ -85,7 +116,9 @@ class GuardrailsPostAgent(BaseAgent):
 
         # Step 2: Deterministic Rule 1 enforcement. "Zero javax.* in output" is a
         # mechanical invariant — check it in code rather than asking the model.
-        leftover = find_unmigrated_javax_imports(all_content)
+        # Only from javax-to-jakarta onwards: see javax_check_applies.
+        phase = state.get("phase") or file_status.get("phase") or "java21"
+        leftover = find_unmigrated_javax_imports(all_content) if javax_check_applies(phase) else []
         if leftover:
             finding = f"Unmigrated javax.* imports remain: {', '.join(sorted(set(leftover)))}"
             _log.info("%s — %s", file_status["file_path"], finding)

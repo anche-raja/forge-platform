@@ -137,7 +137,7 @@ Local, deterministic, no network, about 0.2 s per file.
 |---|---|---|---|---|
 | — | collect output | local | Did the transform produce any files at all? | `MANUAL_REVIEW` |
 | 4 | `ApplyGuardrail` | AWS policy | The same policy over the transformed bytes, `source = OUTPUT`. `PROMPT_ATTACK` is set to `NONE` on output. | `MANUAL_REVIEW` |
-| 5 | `javax.*` check | local | Rule 1: zero Jakarta-EE `javax.*` imports remain. [forge/utils/java_checks.py](forge/utils/java_checks.py) | `MANUAL_REVIEW` |
+| 5 | `javax.*` check | local | Rule 1: zero Jakarta-EE `javax.*` imports remain. [forge/utils/java_checks.py](forge/utils/java_checks.py). Only in `java21` and in `javax-to-jakarta` and the packs ordered after it — a pack that runs earlier (`java8-to-java21`) is expected to leave them (`javax_check_applies`) | `MANUAL_REVIEW` |
 | 6 | post-check ask | transform model | Deprecated patterns left behind, a security regression introduced, business logic or null checks destroyed. | Finding only (`post_model_check: advisory`, the default). `block` restores `MANUAL_REVIEW`; `off` skips the call |
 
 Checks 4 and 5 always escalate: an intervention and a leftover `javax.*` import are facts, not
