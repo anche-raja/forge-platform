@@ -120,6 +120,66 @@ def test_leftover_javax_forces_manual_review(tmp_path, java_file):
     assert "javax.servlet.http.HttpServletRequest" in fs["error"]
 
 
+def _run_dirty(tmp_path, java_file, phase, score):
+    import contextlib
+
+    dirty = CLEAN_JAVA.replace(
+        "import jakarta.servlet.http.HttpServletRequest;",
+        "import javax.servlet.http.HttpServletRequest;",
+    )
+    config = write_config(tmp_path)
+    with contextlib.ExitStack() as stack:
+        up = _graph_mocks(stack, java_file, review_score=score)
+        up.return_value.invoke.return_value = llm_reply({"files": {java_file: dirty}, "manual_flags": []})
+        from forge.graph import build_graph
+
+        result = build_graph(config).invoke(
+            make_state(java_file, tmp_path, phase=phase),
+            config={"configurable": {"thread_id": java_file}},
+        )
+    return result["current_file"]
+
+
+def test_a_pack_before_javax_to_jakarta_keeps_its_javax_imports(tmp_path, java_file):
+    """Issue #12: java8-to-java21 runs before javax-to-jakarta, so javax.servlet
+    is expected in its output. At review 100 the file is DONE, not held -- the
+    held file's Java 21 work was lost when javax-to-jakarta migrated the original."""
+    fs = _run_dirty(tmp_path, java_file, "java8-to-java21", 100)
+    assert fs["status"] == "DONE", fs.get("error")
+    assert not any("Unmigrated javax" in f for f in fs["guardrail_findings"])
+
+
+@pytest.mark.parametrize("phase", ["javax-to-jakarta", "spring-to-spring6", "junit4-to-junit5", "java21"])
+def test_javax_to_jakarta_and_everything_after_it_still_hold_a_leftover(tmp_path, java_file, phase):
+    fs = _run_dirty(tmp_path, java_file, phase, 100)
+    assert fs["status"] == "MANUAL_REVIEW"
+    assert "javax.servlet.http.HttpServletRequest" in fs["error"]
+
+
+def test_the_javax_rule_follows_registry_order():
+    """The rule is a position in the pack order, not a list of names."""
+    from forge.agents.guardrails_post import JAVAX_CHECK_FROM, javax_check_applies
+    from forge.packs import load_packs
+
+    order = load_packs().order
+    cut = order.index(JAVAX_CHECK_FROM)
+    assert "java8-to-java21" in order[:cut]
+    for pid in order[:cut]:
+        assert not javax_check_applies(pid), pid
+    for pid in order[cut:]:
+        assert javax_check_applies(pid), pid
+    # java21's own Rule 1 is the namespace migration; an unknown name fails closed.
+    assert javax_check_applies("java21")
+    assert javax_check_applies("no-such-pack")
+
+
+def test_a_broken_pack_library_keeps_the_javax_rule(monkeypatch):
+    from forge.agents.guardrails_post import javax_check_applies
+
+    monkeypatch.setattr("forge.phases._packs", lambda: None)
+    assert javax_check_applies("java8-to-java21")
+
+
 def test_jdk_javax_imports_are_not_flagged(tmp_path, java_file):
     """javax.crypto / javax.sql are JDK packages — rewriting them would break
     the code, so they must not trip the Rule 1 check."""

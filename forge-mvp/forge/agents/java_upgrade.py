@@ -87,22 +87,44 @@ class JavaUpgradeAgent(BaseAgent):
             result = extract_json(response.content)
         except Exception as e:
             _log.warning("Transform output for %s was not valid JSON: %s", file_path, e)
-            file_status["status"] = "MANUAL_REVIEW"
-            file_status["error"] = f"Failed to parse transform output as JSON: {e}"
-            return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
+            return self._malformed(state, file_status, f"Failed to parse transform output as JSON: {e}",
+                                   bedrock_calls, cost)
 
+        # An empty `files` map is the model saying "nothing here needs changing"
+        # (issue #17): the unit is DONE, nothing is written and no reviewer is
+        # paid to grade nothing -- it used to score 0 and reach a human. That
+        # reading holds only where no change was demanded: a generated unit
+        # must produce its file, and a retry was sent back *because* the file
+        # needs changes (a reviewer's, the compiler's or a human's), so an
+        # empty answer there is a non-answer and goes round the retry loop.
+        # A retry after an unreadable reply is a first answer in all but name.
+        changes_demanded = bool(human_note) or (retry_count > 0 and not file_status.get("transform_malformed"))
         try:
             if not isinstance(result, dict):
                 raise TransformShapeError(f"output is a {type(result).__name__}, expected an object")
+            if "files" not in result:
+                # Absent is not empty: only an explicit {} is read as "unchanged".
+                raise TransformShapeError("no 'files' key; a file that needs no change is \"files\": {}")
             result = {**result, "files": normalize_files(result.get("files"))}
+            unchanged = not result["files"] and not result.get("deleted_files")
+            if unchanged and file_status.get("generate"):
+                raise TransformShapeError("'files' is empty, but this unit is generated and must be written")
+            if unchanged and changes_demanded:
+                raise TransformShapeError("'files' is empty, but this retry was asked to change the file")
         except TransformShapeError as e:
-            # One malformed answer is one file for a human, never the end of the run.
+            # One malformed answer is one file retried, never the end of the run.
             _log.warning("Transform output for %s has the wrong shape: %s", file_path, e)
-            file_status["status"] = "MANUAL_REVIEW"
-            file_status["error"] = f"Transform output has the wrong shape: {e}"
-            return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
+            return self._malformed(state, file_status, f"Transform output has the wrong shape: {e}",
+                                   bedrock_calls, cost)
+
+        # A usable answer clears the last attempt's malformed verdict, or a unit
+        # that recovers on retry would reach DONE still carrying its error.
+        if file_status.get("transform_malformed"):
+            file_status["transform_malformed"] = False
+            file_status["error"] = None
 
         file_status["transform_output"] = result
+        file_status["unchanged"] = unchanged
         # struts-spring6 reports XML configs it replaced with Java @Configuration.
         deleted = result.get("deleted_files") or []
         if isinstance(deleted, list) and deleted:
@@ -110,4 +132,26 @@ class JavaUpgradeAgent(BaseAgent):
         file_status["transform_model"] = self.config.transform_model
         file_status["status"] = "REVIEWING"
 
+        return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
+
+    def _malformed(self, state, file_status, error: str, bedrock_calls: int, cost: float) -> ForgeState:
+        """An answer the pipeline cannot read goes round the retry loop, like a low score.
+
+        It used to go straight to MANUAL_REVIEW, and a broken JSON envelope -- an
+        unescaped quote 2,000 characters into a string -- is a formatting slip
+        the next call rarely repeats (issue #20). ``route_syntax`` sends the
+        unit to ``increment_retry`` within ``max_retries``, with this feedback,
+        and to ``manual_queue`` with ``error`` once the budget is spent. The
+        previous attempt's output is dropped so nothing downstream can mistake
+        it for this attempt's.
+        """
+        file_status["transform_malformed"] = True
+        file_status["transform_output"] = None
+        file_status["error"] = error
+        file_status["review_feedback"] = (
+            f"Your previous reply could not be used. {error}\n"
+            "Reply with exactly one valid JSON object in the shape the instructions give: no markdown "
+            "fences and no text before or after it. Each file's content is a single JSON string, so "
+            "escape every double quote, backslash and newline inside it."
+        )
         return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}

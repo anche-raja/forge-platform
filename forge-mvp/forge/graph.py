@@ -44,7 +44,8 @@ def build_graph(config: ForgeConfig):
         already sent to manual review passes through untouched.
         """
         file_status = dict(state["current_file"])
-        if not check_syntax or file_status.get("status") == "MANUAL_REVIEW":
+        if (not check_syntax or file_status.get("status") == "MANUAL_REVIEW"
+                or file_status.get("transform_malformed") or file_status.get("unchanged")):
             return state
         # This attempt's verdict replaces the last one's, so a retry that
         # parses does not carry the previous failure's error forward.
@@ -67,6 +68,20 @@ def build_graph(config: ForgeConfig):
         elif verdict == syntax.SKIPPED and _SYNTAX_SKIPPED not in findings:
             findings.append(_SYNTAX_SKIPPED)
         file_status["guardrail_findings"] = findings
+        return {**state, "current_file": file_status}
+
+    def no_change(state: ForgeState) -> ForgeState:
+        """The transform found nothing to change: DONE, with nothing to review or write.
+
+        Nothing reaches the reviewer, guardrails_post, the hold gate or the
+        build: each of them judges or lands transformed bytes, and there are
+        none. The source file stays as it is, which is the model's answer;
+        `unchanged` keeps that answer visible in the report and the audit trail.
+        """
+        file_status = dict(state["current_file"])
+        file_status["status"] = "DONE"
+        file_status["written_paths"] = []
+        _log.info("%s needs no change", file_status["file_path"])
         return {**state, "current_file": file_status}
 
     def java_reviewer(state: ForgeState) -> ForgeState:
@@ -122,15 +137,48 @@ def build_graph(config: ForgeConfig):
         _log.info("Held %s for review (%s)", file_status["file_path"], file_status["hold_reason"])
         return {**state, "current_file": file_status}
 
-    def manual_queue(state: ForgeState) -> ForgeState:
+    # Every MANUAL_REVIEW and BLOCKED unit carries a non-empty `error`: it is the
+    # first thing the report and the review page show a human, and a unit held
+    # with none -- review 100, no error, no post-check verdict (issue #26) -- is
+    # one nobody can act on. Nodes that stop a unit say why themselves; the two
+    # routes that stop one on a number (the review score, the build verdict)
+    # leave it to manual_queue, and _reason_for is also the backstop for a path
+    # added later without one.
+    def _excerpt(text, limit: int = 300) -> str:
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= limit else text[:limit] + "..."
+
+    def _reason_for(fs, status: str) -> str:
+        retries = fs.get("retry_count") or 0
+        after = f" after {retries} retr{'y' if retries == 1 else 'ies'}" if retries else ""
+        score = fs.get("review_score")
+        pass_threshold = config.get("pass_threshold", 80)
+        # The score first: a build that failed on an earlier attempt leaves its
+        # verdict behind, and this attempt may have stopped at the review.
+        if status == "MANUAL_REVIEW" and score is not None and score < pass_threshold:
+            retry_threshold = config.get("retry_threshold", 50)
+            bar = (f"below retry_threshold {retry_threshold}" if score < retry_threshold
+                   else f"below pass_threshold {pass_threshold}{after}")
+            feedback = _excerpt(fs.get("review_feedback"))
+            return f"Review score {score} is {bar}" + (f": {feedback}" if feedback else "")
+        if status == "MANUAL_REVIEW" and fs.get("build_verdict") == "FAIL":
+            return f"Build verification failed{after}: {_excerpt(fs.get('build_output'))}"
+        _log.warning("%s reached %s without a recorded reason", fs.get("file_path"), status)
+        return (f"{status} with no recorded reason (guardrail_pre_verdict={fs.get('guardrail_pre_verdict')}, "
+                f"guardrail_post_verdict={fs.get('guardrail_post_verdict')}); this is a pipeline bug")
+
+    def _stop(state: ForgeState, status: str) -> ForgeState:
         file_status = dict(state["current_file"])
-        file_status["status"] = "MANUAL_REVIEW"
+        file_status["status"] = status
+        if not str(file_status.get("error") or "").strip():
+            file_status["error"] = _reason_for(file_status, status)
         return {**state, "current_file": file_status}
 
+    def manual_queue(state: ForgeState) -> ForgeState:
+        return _stop(state, "MANUAL_REVIEW")
+
     def blocked(state: ForgeState) -> ForgeState:
-        file_status = dict(state["current_file"])
-        file_status["status"] = "BLOCKED"
-        return {**state, "current_file": file_status}
+        return _stop(state, "BLOCKED")
 
     def increment_retry(state: ForgeState) -> ForgeState:
         file_status = dict(state["current_file"])
@@ -178,8 +226,21 @@ def build_graph(config: ForgeConfig):
         return "manual_queue"
 
     def route_syntax(state: ForgeState) -> str:
+        """Everything the transform node can conclude, routed before a review is paid for.
+
+        An answer that could not be read and one that does not parse are the
+        same kind of failure -- the model's output is wrong, not the migration --
+        so both retry within ``max_retries`` and cost no review call. A unit
+        the transform already sent to manual review (its source could not be
+        read) goes straight there: a reviewer has nothing to grade, and on a
+        retry would grade the previous attempt's output.
+        """
         fs = state["current_file"]
-        if fs.get("syntax_verdict") != syntax.FAIL or fs.get("status") == "MANUAL_REVIEW":
+        if fs.get("status") == "MANUAL_REVIEW":
+            return "manual_queue"
+        if fs.get("unchanged"):
+            return "no_change"
+        if not fs.get("transform_malformed") and fs.get("syntax_verdict") != syntax.FAIL:
             return "java_reviewer"
         if (fs.get("retry_count") or 0) < config.get("max_retries", 2):
             return "increment_retry"
@@ -209,6 +270,7 @@ def build_graph(config: ForgeConfig):
     graph.add_node("guardrails_pre", guardrails_pre)
     graph.add_node("java_upgrade", java_upgrade)
     graph.add_node("syntax_check", syntax_check)
+    graph.add_node("no_change", no_change)
     graph.add_node("java_reviewer", java_reviewer)
     graph.add_node("guardrails_post", guardrails_post)
     graph.add_node("write_file", write_file)
@@ -228,6 +290,7 @@ def build_graph(config: ForgeConfig):
     graph.add_edge("java_upgrade", "syntax_check")
     graph.add_conditional_edges("syntax_check", route_syntax, {
         "java_reviewer": "java_reviewer",
+        "no_change": "no_change",
         "increment_retry": "increment_retry",
         "manual_queue": "manual_queue",
     })
@@ -244,6 +307,7 @@ def build_graph(config: ForgeConfig):
     })
     # A held unit never reaches verify_build: nothing was written to output.
     graph.add_edge("hold_for_review", "update_state")
+    graph.add_edge("no_change", "update_state")
     graph.add_edge("write_file", "verify_build")
     graph.add_conditional_edges("verify_build", route_verify, {
         "update_state": "update_state",

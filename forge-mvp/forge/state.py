@@ -11,6 +11,13 @@ class FileStatus(TypedDict):
     # Why the score is what it is — the text a held unit shows a reviewer.
     risk_reasons: List[str]
     transform_output: Optional[dict]
+    # The transform's reply could not be read (bad JSON, wrong shape). It is
+    # retried like a low score, and `error` says why (issue #20).
+    transform_malformed: bool
+    # The transform answered `"files": {}` -- nothing needs changing. The unit
+    # is DONE with nothing written and no review (issue #17); the report lists
+    # it as unchanged so "no change" stays distinguishable from "migrated".
+    unchanged: bool
     review_score: Optional[int]
     review_verdict: Optional[Literal["PASS", "RETRY", "MANUAL"]]
     review_feedback: Optional[str]
@@ -80,6 +87,8 @@ def make_file_status(file_path: str, phase: str) -> FileStatus:
         risk_score=0,
         risk_reasons=[],
         transform_output=None,
+        transform_malformed=False,
+        unchanged=False,
         review_score=None,
         review_verdict=None,
         review_feedback=None,

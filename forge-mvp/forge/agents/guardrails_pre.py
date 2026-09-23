@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
 from forge.context.inject import context_block_for
-from forge.guardrails.bedrock_guardrails import BedrockGuardrails
+from forge.guardrails.bedrock_guardrails import BedrockGuardrails, intervention_reason
 from forge.phases import get_phase
 from forge.risk import score_unit, thresholds_from
 from forge.state import ForgeState
@@ -118,6 +118,7 @@ class GuardrailsPreAgent(BaseAgent):
         if gr_result["intervened"]:
             _log.info("Guardrail intervened on input for %s", file_path)
             file_status["status"] = "BLOCKED"
+            file_status["error"] = intervention_reason(gr_result, "INPUT")
             return {**state, "current_file": file_status}
 
         # Step 4: optional qualitative model check. OFF by default: every
@@ -150,7 +151,7 @@ class GuardrailsPreAgent(BaseAgent):
         if verdict == "BLOCK":
             _log.info("Pre-flight BLOCK on %s: %s", file_path, result.get("reason", ""))
             file_status["status"] = "BLOCKED"
-            file_status["error"] = result.get("reason", "Blocked by pre-flight check")
+            file_status["error"] = result.get("reason") or "Blocked by pre-flight check"
         else:
             file_status["status"] = "TRANSFORMING"
 
