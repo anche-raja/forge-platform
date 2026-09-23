@@ -19,7 +19,7 @@ That opens http://127.0.0.1:8765. Everything below happens in that window.
 
 > **you** — migrate the app at ~/work/ams
 
-> **FORGE** — Found it: Maven, 10 modules, Java 8. Struts 2.6.8, Spring 5.3.39, Spring Security
+> **FORGE** — Found it: Maven, 10 modules, Java 8. Struts 6.8.0, Spring 5.3.39, Spring Security
 > 5.3.13, JUnit 4, 376 Java files and 61 JSPs.
 >
 > Ten packs apply, in dependency order: build-maven-modernize, java8-to-java21, javax-to-jakarta,
@@ -57,16 +57,31 @@ FORGE runs the next pack. It **builds on what the last pack produced**, so the J
 ## What it costs
 
 FORGE tells you before it spends anything over your limit, and anything over **$1** stops for a
-click. Measured on a real AMS file with the current models:
+click. The estimate is units × **$0.07**, where a unit is one file through one pack. That $0.07 is
+`leader.unit_cost_usd`: a planning figure for three model calls with Claude Opus 4.8 as the
+transform model, not a measurement. What a run actually spent is added up from each real call, and
+that is the number it reports afterwards.
 
-| | |
+| Planning estimate, Opus 4.8 | |
+|---|---|
+| One file | **$0.07** — three model calls |
+| All ten packs across AMS (420 units) | **~$29**, before retries |
+
+The measured figures are older. They come from **Sonnet 4.5**, the transform model before Opus 4.8,
+calibrated on two real runs at $0.0080 fixed plus $0.0000066 per byte:
+
+| Measured, Sonnet 4.5 | |
 |---|---|
 | One file | **~$0.024** — three model calls |
-| All ten packs across AMS (1,480 units) | **~$45** |
+| All ten packs across AMS (1,480 units then) | **~$45** |
 | With a realistic retry rate | **$48 – $57** |
 
-A file that scores below the pass threshold retries once with the reviewer's feedback, which adds
-two more calls for that file. The range above covers a 10–40% retry rate.
+Don't read these as today's prices: Opus 4.8 costs more per token than Sonnet 4.5, and the four
+packs that took every Java file now select by content, which took AMS from 1,480 units to 420.
+
+By default a file the reviewer scores 50–79 is transformed again with the reviewer's feedback, up to
+twice (`max_retries`); each retry adds two calls. The Sonnet 4.5 range assumed 10–40% of files
+retry once.
 
 > **Nothing costs money until you click.** Profiling your repository, listing packs and planning the
 > work are all free. Only the actual migration spends.

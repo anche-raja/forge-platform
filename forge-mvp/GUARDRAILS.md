@@ -257,6 +257,11 @@ Only the model calls increment `bedrock_calls` and accrue into `estimated_cost_u
 the `FORGE-CostSpike` alarm. A retry re-runs the transform and the review, adding two model calls
 against the same budget.
 
+In dollars, the chat plans at `leader.unit_cost_usd` per file: **$0.07** by default, for the three
+model calls above with Opus 4.8 transforming. That is a planning figure, not a measurement. The
+measured ~$0.024 a file in [USING-FORGE.md](USING-FORGE.md#what-it-costs) was taken on Sonnet 4.5,
+before the move to Opus 4.8.
+
 ---
 
 ## 9. Configuration

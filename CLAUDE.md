@@ -9,7 +9,7 @@ FORGE is an AI-powered Java migration pipeline. It uses LangGraph + AWS Bedrock 
 The repo currently contains:
 - `forge-terraform/` — all AWS infrastructure as Terraform modules
 - `prompts/` — full specifications for each build phase
-- `forge-mvp/` — Python pipeline, covered by 300+ tests (`pytest` from `forge-mvp/`, no AWS needed)
+- `forge-mvp/` — Python pipeline, covered by a fully mocked test suite (`pytest` from `forge-mvp/`, no AWS needed)
 - `prompts/packs/` — the stack pack library: one technology transition per file, loaded at runtime
 
 ## Terraform — forge-terraform/
