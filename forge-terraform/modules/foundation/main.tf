@@ -114,31 +114,13 @@ resource "aws_bedrock_guardrail" "forge" {
   }
 
   content_policy_config {
-    filters_config {
-      type            = "HATE"
-      input_strength  = "HIGH"
-      output_strength = "HIGH"
-    }
-    filters_config {
-      type            = "INSULTS"
-      input_strength  = "HIGH"
-      output_strength = "HIGH"
-    }
-    filters_config {
-      type            = "SEXUAL"
-      input_strength  = "HIGH"
-      output_strength = "HIGH"
-    }
-    filters_config {
-      type            = "VIOLENCE"
-      input_strength  = "HIGH"
-      output_strength = "HIGH"
-    }
-    filters_config {
-      type            = "MISCONDUCT"
-      input_strength  = "HIGH"
-      output_strength = "HIGH"
-    }
+    # Only PROMPT_ATTACK. The HATE / INSULTS / SEXUAL / VIOLENCE / MISCONDUCT
+    # filters are built for conversational text, and business code trips them:
+    # MISCONDUCT at HIGH blocked two ordinary Struts actions on AMS
+    # (OrderSubmitAction, UserAction -- issue #15), so neither spring6 nor
+    # struts2 migrated them. The guardrail's job here is secrets and prompt
+    # injection; every other harm category is noise on source code, and a
+    # BLOCKED file is a file that silently never migrates.
     # PROMPT_ATTACK prevents prompt injection via malicious source code comments
     filters_config {
       type            = "PROMPT_ATTACK"
