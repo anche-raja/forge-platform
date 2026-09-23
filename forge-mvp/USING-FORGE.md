@@ -142,6 +142,11 @@ signal that the pack itself should change.
 
 **Broken output is caught file by file.** Every migrated Java file is parsed by the Java compiler before it is reviewed. A file the model damaged, with a stray brace for example, is sent back to the model with the compiler's error and fixed automatically.
 
+Damage an *earlier* run left behind is caught too. Before each pack that builds on the last one,
+FORGE parses every file it has already written. One that no longer parses is moved aside to
+`.forge-staging/.damaged/` (never deleted — even one you approved), the file reads as your original
+again, and `migration-summary.md` names the pack that wrote it so you can run that pack again.
+
 **First, FORGE builds the project.** After the last pack, the chat compiles your source with the
 migrated files laid over it, using the project's own build: each Maven reactor in dependency order,
 on the JDK your target Java version names. A compile catches what no reviewer can — a file a pack

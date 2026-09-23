@@ -805,6 +805,22 @@ against a directory an earlier session wrote chains too. The run emits `chained`
 silently changed what it read would be impossible to debug. The manifest also records files a pack
 *retired*, so a descriptor an earlier pack replaced is not handed to the next one.
 
+**Damage an earlier run wrote is re-checked before it is read.** The `syntax_check` node only sees
+fresh model output, and a pack's content filter passes over a file with nothing left to modernise —
+so on AMS three files a java8-to-java21 run had damaged (`}ßßß`, a doubled `}`) were carried by
+every later pack into the project build. With `syntax_check: true`, a chained run first calls
+`service.check_output`: one javac over every Java file `.forge-writes.json` says FORGE wrote (a
+quarter of a second for AMS's 297; `syntax.check_tree`), XML for well-formedness. A copy that does
+not parse is **moved** — never deleted, a human-approved one included — to
+`.forge-staging/.damaged/<path>`, and its manifest entry dropped, so the merged view reads the
+original again and this pack re-migrates it if it selects it. Each file is a `damaged_output` event
+(with `approved: true` when a human had signed it off), a section of the run's report, and a row in
+`migration-summary.md` naming the pack that wrote it, which has to run again to redo its changes —
+also when this pack does not select the file at all. The row stays until that pack runs. A file
+whose original does not parse either is reported and left in place: there is nothing better to
+revert to. A dry run reports and moves nothing. Errors javac gives for a newer language feature
+than its JDK ("preview feature", "not supported in -source") are the toolchain, not damage.
+
 ### Conversation state
 
 `forge/leader/convo.py` keeps two histories, deliberately apart. `history` is what goes back to the

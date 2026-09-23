@@ -63,6 +63,7 @@ def generate_report(
     estimated_cost_usd: float = 0.0,
     skipped: Sequence["SkippedFile"] = (),
     passed_over: int = 0,
+    damaged: Sequence[dict] = (),
 ) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -151,6 +152,8 @@ def generate_report(
         ]
         lines += [f"- `{d}`" for d in superseded]
 
+    lines += damaged_section(damaged, phase)
+
     Path(output_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -181,6 +184,8 @@ def _load_summary(output_dir: str) -> dict:
     data.setdefault("version", 1)
     if not isinstance(data.get("packs"), dict):
         data["packs"] = {}
+    if not isinstance(data.get("reverted"), dict):
+        data["reverted"] = {}
     return data
 
 
@@ -251,6 +256,16 @@ def render_summary(output_dir: str, *, queue: Optional[dict] = None, build: Opti
     lines.append(f"| **Total** | | {sums['total']} | {sums['passed']} | {sums['manual']} | {sums['blocked']} "
                  f"| {sums['held']} | {sum(awaiting.values())} | {_money(cost)} | | |")
 
+    if data["reverted"]:
+        lines += ["", "## Damaged output reverted to the original", ""] + _reverted_intro() + [
+            "",
+            "| File | Written by | Re-run | Human-approved | Found by | Damaged copy |",
+            "|------|------------|--------|----------------|----------|--------------|"]
+        for rel, r in sorted(data["reverted"].items()):
+            lines.append(f"| `{rel}` | {r.get('pack') or '?'} | **{r.get('pack') or '?'}** "
+                         f"| {'yes' if r.get('approved') else 'no'} | {r.get('found_by') or '?'} "
+                         f"| `{r.get('moved_to') or ''}` |")
+
     if build:
         section = build_section(build).rstrip("\n")
         if build.get("stale"):
@@ -258,6 +273,59 @@ def render_summary(output_dir: str, *, queue: Optional[dict] = None, build: Opti
                         "before trusting the result.")
         lines += ["", section]
     return "\n".join(lines) + "\n"
+
+
+def _reverted_intro() -> List[str]:
+    return ["These files were written by an earlier run and no longer parse. The damaged copy was moved "
+            "under `.forge-staging/.damaged/`, so the file reads as its original source again; the pack "
+            "that wrote it has to run again (chained) to redo its changes. A row stays here until it does."]
+
+
+def record_reverted(output_dir: str, entries: Sequence[dict]) -> None:
+    """Note files reverted for damage, until the pack that wrote them runs again."""
+    if not entries:
+        return
+    data = _load_summary(output_dir)
+    for e in entries:
+        data["reverted"][e["file"]] = {k: e.get(k) for k in ("pack", "approved", "found_by", "moved_to")}
+    _save_summary(output_dir, data)
+
+
+def clear_reverted(output_dir: str, pack: str) -> None:
+    """``pack`` ran again over the reverted view, so whatever it had to redo is redone."""
+    data = _load_summary(output_dir)
+    kept = {rel: r for rel, r in data["reverted"].items() if r.get("pack") != pack}
+    if len(kept) != len(data["reverted"]):
+        data["reverted"] = kept
+        _save_summary(output_dir, data)
+
+
+def damaged_section(damaged: Sequence[dict], phase: str) -> List[str]:
+    """The per-run report's account of what the pre-run check found and did."""
+    if not damaged:
+        return []
+    lines = ["", "## Damaged output from earlier runs", ""]
+    if any(d.get("moved_to") for d in damaged):
+        lines += _reverted_intro()
+    else:
+        lines += ["These files, written by an earlier run, do not parse."]
+    lines += ["", "| File | Written by | Human-approved | This run | What to do |",
+              "|------|------------|----------------|----------|------------|"]
+    for d in damaged:
+        owner = d.get("pack") or "?"
+        if d.get("source_broken"):
+            this_run, todo = "left it: the original does not parse either", "fix the file in the source"
+        elif not d.get("moved_to"):
+            this_run, todo = "dry run: changed nothing", f"a real run reverts it; then re-run **{owner}**"
+        else:
+            this_run = "re-migrated it from the original" if d.get("selected") else "does not select it"
+            todo = ("nothing — this pack wrote it" if owner == phase and d.get("selected")
+                    else f"re-run **{owner}**")
+        lines.append(f"| `{d['file']}` | {owner} | {'yes' if d.get('approved') else 'no'} | {this_run} | {todo} |")
+    first = [e for d in damaged for e in (d.get("errors") or [])[:1]]
+    if first:
+        lines += ["", "```", *first, "```"]
+    return lines
 
 
 def write_summary(output_dir: str, *, queue: Optional[dict] = None, build: Optional[dict] = None) -> Path:

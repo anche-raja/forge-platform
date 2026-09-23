@@ -38,6 +38,18 @@ def _print_event(event: dict) -> None:
         print(f"Context snapshot skipped: {event['reason']}")
     elif t == "chained":
         print(f"Chaining: {event['reason']}")
+    elif t == "damaged_output":
+        owner = event.get("pack") or "an earlier pack"
+        approved = " (human-approved)" if event.get("approved") else ""
+        if event.get("source_broken"):
+            what = "and neither does the original; fix it in the source"
+        elif event.get("moved_to"):
+            what = f"moved to {event['moved_to']}; it reads as the original again — re-run {owner}"
+        else:
+            what = "a real run would revert it to the original"
+        print(f"Damaged output: {event['file']}{approved}, written by {owner}, does not parse — {what}")
+    elif t == "output_check_skipped":
+        print(f"Output check skipped: {event['reason']}")
     elif t == "context_missing":
         # Printed before the per-file lines, because it is a caveat on all of them.
         print(f"WARNING: {event['reason']}.\n"

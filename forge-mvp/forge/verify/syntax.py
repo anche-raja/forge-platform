@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Mapping, Tuple
+from typing import Dict, List, Mapping, Tuple
 
 PASS, FAIL, SKIPPED = "PASS", "FAIL", "SKIPPED"
 TIMEOUT_SECONDS = 60
@@ -106,3 +106,62 @@ def check_files(files: Mapping[str, str], config, *, run=subprocess.run) -> Tupl
     if errors:
         return FAIL, errors[:MAX_ERROR_LINES]
     return (SKIPPED if skipped else PASS), []
+
+
+# javac rejecting a newer language feature is the toolchain, not damage: a
+# Java 21 `switch` pattern parsed by a JDK 17 javac says "preview feature".
+_LANGUAGE_LEVEL = re.compile(r"preview feature|not supported in -source|use -source \d+ or higher"
+                             r"|--enable-preview|not supported in this release", re.I)
+_JAVAC_ERROR = re.compile(r"^(?P<file>.+?\.java):\d+: error: ")
+
+
+def check_tree(root: str, rels, config, *, run=subprocess.run) -> Tuple[str, Dict[str, List[str]]]:
+    """``(verdict, {rel: errors})`` for files already on disk under ``root``.
+
+    One javac over every Java file (an argfile, so any number of them): about
+    a quarter of a second for the 297 Java files of the AMS output, where one
+    call per file would take a minute. Only files with errors appear in the
+    map. SKIPPED when Java files needed javac and there is none, or javac
+    failed in a way no file accounts for -- never a verdict on the files.
+    """
+    root_path = Path(root)
+    # A path javac cannot open is "file not found" with no line number, which
+    # would read as an unattributable failure and skip the whole check.
+    present = [str(r) for r in rels if (root_path / r).is_file()]
+    java = [r for r in present if r.lower().endswith(".java")]
+    xml = [r for r in present if r.lower().endswith(_XML_SUFFIXES)]
+    found: Dict[str, List[str]] = {}
+    for rel in xml:
+        try:
+            ET.fromstring((root_path / rel).read_bytes())
+        except ET.ParseError as e:
+            found[rel] = [f"{rel}: {e}"]
+        except OSError:
+            continue
+
+    if not java:
+        return (FAIL if found else PASS), found
+    javac = find_javac(config)
+    if not javac:
+        return (FAIL if found else SKIPPED), found
+    with tempfile.TemporaryDirectory(prefix="forge-syntax-") as tmp:
+        argfile = Path(tmp) / "files.txt"
+        argfile.write_text("\n".join('"' + str(r).replace("\\", "\\\\").replace('"', '\\"') + '"' for r in java),
+                           encoding="utf-8")
+        try:
+            proc = run([javac, *_JAVAC_FLAGS, "-Xmaxerrs", "100000", "-d", tmp, f"@{argfile}"],
+                       cwd=str(root_path), capture_output=True, text=True, timeout=TIMEOUT_SECONDS * 5)
+        except (OSError, subprocess.SubprocessError):
+            return (FAIL if found else SKIPPED), found
+    java_errors: Dict[str, List[str]] = {}
+    for line in ((proc.stdout or "") + (proc.stderr or "")).splitlines():
+        m = _JAVAC_ERROR.match(line)
+        if m:
+            java_errors.setdefault(m.group("file").replace("\\", "/"), []).append(line.strip())
+    if proc.returncode != 0 and not java_errors:
+        return (FAIL if found else SKIPPED), found
+    for rel, errs in java_errors.items():
+        if all(_LANGUAGE_LEVEL.search(e) for e in errs):
+            continue
+        found[rel] = errs[:MAX_ERROR_LINES]
+    return (FAIL if found else PASS), found

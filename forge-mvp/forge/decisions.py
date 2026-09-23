@@ -220,6 +220,46 @@ def remaining_entries(queue: dict, resolved: Dict[tuple, FileStatus], *, source_
     return out
 
 
+def _json_objects(text: str):
+    """Every JSON object in a JSONL log, even two run together on one line.
+
+    The real AMS log starts with a test fixture glued to the first approval
+    (no newline between them); reading it line by line would drop that approval.
+    """
+    decoder = json.JSONDecoder()
+    i, n = 0, len(text)
+    while i < n:
+        while i < n and text[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            return
+        try:
+            obj, i = decoder.raw_decode(text, i)
+        except ValueError:
+            nxt = text.find("\n", i)
+            if nxt < 0:
+                return
+            i = nxt + 1
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def approved_files(output_dir: str) -> set:
+    """Relative paths a human approved, per ``decisions-applied.jsonl``. Never raises."""
+    try:
+        text = (Path(output_dir).expanduser() / APPLIED_LOG).read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    found = set()
+    for row in _json_objects(text):
+        if row.get("decision") == "approve" and row.get("applied"):
+            rel = str(row.get("file") or "").replace("\\", "/")
+            if rel and not rel.startswith("/") and ".." not in rel.split("/"):
+                found.add(rel)
+    return found
+
+
 def write_applied_log(output_dir: str, run: str, decisions: Sequence[Decision], outcomes: Sequence[Outcome]) -> Path:
     path = Path(output_dir) / APPLIED_LOG
     by_file = {o.file: o for o in outcomes}

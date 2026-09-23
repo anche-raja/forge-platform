@@ -35,7 +35,6 @@ comes back as a refusal carrying git's own stderr and a sentence saying which
 branch the repository is now on.
 """
 
-import json
 import os
 import shutil
 import subprocess
@@ -139,43 +138,10 @@ def recorded_files(output_dir: str) -> set:
     manifest before ``service.apply`` started doing so, and a file a human
     signed off on must not be dropped from a landing for a bookkeeping gap.
     """
-    recorded = set(run_manifest.load(str(Path(output_dir).expanduser())))
-    try:
-        from forge.decisions import APPLIED_LOG
-        text = (Path(output_dir).expanduser() / APPLIED_LOG).read_text(encoding="utf-8")
-    except OSError:
-        text = ""
-    for row in _json_objects(text):
-        if row.get("decision") == "approve" and row.get("applied"):
-            rel = str(row.get("file") or "").replace("\\", "/")
-            if rel and not rel.startswith("/") and ".." not in rel.split("/"):
-                recorded.add(rel)
-    return recorded
+    from forge.decisions import approved_files
 
-
-def _json_objects(text: str):
-    """Every JSON object in a JSONL log, even two run together on one line.
-
-    The real AMS log starts with a test fixture glued to the first approval
-    (no newline between them); reading it line by line would drop that approval.
-    """
-    decoder = json.JSONDecoder()
-    i, n = 0, len(text)
-    while i < n:
-        while i < n and text[i] in " \t\r\n":
-            i += 1
-        if i >= n:
-            return
-        try:
-            obj, i = decoder.raw_decode(text, i)
-        except ValueError:
-            nxt = text.find("\n", i)
-            if nxt < 0:
-                return
-            i = nxt + 1
-            continue
-        if isinstance(obj, dict):
-            yield obj
+    root = str(Path(output_dir).expanduser())
+    return set(run_manifest.load(root)) | approved_files(root)
 
 
 def _scan(output_dir: str):

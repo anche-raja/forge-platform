@@ -465,7 +465,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     from forge.review_queue import QUEUE_NAME, write_queue, write_review_page
     from forge.state_store.dynamodb import DynamoDBStateManager
     from forge.utils.file_scanner import scan_java_files
-    from forge.utils.report import REPORT_NAME, generate_report, pack_report_name, record_pack_run
+    from forge.utils.report import REPORT_NAME, clear_reverted, generate_report, pack_report_name, record_pack_run
     from forge.utils.telemetry import MetricsEmitter
 
     clear_context_cache()
@@ -480,8 +480,17 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # extractors, writer — works on real paths, and mirroring the source layout
     # means `write_output`'s relative paths still land correctly in output_dir.
     _chain_dir: Optional[tempfile.TemporaryDirectory] = None
+    damaged: List[dict] = []
     if chain and not resume:
+        from forge.verify import syntax
         from forge.verify.merged_tree import MergedTree
+
+        # Before the view is built: a file an earlier run damaged would
+        # otherwise be read as this pack's input and carried forward. A dry
+        # run only reports it, because a dry run changes nothing on disk.
+        if syntax.enabled(config) and Path(output_dir).is_dir():
+            damaged = check_output(source_dir, output_dir, config, repair=not dry_run, found_by=phase,
+                                   on_event=on_event)["damaged"]
         _chain_dir = tempfile.TemporaryDirectory(prefix="forge-chain-")
         merged = MergedTree(source_dir, output_dir, deleted=run_manifest.deleted_paths(output_dir))
         source_dir = str(merged.materialize(_chain_dir.name).resolve())
@@ -519,6 +528,10 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # Generated targets run after the real files so the descriptors they are
     # built from have already been migrated in this run.
     units = [(f, False) for f in files] + [(g, True) for g in generated]
+    if damaged:
+        chosen = {run_manifest._rel(source_dir, u) for u, _ in units}
+        for d in damaged:
+            d["selected"] = d["file"] in chosen
 
     # Before anything is spent: would this pack overwrite a different pack's
     # work? Packs read the original source, so it would replace rather than
@@ -597,7 +610,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     pack_report_path = output_root / pack_report_name(phase)
     generate_report(output_path=str(pack_report_path), phase=phase, source_dir=source_dir,
                     file_statuses=all_statuses, bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost,
-                    skipped=skipped, passed_over=passed_over)
+                    skipped=skipped, passed_over=passed_over, damaged=damaged)
     report_path = output_root / REPORT_NAME
     report_path.write_text(pack_report_path.read_text(encoding="utf-8"), encoding="utf-8")
 
@@ -631,6 +644,10 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         "cost_usd": round(total_cost, 6),
         "passed_over": passed_over,
     }
+    if not dry_run and not cancelled:
+        # This pack has now run over the reverted view, so whatever it had to
+        # redo on a file an earlier check reverted is redone.
+        clear_reverted(str(output_root), phase)
     record_pack_run(str(output_root), phase, {
         "run": queue["run"], "dry_run": dry_run, "cancelled": cancelled, "totals": totals,
         "acceptance": acceptance_outcome.report.verdict if acceptance_outcome and acceptance_outcome.report else None,
@@ -654,6 +671,79 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
                "generated_tests": testgen_result.paths["record"] if testgen_result else None},
         acceptance=acceptance_outcome, cancelled=cancelled, testgen=testgen_result,
     )
+
+
+# ─── damage an earlier run left behind ────────────────────────────────────────
+
+# Where a damaged output file is moved, under the staging tree: every walker
+# (merged view, landing, project build, test generation) already skips it.
+DAMAGED_DIR = ".damaged"
+
+
+def check_output(source_dir: str, output_dir: str, config: ForgeConfig, *, repair: bool = False,
+                 found_by: str = "", on_event: OnEvent = None) -> dict:
+    """Parse every Java and XML file FORGE wrote into ``output_dir``; revert the ones that fail.
+
+    Chaining reads the output as the next pack's input, and the per-file syntax
+    check only ever sees fresh model output — so a file an earlier run damaged
+    (``}ßßß`` after a brace, a doubled ``}``) was carried forward by every pack
+    after it, the content filter passing over it because nothing was left to
+    modernise. This checks only what ``.forge-writes.json`` says FORGE wrote,
+    never the rest of the source.
+
+    A file whose original does not parse either is reported and left where
+    it is: there is nothing better to revert to, and it is the source that
+    needs fixing.
+
+    With ``repair`` the damaged copy is *moved*, never deleted, to
+    ``.forge-staging/.damaged/<path>`` — a human-approved file included, and
+    flagged as such — and its manifest entry is dropped, so the merged view
+    falls back to the original source. Every file is named in a
+    ``damaged_output`` event and in ``migration-summary.md`` with the pack that
+    wrote it, which has to run again to redo its changes. Costs no model call.
+    """
+    from forge.decisions import approved_files
+    from forge.utils.file_writer import staging_root
+    from forge.utils.report import record_reverted
+    from forge.verify import syntax
+
+    out = Path(output_dir)
+    owners = run_manifest.load(output_dir) if out.is_dir() else {}
+    rels = sorted(r for r in owners if r.lower().endswith((".java", ".xml", ".xmi", ".tld")))
+    if not rels:
+        return {"verdict": syntax.PASS, "checked": 0, "damaged": [], "unparseable_in_source": []}
+    verdict, found = syntax.check_tree(str(out), rels, config)
+    if verdict == syntax.SKIPPED:
+        emit(on_event, {"type": "output_check_skipped",
+                        "reason": "no javac to parse the earlier output with; damage from earlier runs is not checked"})
+    as_source: Dict[str, List[str]] = {}
+    if found:
+        _, as_source = syntax.check_tree(str(Path(source_dir).resolve()), sorted(found), config)
+
+    approved = approved_files(output_dir)
+    damaged: List[dict] = []
+    for rel in sorted(found):
+        # Reverting to an original that is broken too would change nothing,
+        # so that file stays where it is -- and is still reported, because it
+        # still fails the build. (On AMS it was: a half-finished landing had
+        # copied the damaged output back over the source.)
+        source_broken = rel in as_source
+        entry = {"file": rel, "pack": owners.get(rel), "errors": list(found[rel][:5]),
+                 "approved": rel in approved, "found_by": found_by, "moved_to": None,
+                 "source_broken": source_broken, "dry_run": not repair}
+        if repair and not source_broken:
+            target = staging_root(output_dir) / DAMAGED_DIR / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            (out / rel).replace(target)
+            entry["moved_to"] = f"{target.relative_to(out.resolve()).as_posix()}"
+        damaged.append(entry)
+        emit(on_event, {"type": "damaged_output", **entry})
+    reverted = [d for d in damaged if d["moved_to"]]
+    if reverted:
+        run_manifest.forget(output_dir, [d["file"] for d in reverted])
+        record_reverted(output_dir, reverted)
+        refresh_summary(output_dir)
+    return {"verdict": verdict, "checked": len(rels), "damaged": damaged, "reverted": reverted}
 
 
 # ─── project build ────────────────────────────────────────────────────────────
