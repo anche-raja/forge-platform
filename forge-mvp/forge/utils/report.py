@@ -90,6 +90,8 @@ def generate_report(
         f"- **Files skipped (out of scope):** {len(skipped)}",
         f"- **Files passed over (nothing for this pack to change, not sent):** {passed_over}",
         f"- **Files passed (DONE):** {counts.get('DONE', 0)}",
+        f"- **Files unchanged (the model found nothing to change; nothing written):** "
+        f"{sum(1 for fs in file_statuses if fs.get('unchanged'))}",
         f"- **Files retried:** {retried}",
         f"- **Files manual review:** {counts.get('MANUAL_REVIEW', 0)}",
         f"- **Files blocked:** {counts.get('BLOCKED', 0)}",

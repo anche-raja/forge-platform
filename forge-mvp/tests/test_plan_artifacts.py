@@ -211,3 +211,19 @@ def test_a_card_from_an_earlier_pack_is_still_current_after_the_next_pack_runs(p
         outcome = box.execute("apply_review_decisions", stale, tool_id="t2", confirmed=True)
         apply.assert_not_called()
     assert "changed since" in outcome.observation["rejected"][0]["reason"]
+
+
+def test_the_report_counts_unchanged_units(tmp_path):
+    from forge.utils.report import generate_report
+
+    statuses = [{"file_path": "A.java", "status": "DONE", "unchanged": True},
+                {"file_path": "B.java", "status": "DONE"}]
+    out = tmp_path / "r.md"
+    generate_report(output_path=str(out), phase="p", source_dir=str(tmp_path), file_statuses=statuses,
+                    bedrock_calls=1)
+    assert "nothing written):** 1" in out.read_text(encoding="utf-8")
+
+
+def test_the_leader_is_told_never_to_finish_a_failed_landing_by_hand():
+    from forge.leader.agent import _SYSTEM
+    assert "git add ." in _SYSTEM and "Never" in _SYSTEM

@@ -28,6 +28,7 @@ _ENTRY_FIELDS = (
     "status", "phase", "generate", "risk_score", "risk_tier", "risk_reasons",
     "review_score", "review_verdict", "review_feedback", "guardrail_pre_verdict",
     "guardrail_post_verdict", "guardrail_findings", "build_verdict", "build_output", "syntax_verdict", "syntax_errors",
+    "unchanged", "transform_malformed",
     "retry_count", "context_name", "context_digest", "context_missing", "error", "hold_reason",
     "held_paths", "deleted_files", "human_decision", "human_note", "human_rule",
     "human_decided_at",
