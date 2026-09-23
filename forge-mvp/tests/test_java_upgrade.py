@@ -125,13 +125,17 @@ def test_upgrade_unwraps_file_objects(config, java_file):
     assert result["current_file"]["transform_output"]["files"] == {java_file: "class Example {}"}
 
 
-def test_upgrade_unreadable_files_is_manual_review_not_a_crash(config, java_file):
+def test_upgrade_unreadable_files_is_marked_malformed_not_a_crash(config, java_file):
+    """A wrong shape is marked for the retry loop (issue #20), not sent to a human here."""
     m = MagicMock()
     m.content = json.dumps({"files": {java_file: {"language": "java"}}})
     with patch("forge.agents.java_upgrade.ChatBedrockConverse") as MockLLM:
         MockLLM.return_value.invoke.return_value = m
         from forge.agents.java_upgrade import JavaUpgradeAgent
         result = JavaUpgradeAgent(config).run(_state_for(java_file))
-    assert result["current_file"]["status"] == "MANUAL_REVIEW"
-    assert "wrong shape" in result["current_file"]["error"]
+    fs = result["current_file"]
+    assert fs["transform_malformed"] is True and fs["status"] != "MANUAL_REVIEW"
+    assert "wrong shape" in fs["error"]
+    assert "valid JSON object" in fs["review_feedback"]
+    assert fs["transform_output"] is None
     assert result["bedrock_calls"] == 1

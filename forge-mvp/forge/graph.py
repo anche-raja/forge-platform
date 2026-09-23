@@ -44,7 +44,8 @@ def build_graph(config: ForgeConfig):
         already sent to manual review passes through untouched.
         """
         file_status = dict(state["current_file"])
-        if not check_syntax or file_status.get("status") == "MANUAL_REVIEW":
+        if (not check_syntax or file_status.get("status") == "MANUAL_REVIEW"
+                or file_status.get("transform_malformed")):
             return state
         # This attempt's verdict replaces the last one's, so a retry that
         # parses does not carry the previous failure's error forward.
@@ -178,8 +179,19 @@ def build_graph(config: ForgeConfig):
         return "manual_queue"
 
     def route_syntax(state: ForgeState) -> str:
+        """Everything the transform node can conclude, routed before a review is paid for.
+
+        An answer that could not be read and one that does not parse are the
+        same kind of failure -- the model's output is wrong, not the migration --
+        so both retry within ``max_retries`` and cost no review call. A unit
+        the transform already sent to manual review (its source could not be
+        read) goes straight there: a reviewer has nothing to grade, and on a
+        retry would grade the previous attempt's output.
+        """
         fs = state["current_file"]
-        if fs.get("syntax_verdict") != syntax.FAIL or fs.get("status") == "MANUAL_REVIEW":
+        if fs.get("status") == "MANUAL_REVIEW":
+            return "manual_queue"
+        if not fs.get("transform_malformed") and fs.get("syntax_verdict") != syntax.FAIL:
             return "java_reviewer"
         if (fs.get("retry_count") or 0) < config.get("max_retries", 2):
             return "increment_retry"
