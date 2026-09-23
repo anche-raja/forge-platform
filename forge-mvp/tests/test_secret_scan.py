@@ -103,6 +103,57 @@ def test_placeholders_and_references_are_not_secrets(snippet):
     assert find_secrets(snippet + "\n") == [], snippet
 
 
+# Issue #14: two real files were BLOCKED with no secret in them.
+
+def test_placeholder_in_a_multiline_xml_element_is_not_a_secret():
+    """Liberty's <properties> puts one attribute per line, so the property-line
+    reading sees the quotes and the closing ``/>`` around the placeholder."""
+    src = (
+        '<dataSource id="appDS" jndiName="jdbc/appDS">\n'
+        '    <properties URL="${app.datasource.url}"\n'
+        '                user="${app.datasource.user}"\n'
+        '                password="${app.datasource.password}"/>\n'
+        '</dataSource>\n'
+    )
+    assert find_secrets(src) == []
+
+
+@pytest.mark.parametrize("snippet", [
+    '                password="Tr0ub4dor3"/>',       # the same line with a literal
+    '                password="Tr0ub4dor3">',
+    'password: "Tr0ub4dor3"',                          # quoted yaml
+    "password: 'Tr0ub4dor3'",
+])
+def test_unquoting_a_line_still_catches_a_literal_password(snippet):
+    assert find_secrets(snippet + "\n"), snippet
+
+
+def test_quoted_yaml_placeholder_is_not_a_secret():
+    assert find_secrets('password: "${DB_PASSWORD}"\n') == []
+
+
+@pytest.mark.parametrize("decl", [
+    'private static final String CORE_SEED_LOCATION = "classpath*:db/seed/core/*.sql";',
+    # 32 characters, the AES length, so key shape alone used to flag it
+    'private static final String ROLLING_SEED_LOCATION = "classpath*:db/seed/rolling/*.sql";',
+    'private String seedData = "customers-2024";',
+    'String seedScript = "file:/opt/app/seed.sql";',
+    'String DB_PASSWORD_FILE = "classpath:secrets/db.properties";',
+])
+def test_seed_data_and_resource_locations_are_not_secrets(decl):
+    assert find_secrets("class C {\n    " + decl + "\n}\n") == [], decl
+
+
+@pytest.mark.parametrize("decl", [
+    'private String totpSeed = "Tr0ub4dor3xK9m";',       # qualified: an OTP shared secret
+    'String RANDOM_SEED = "Tr0ub4dor3xK9m";',
+    'String walletSeedPhrase = "Tr0ub4dor3xK9m";',
+    'static final String SEED = "0123456789abcdef";',   # unqualified, but key-shaped
+])
+def test_a_seed_that_is_key_material_is_still_found(decl):
+    assert find_secrets("class C {\n    " + decl + "\n}\n"), decl
+
+
 # ─── entropy ─────────────────────────────────────────────────────────────────
 
 def test_high_entropy_literal_is_found_without_a_credential_name():
