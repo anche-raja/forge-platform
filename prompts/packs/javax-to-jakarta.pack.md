@@ -26,6 +26,9 @@ applies_to:
   - content_match:
       glob: "**/*.java"
       pattern: '\bjavax\.(?!(accessibility|annotation\.processing|crypto|imageio|lang\.model|management|naming|net|print|rmi|script|security\.(auth|cert|sasl)|smartcardio|sound|sql|swing|tools|transaction\.xa|xml\.(catalog|crypto|datatype|namespace|parsers|stream|transform|validation|xpath|XMLConstants)|cache|money|measure|vecmath|usb|jdo|portlet|help|media|speech|annotation\.(Nonnull|Nullable|CheckForNull|CheckReturnValue|ParametersAreNonnullByDefault|ParametersAreNullableByDefault|Nonnegative|RegEx|Syntax|MatchesPattern|OverridingMethodsMustInvokeSuper|WillClose|WillNotClose|WillCloseWhenClosed|Signed|Untainted|Tainted|Detainted|PropertyKey|concurrent|meta))\b)'
+# Tests too: a test that still imports javax.servlet does not compile against the
+# migrated dependencies, and the leftover check below scans them.
+include_tests: true
 context: none
 depends_on: []
 decisions: []

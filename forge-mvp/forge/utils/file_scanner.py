@@ -47,8 +47,13 @@ def _wants_tests(spec) -> bool:
     """Whether this phase deliberately targets test sources.
 
     Test sources are excluded by default — they are not what a migration is
-    judged on. A pack that exists to migrate them says so with its globs.
+    judged on. A pack that exists to migrate them says so with its globs
+    (junit4-to-junit5). A pack whose change the tests must follow to compile
+    — a package move, javax.servlet to jakarta.servlet — says so with
+    ``include_tests``, and its applies_to then reads src/test like src/main.
     """
+    if getattr(spec, "include_tests", False):
+        return True
     return any("src/test" in g for g in getattr(spec, "globs", ()))
 
 

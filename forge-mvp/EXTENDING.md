@@ -147,6 +147,15 @@ Globs use FORGE's own matcher, not `fnmatch`: `*` stops at `/`, `**/` crosses di
 >       risk: high
 > ```
 
+> ### Test sources are left out unless you say so
+>
+> The scanner skips `src/test` by default. A pack that exists to migrate tests says so with a glob
+> that names `src/test` (junit4-to-junit5). A pack whose change the tests must follow to compile
+> — a package move — sets `include_tests: true` at the top level, and its `applies_to` then reads
+> `src/test` like `src/main`. javax-to-jakarta and struts2-modernize do: a test still importing
+> `javax.servlet` or XWork no longer builds, and their leftover checks scan `**/*.java`, tests
+> included.
+
 ---
 
 ## The two sections

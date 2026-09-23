@@ -17,6 +17,9 @@ applies_to:
   - file_glob: "**/*-validation.xml"
   - file_glob: "**/validators.xml"
   - file_glob: "**/*.ftl"
+# Tests too: a test that still imports com.opensymphony.xwork2 does not compile against the
+# migrated dependencies, and the leftover check below scans them.
+include_tests: true
 context: none
 depends_on: [build-maven-modernize, javax-to-jakarta]
 decisions: [web_framework]
