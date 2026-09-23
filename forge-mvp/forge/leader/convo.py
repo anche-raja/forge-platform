@@ -55,6 +55,14 @@ class Conversation:
     # discovery.
     source_dir: str = ""
     output_dir: str = ""
+    # Branches land_on_branch created in THIS conversation: branch -> {"base_branch",
+    # "commit", "source_dir"}. open_pull_request pushes only a branch named here
+    # — never one the user already had — and opens the PR into its base_branch,
+    # the branch landing started from. `last_landed` is its default.
+    landings: Dict[str, dict] = field(default_factory=dict)
+    last_landed: str = ""
+    # branch -> pull request URL, once open_pull_request has opened (or found) one.
+    pull_requests: Dict[str, str] = field(default_factory=dict)
     # The job currently writing this conversation, stamped onto every item it
     # adds. A reload mid-turn renders the finished items from the transcript and
     # lets the live stream draw the rest; without the stamp both sources draw
@@ -102,6 +110,11 @@ class Conversation:
                 self.source_dir, self.output_dir = source_dir, output_dir
                 return True
             return self.source_dir == source_dir and self.output_dir == output_dir
+
+    def record_landing(self, branch: str, base_branch: str, commit: str, source_dir: str) -> None:
+        with self.lock:
+            self.landings[branch] = {"base_branch": base_branch, "commit": commit, "source_dir": source_dir}
+            self.last_landed = branch
 
     # ── transcript ───────────────────────────────────────────────────────────
 
@@ -189,6 +202,11 @@ class Conversation:
                 "transcript": [dict(i) for i in self.transcript],
                 "pending": [dict(p) for p in self.pending.values()],
                 "completed": list(self.completed),
+                # The browser reads the output directory from here on a reload:
+                # it is the repository's `.migrated` unless the user named one,
+                # and a page that guessed would read another run's queue.
+                "source_dir": self.source_dir,
+                "output_dir": self.output_dir,
                 "spend_usd": round(self.spend_usd, 6),
                 "leader_cost_usd": round(self.leader_cost_usd, 6),
                 "leader_calls": self.leader_calls,

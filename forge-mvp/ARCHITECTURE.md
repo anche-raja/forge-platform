@@ -490,7 +490,15 @@ wizard's absence so it cannot come back a step at a time.
 
 The leader asks which folder the repository is in and calls `set_project`, so `POST /api/chat`
 takes an OPTIONAL `source_dir` and a turn with no project bound runs anyway — asking is the answer,
-and it cannot be asked from behind a 400. Intent still costs one model call and discovery is still
+and it cannot be asked from behind a 400. With no output directory named, the chat writes into the
+repository's own `<source>/.migrated` (`forge.leader.tools.default_output_dir`; the CLI keeps
+`./migrated`). Every walk of a source tree prunes FORGE output through `forge/utils/fs.py`
+`prune_dirs` — a directory named `.migrated`, or one holding a file only FORGE writes
+(`.forge-writes.json`, `manual-review-queue.json`, `migration-summary.json`, `migration-review.html`,
+`.forge-staging`) — so a run never scans, chains, profiles or builds its own output as source.
+Landing adds that folder to `.git/info/exclude` (local, never committed) before its clean-tree
+check, records the branch it started from as `base_branch`, and never lands or deletes anything
+under the output directory. Intent still costs one model call and discovery is still
 free; the difference is that `resolve_intent` is a tool the leader chooses rather than a step the
 user clicks. `land_on_branch` is the one thing in FORGE that writes into the user's own repository:
 a new branch, one commit, never a push, and always a click.

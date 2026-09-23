@@ -397,6 +397,10 @@ def land_card(result: dict) -> dict:
     return {
         "kind": "land",
         "branch": result.get("branch"),
+        "base_branch": result.get("base_branch") or "",
+        # The output folder is inside the repository and now in .git/info/exclude.
+        "excluded": result.get("excluded"),
+        "exclude_added": bool(result.get("exclude_added")),
         "source_dir": result.get("source_dir"),
         "files_changed": result.get("files_changed", 0),
         "deleted": result.get("deleted", 0),

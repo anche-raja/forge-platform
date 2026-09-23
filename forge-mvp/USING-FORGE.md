@@ -168,8 +168,13 @@ It refuses rather than forcing its way past a problem:
 | Uncommitted changes | Refused — it never stashes |
 | Branch already exists | Refused — it never overwrites |
 
-**One sharp edge:** if the output directory sits inside your repository, landing refuses every time,
-because the work tree is never clean. Add `migrated/` to your `.gitignore`.
+**The output lives inside your repository.** In the chat, FORGE writes the migration to a
+`.migrated/` folder in the repository it is migrating (for `~/forge/ams`, `~/forge/ams/.migrated`)
+unless you name another folder. FORGE never reads that folder back as source — no pack, no
+discovery, no build treats it as your code. Landing adds `/.migrated/` to your clone's
+`.git/info/exclude` before it checks the work tree, so FORGE's own folder never counts as an
+uncommitted change and never reaches a commit. That file is local to your clone and never committed;
+your `.gitignore` is not touched. The landing card says when it added the line.
 
 FORGE's own working files — reports, the review queue — are never committed. The review queue holds
 copies of your source, so it must not end up in a commit.
@@ -257,9 +262,10 @@ The settings most worth knowing:
 | **`AccessDeniedException`** | Enable that model in the Bedrock console for your account |
 | **"FORGE runs one job at a time"** | A run is in progress. Wait, or press Stop |
 | **A run stopped part-way** | Say *"carry on"* — it picks up the files it had not finished |
-| **Landing refuses: work tree not clean** | Commit or stash your own changes; gitignore `migrated/` |
+| **Landing refuses: work tree not clean** | Commit or stash your own changes (FORGE's `.migrated/` is excluded for you) |
 
-Everything FORGE produces lands in the output directory (`./migrated` by default): the migrated
+Everything FORGE produces lands in the output directory — `.migrated/` inside your repository in
+the chat, `./migrated` on the command line: the migrated
 tree, a report of what happened and what it cost, and the review queue. Ask for *"the artifacts"* in
 chat and it lists them with download links.
 

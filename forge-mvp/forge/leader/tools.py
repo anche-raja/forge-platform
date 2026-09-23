@@ -54,9 +54,19 @@ from forge.leader.settings import LeaderSettings
 # read them, and the transcript is the wrong place to keep them.
 CARD_CAP = 25
 DRY_RUN_NOTE = "a dry run costs the same — it still calls the models"
-# The same default the route and the CLI use. A leader that had to invent one
-# would write a migration somewhere the user never looked.
-DEFAULT_OUTPUT_DIR = "./migrated"
+# Where the chat writes a migration when the user names no output directory: a
+# `.migrated` folder inside the repository itself, beside the code it migrates
+# (the owner's call: for AMS that is ~/forge/ams/.migrated). Resolved against the
+# source by `default_output_dir`, never against the server's working directory,
+# which is where the old `./migrated` default put every chat's output. The CLI
+# keeps `./migrated`. Every source walk prunes this name (forge/utils/fs.py), and
+# landing keeps it out of `git status` through `.git/info/exclude`.
+DEFAULT_OUTPUT_DIR = ".migrated"
+
+
+def default_output_dir(source_dir: str) -> str:
+    """The chat's output directory for a repository: ``<source_dir>/.migrated``."""
+    return str(Path(source_dir) / DEFAULT_OUTPUT_DIR)
 # Read this as an instruction, because that is what it is for. Every tool that
 # needs a repository returns exactly this string until `set_project` has run:
 # it names the one thing the leader can do about it, which is ask.
@@ -96,8 +106,9 @@ TOOL_DEFS: List[dict] = [
                 },
                 "output_dir": {
                     "type": "string",
-                    "description": "Where migrated files are written. Defaults to ./migrated — "
-                                   "only pass one if the user names it.",
+                    "description": "Where migrated files are written. Defaults to a .migrated "
+                                   "folder inside the repository — only pass one if the user "
+                                   "names it.",
                 },
             },
             "required": ["source_dir"],
@@ -793,11 +804,13 @@ class Toolbox:
                               "folder the repository is in, as an absolute path or one starting with ~")
         source = str(path.resolve())
 
-        raw_out = str(args.get("output_dir") or "").strip() or DEFAULT_OUTPUT_DIR
+        raw_out = str(args.get("output_dir") or "").strip()
         # Expanded but not resolved, exactly as the route normalises the
         # browser's value: the two have to agree, or the same project posted
-        # from the page would look like a second one and be refused.
-        output = str(Path(raw_out).expanduser())
+        # from the page would look like a second one and be refused. With no
+        # directory named, the repository's own `.migrated` — the route defaults
+        # the same way.
+        output = str(Path(raw_out).expanduser()) if raw_out else default_output_dir(source)
 
         if not self.convo.bind(source, output):
             return self._fail(f"this chat is already working on {self.convo.source_dir} — "
@@ -1279,19 +1292,33 @@ class Toolbox:
                 observation["state"] = state
             return ToolOutcome(False, observation, [], observation["error"])
 
+        base = str(result.get("base_branch") or "")
+        # What open_pull_request needs, recorded now: which branch this chat
+        # made (the only kind it will push) and the branch it started from.
+        self.convo.record_landing(result["branch"], base, str(result.get("commit") or ""),
+                                  str(result.get("source_dir") or self.ctx.source_dir))
         observation = {
             "branch": result["branch"],
+            "base_branch": base,
             "files_changed": result["files_changed"],
             "deleted": result["deleted"],
             "commit": result["commit"],
             "packs": result["packs"],
-            "push_command": result["push_command"],
+            # Nothing was pushed. No push command here on purpose: publishing is
+            # open_pull_request, and the user's click — not a command for the
+            # leader to hand out.
+            "pushed": False,
             # Files in the output directory no run recorded: left behind, named here.
             "skipped_unrecorded": result.get("skipped") or [],
             "skipped_count": result.get("skipped_count", 0),
             # Recorded, but the repository's .gitignore excludes them: not copied.
             "ignored": result.get("ignored") or [],
         }
+        if result.get("excluded"):
+            observation["excluded"] = {
+                "pattern": result["excluded"], "added": bool(result.get("exclude_added")),
+                "note": "the output folder is inside the repository, so it is listed in "
+                        ".git/info/exclude (local to this clone, never committed)"}
         return ToolOutcome(True, observation, [cards.land_card(result)],
                            f"{result['files_changed']} file(s) committed on {result['branch']} "
                            f"({result['commit']}) — not pushed")

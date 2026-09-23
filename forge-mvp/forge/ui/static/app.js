@@ -19,7 +19,7 @@
   // key here on purpose: R9 says the hold gate is not the model's to lower, and
   // the surest way to keep chat.js from writing one is to have nowhere to put it.
   var S = {
-    project: load('forge.project', { source_dir: '', output_dir: './migrated' }),
+    project: load('forge.project', { source_dir: '', output_dir: '' }),
     pollTimer: null
   };
 
@@ -62,8 +62,13 @@
   }
 
   // Downloads out of the output directory the leader bound. Relative to that
-  // directory only — /api/files refuses anything that escapes it.
-  function fileUrl(name) { return '/api/files?output_dir=' + encodeURIComponent(S.project.output_dir || './migrated') + '&name=' + encodeURIComponent(name); }
+  // directory only — /api/files refuses anything that escapes it. No bound
+  // directory, no link: the chat's output lives inside the repository
+  // (<repo>/.migrated), so there is no default to guess at any more.
+  function fileUrl(name) {
+    var out = S.project.output_dir || '';
+    return out ? '/api/files?output_dir=' + encodeURIComponent(out) + '&name=' + encodeURIComponent(name) : '';
+  }
 
   // Follow a job's SSE stream. The browser reconnects with Last-Event-ID on its own; we close on done/error.
   var EVENT_TYPES = ['start', 'skipped', 'file', 'snapshot', 'snapshot_skipped', 'context_missing', 'chained',

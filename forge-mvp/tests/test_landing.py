@@ -90,14 +90,14 @@ def config(tmp_path):
     return write_config(tmp_path)
 
 
-def _output(tmp_path, *, migrated: bool = True) -> Path:
+def _output(tmp_path, *, migrated: bool = True, at: Path = None) -> Path:
     """An output directory shaped like one a finished run leaves behind.
 
     One migrated file, one of every artifact, and a held unit under
     ``.forge-staging/`` — the three kinds of thing that share the directory, of
     which exactly one may be committed.
     """
-    out = tmp_path / "out"
+    out = at if at is not None else tmp_path / "out"
     out.mkdir(parents=True, exist_ok=True)
     if migrated:
         target = out / MIGRATED_REL
@@ -298,15 +298,20 @@ def test_the_landing_observation_is_counts_and_a_command_never_file_text(landed)
     assert ARTIFACT_MARKER not in text
 
 
-def test_landing_never_pushes_and_hands_the_push_command_back_instead(landed):
-    """Pushing is the one step that leaves the machine, so it is the user's.
+def test_landing_never_pushes_and_the_push_command_is_on_the_card_only(landed):
+    """Pushing is the one step that leaves the machine, so it is its own click
+    (open_pull_request), never part of a landing.
 
     The repository has no remote at all, which is also the proof: a landing that
-    tried to push would have failed loudly rather than returned ``ok``.
+    tried to push would have failed loudly rather than returned ``ok``. The
+    command is on the card for the human; the observation carries none, so the
+    leader has nothing to hand out as "push it by hand".
     """
     outcome, repo, _ = landed
 
-    assert outcome.observation["push_command"] == f"git push -u origin {BRANCH}"
+    assert outcome.observation["pushed"] is False
+    assert "push_command" not in outcome.observation
+    assert "git push" not in json.dumps(outcome.observation)
     assert _git(repo, "remote") == "", "a remote was configured behind the user's back"
     assert _git(repo, "for-each-ref", "refs/remotes") == "", "something was pushed"
 
@@ -467,6 +472,135 @@ def test_an_output_holding_only_unrecorded_files_is_refused_and_says_what_is_the
     assert outcome.ok is False
     assert STRAY_REL in outcome.observation["error"]
     assert _branches(repo) == ["main"]
+
+
+# ─── the output folder inside the repository (<repo>/.migrated) ─────────────
+
+def _exclude_lines(repo):
+    path = Path(repo) / ".git" / "info" / "exclude"
+    return path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+
+
+def test_an_output_folder_inside_the_repository_is_excluded_locally_and_the_landing_proceeds(repo, tmp_path,
+                                                                                              config):
+    """The chat's default output is ``<repo>/.migrated``: untracked, so every
+    landing would refuse on a dirty tree made of FORGE's own folder. It goes
+    into ``.git/info/exclude`` — local, never committed — and the project's
+    ``.gitignore`` is never touched."""
+    (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore logs")
+    out = _output(tmp_path, at=repo / ".migrated")
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert "/.migrated/" in _exclude_lines(repo)
+    assert (repo / ".gitignore").read_text(encoding="utf-8") == "*.log\n", "the project's .gitignore is theirs"
+    assert _commit_files(repo) == [MIGRATED_REL], "nothing under .migrated/ may be committed"
+    assert _git(repo, "status", "--porcelain") == "", "the output folder still shows as a change"
+    assert outcome.observation["excluded"]["pattern"] == "/.migrated/"
+    assert outcome.observation["excluded"]["added"] is True
+    card = outcome.cards[0]
+    assert card["excluded"] == "/.migrated/" and card["exclude_added"] is True
+    # The output folder is still there, untouched, and still FORGE's.
+    assert (out / MIGRATED_REL).is_file() and (out / "manual-review-queue.json").is_file()
+
+
+def test_the_exclude_is_idempotent_and_leaves_existing_lines_alone(repo):
+    from forge.leader.landing import exclude_output
+
+    info = repo / ".git" / "info"
+    info.mkdir(exist_ok=True)
+    (info / "exclude").write_text("# the user's own\n*.swp", encoding="utf-8")    # no trailing newline
+
+    assert exclude_output(str(repo), ".migrated") == ("/.migrated/", True)
+    assert exclude_output(str(repo), ".migrated") == ("/.migrated/", False)
+
+    lines = _exclude_lines(repo)
+    assert lines[:2] == ["# the user's own", "*.swp"], lines
+    assert lines.count("/.migrated/") == 1, lines
+
+
+def test_an_exclude_pattern_matches_the_folder_literally():
+    from forge.leader.landing import exclude_pattern
+
+    assert exclude_pattern(".migrated") == "/.migrated/"
+    assert exclude_pattern("tools/out[1]*") == "/tools/out\\[1]\\*/"
+
+
+def test_a_refused_landing_writes_no_exclude(repo, tmp_path, config):
+    """Every other refusal is ruled out before the exclude is written: an
+    existing branch leaves .git/info/exclude as it was."""
+    _git(repo, "branch", BRANCH)
+    out = _output(tmp_path, at=repo / ".migrated")
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is False and BRANCH in outcome.observation["error"]
+    assert "/.migrated/" not in _exclude_lines(repo)
+
+
+def test_tracked_files_under_the_output_folder_still_count_as_uncommitted(repo, tmp_path, config):
+    """An exclude hides untracked files only. A tracked, modified file under
+    the output folder is somebody's change, and landing still refuses."""
+    out = _output(tmp_path, at=repo / ".migrated")
+    (out / "notes.txt").write_text("tracked\n", encoding="utf-8")
+    _git(repo, "add", "-f", ".migrated/notes.txt")
+    _git(repo, "commit", "-qm", "someone committed into the output folder")
+    (out / "notes.txt").write_text("changed\n", encoding="utf-8")
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is False
+    assert "uncommitted" in outcome.observation["error"]
+    assert "tracks files under it" in outcome.observation["error"], outcome.observation["error"]
+    assert _branches(repo) == ["main"]
+
+
+def test_a_nested_forge_output_inside_the_output_is_never_landed(repo, tmp_path, config):
+    """Another run's output inside this one — even recorded in the manifest —
+    is not this migration."""
+    out = _output(tmp_path, at=repo / ".migrated")
+    nested = out / ".migrated" / MIGRATED_REL
+    nested.parent.mkdir(parents=True)
+    nested.write_text(MIGRATED, encoding="utf-8")
+    run_manifest.record(str(out), "javax-to-jakarta", [str(nested)])
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert _commit_files(repo) == [MIGRATED_REL]
+
+
+def test_the_branch_landing_started_from_is_recorded_for_the_pull_request(repo, tmp_path, config):
+    """open_pull_request opens the PR into the branch landing started from
+    (h2-native on AMS), so landing records it — on the result and the chat."""
+    _git(repo, "checkout", "-q", "-b", "h2-native")
+    out = _output(tmp_path, at=repo / ".migrated")
+
+    outcome, convo = _land(repo, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert outcome.observation["base_branch"] == "h2-native"
+    assert outcome.cards[0]["base_branch"] == "h2-native"
+    assert convo.last_landed == BRANCH
+    assert convo.landings[BRANCH]["base_branch"] == "h2-native"
+    assert convo.landings[BRANCH]["commit"] == outcome.observation["commit"]
+
+
+def test_the_exclude_lands_in_the_common_git_dir_of_a_linked_worktree(repo, tmp_path, config):
+    """In a linked worktree `.git` is a file; `git rev-parse --git-path` finds the exclude."""
+    tree = tmp_path / "linked"
+    _git(repo, "worktree", "add", "-q", "-b", "h2-native", str(tree))
+    out = _output(tmp_path, at=tree / ".migrated")
+
+    outcome, _ = _land(tree, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert outcome.observation["base_branch"] == "h2-native"
+    assert "/.migrated/" in _exclude_lines(repo)
+    assert _git(tree, "status", "--porcelain") == ""
 
 
 # ─── the cross-check that keeps the list honest ──────────────────────────────

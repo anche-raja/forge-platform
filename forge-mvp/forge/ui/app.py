@@ -116,6 +116,10 @@ class ChatRequest(Project):
     """
 
     source_dir: Optional[str] = None
+    # Unset means the repository's own `.migrated` (forge.leader.tools
+    # .default_output_dir), the same default set_project applies — never the
+    # server's working directory.
+    output_dir: Optional[str] = None
     conversation_id: Optional[str] = None
     message: Optional[str] = None
     action: Optional[Dict[str, Any]] = None
@@ -354,7 +358,7 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
         — the invariant jobs.py enforces by allowing only one.
         """
         from forge.leader.agent import LeaderAgent
-        from forge.leader.tools import ProjectContext
+        from forge.leader.tools import ProjectContext, default_output_dir
 
         has_message, has_action = body.message is not None, body.action is not None
         if has_message == has_action:
@@ -384,7 +388,8 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
         # 400 the leader cannot answer.
         if body.source_dir is not None and str(body.source_dir).strip():
             source = _source(body.source_dir)
-            output_dir = str(Path(body.output_dir).expanduser())
+            output_dir = (str(Path(body.output_dir).expanduser()) if str(body.output_dir or "").strip()
+                          else default_output_dir(source))
             if not convo.bind(source, output_dir):
                 raise HTTPException(400, "this conversation belongs to a different project — start a new chat")
         else:

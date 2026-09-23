@@ -363,6 +363,28 @@ def test_a_turn_with_no_project_yet_runs_so_the_leader_can_ask_which_folder(clie
     assert again["conversation_id"] == posted["conversation_id"]
 
 
+def test_a_chat_that_names_no_output_dir_writes_into_the_repositorys_own_migrated(client, project, tmp_path):
+    """The chat's output lives inside the repository it migrates — never in
+    the server's working directory — and the conversation hands that folder
+    back to the browser, which must not guess one of its own."""
+    body = {"config": client.cfg, "source_dir": str(project), "message": "profile it"}
+    posted, _ = _turn(client, body, [text_turn("Looking.")])
+
+    convo = client.get(f"/api/chat/{posted['conversation_id']}").json()
+    assert convo["source_dir"] == str(project.resolve())
+    assert convo["output_dir"] == str(project.resolve() / ".migrated")
+
+
+def test_the_chat_pages_never_fall_back_to_a_migrated_folder_of_their_own():
+    """`./migrated` was the server's working directory, not the repository's."""
+    from pathlib import Path as _P
+
+    static = _P(app_module.__file__).parent / "static"
+    for name in ("chat.js", "app.js"):
+        text = (static / name).read_text(encoding="utf-8")
+        assert "'./migrated'" not in text, f"{name} still assumes ./migrated for the chat"
+
+
 def test_a_source_dir_that_is_there_but_wrong_is_still_a_400(client, tmp_path):
     """Optional is not "unchecked". A path the user typed that does not exist is
     a mistake to show them, not an unbound conversation to carry on with."""

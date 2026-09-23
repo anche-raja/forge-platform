@@ -54,8 +54,9 @@ def ctx(project, tmp_path):
 
 @pytest.fixture(autouse=True)
 def _cwd(tmp_path, monkeypatch):
-    """``set_project`` with no ``output_dir`` profiles into ``./migrated`` — the
-    working directory's, which under ``pytest`` is forge-mvp, where the owner's
+    """``set_project`` with no ``output_dir`` profiles into the repository's own
+    ``.migrated`` now, but a relative ``output_dir`` still resolves against the
+    working directory — which under ``pytest`` is forge-mvp, where the owner's
     real runs land. Each test here starts in its own ``tmp_path`` instead."""
     monkeypatch.chdir(tmp_path)
 
@@ -892,6 +893,39 @@ def test_set_project_binds_the_conversation_and_profiles_it_in_the_same_breath(c
         "set_project carries the profile_project observation, so the leader can propose work at once")
     assert convo.selected_packs, "a maven project with javax imports activates at least one pack"
     assert outcome.cards and outcome.cards[0]["kind"] == "plan"
+
+
+def test_set_project_with_no_output_dir_writes_into_the_repositorys_own_migrated_folder(ctx, project):
+    """The owner's call: the migration lives inside the repository it migrates,
+    at ``<repo>/.migrated`` — and FORGE never reads that folder back as source."""
+    from forge.leader.tools import DEFAULT_OUTPUT_DIR
+    from forge.utils.fs import FORGE_OUTPUT_DIR_NAMES
+
+    assert DEFAULT_OUTPUT_DIR in FORGE_OUTPUT_DIR_NAMES, "every source walk has to prune the default"
+    convo = Conversation()
+    box = Toolbox(_unbound(ctx.config), convo, LeaderSettings.from_config(ctx.config),
+                  lambda event: None, None)
+
+    first = box.execute("set_project", {"source_dir": str(project)}, tool_id="t1")
+
+    resolved = Path(str(project)).resolve()
+    assert first.ok is True, first.observation
+    assert first.observation["output_dir"] == str(resolved / ".migrated")
+    assert convo.output_dir == str(resolved / ".migrated") == box.ctx.output_dir
+    assert (resolved / ".migrated" / "forge-profile.yaml").is_file(), "discovery wrote into the repository's folder"
+
+    # Profiling again reads the same repository: the folder it just wrote is not source.
+    again = box.execute("profile_project", {}, tool_id="t2")
+    assert again.observation["counts"] == first.observation["counts"]
+
+
+def test_a_named_output_dir_still_wins_over_the_default(ctx, project, tmp_path):
+    convo = Conversation()
+    box = Toolbox(_unbound(ctx.config), convo, LeaderSettings.from_config(ctx.config),
+                  lambda event: None, None)
+    outcome = box.execute("set_project", {"source_dir": str(project), "output_dir": str(tmp_path / "elsewhere")},
+                          tool_id="t1")
+    assert outcome.observation["output_dir"] == str(tmp_path / "elsewhere")
 
 
 def test_a_second_different_project_in_the_same_chat_is_refused_and_the_first_one_stands(ctx, project, tmp_path):

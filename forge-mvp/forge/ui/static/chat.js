@@ -292,6 +292,7 @@
       try { data = await api('GET', '/api/chat/' + encodeURIComponent(C.id)); }
       catch (e) { forget(); }   // a restarted server has never heard of this id
     }
+    if (data) bindProject(data);
     await reconcileQueue();
     if (data) draw(data);
     else spend(null, null);
@@ -300,6 +301,19 @@
     railPath();
     refreshCards();
     fit(true);
+  }
+
+  // The conversation's own directories, as the server bound them. The output
+  // directory is the repository's `.migrated` unless the user named another, so
+  // the browser must never fall back to a default of its own: a queue read or a
+  // download against the wrong folder would judge every card by another run.
+  function bindProject(data) {
+    var source = str(data.source_dir), out = str(data.output_dir);
+    var p = S().project;
+    if (!source) return;
+    if (p.source_dir === source && p.output_dir === out) return;
+    p.source_dir = source; p.output_dir = out;
+    window.FORGE.save();
   }
 
   function draw(data) {
@@ -338,7 +352,7 @@
     // so the remembered dirs would point a download or a queue read at a project
     // this chat is no longer working on.
     var p = S().project;
-    p.source_dir = ''; p.output_dir = './migrated';
+    p.source_dir = ''; p.output_dir = '';
     window.FORGE.save();
     await reload();
   }
@@ -1252,7 +1266,9 @@
     button.disabled = true;
     status.textContent = 'reading the queue…';
     var v;
-    try { v = await api('GET', '/api/review?output_dir=' + encodeURIComponent(S().project.output_dir || './migrated')); }
+    var out = str(S().project.output_dir);
+    if (!out) { status.textContent = 'no output directory is bound to this chat yet'; button.disabled = false; return; }
+    try { v = await api('GET', '/api/review?output_dir=' + encodeURIComponent(out)); }
     catch (e) { status.textContent = fmtErr(e); button.disabled = false; return; }
 
     while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
@@ -1434,6 +1450,11 @@
       + cell(card.deleted || 0, 'deleted') + cell(str(card.commit).slice(0, 10) || '—', 'commit')
       + cell(packs.length, 'packs') + '</div>'
       + (card.source_dir ? '<p class="hint mono">' + esc(card.source_dir) + '</p>' : '')
+      + (card.base_branch ? '<p class="hint">Branched from <span class="mono">' + esc(card.base_branch) + '</span>.</p>' : '')
+      + (card.excluded ? '<p class="hint">The output folder is inside the repository, so '
+          + '<span class="mono">' + esc(card.excluded) + '</span> '
+          + (card.exclude_added ? 'was added to' : 'is already in')
+          + ' <span class="mono">.git/info/exclude</span> — local to this clone, never committed. Your .gitignore was not touched.</p>' : '')
       + (packs.length ? '<ol class="chips">' + packs.map(function (p) { return '<li>' + esc(p) + '</li>'; }).join('') + '</ol>' : '')
       + block('Files committed', files)
       + block('Files removed', arr(card.deleted_files).map(function (f) { return str(f); }))
@@ -1475,9 +1496,9 @@
   // ─── the review queue, and which cards may still act on it ────────────────
   async function reconcileQueue() {
     var p = S().project;
-    if (!p.source_dir) { C.queue = { run: '', keys: {} }; return; }
+    if (!p.source_dir || !p.output_dir) { C.queue = { run: '', keys: {} }; return; }
     try {
-      var v = await api('GET', '/api/review?output_dir=' + encodeURIComponent(p.output_dir || './migrated'));
+      var v = await api('GET', '/api/review?output_dir=' + encodeURIComponent(p.output_dir));
       var keys = {};
       arr(v.entries).forEach(function (e) { keys[str(e.rel_path) + '|' + str(e.pack)] = true; });
       C.queue = { run: str(v.run), keys: keys };

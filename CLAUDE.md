@@ -113,7 +113,11 @@ nine-step wizard is gone — the owner counted the steps and asked for "prompt i
 setup" — so the leader agent (`forge/leader/`) asks which folder the repository is in, calls the
 tools, and every step the wizard had is now a card in the transcript: the plan, the evidence behind
 it, an estimate, review cards with diffs and approve/reject, acceptance, artifacts, and
-`land_on_branch` to put the result on a git branch. Discovery is still free; intent still costs one
+`land_on_branch` to put the result on a git branch. With no output directory named, the chat writes
+into the repository itself, `<repo>/.migrated`; every source walk prunes FORGE output
+(`forge/utils/fs.py` `prune_dirs`: that name, or a directory holding a FORGE marker file), and
+landing adds the folder to `.git/info/exclude` (never the project's `.gitignore`) before its
+clean-tree check. Discovery is still free; intent still costs one
 model call; anything over `leader.confirm_above_usd` parks a card and waits for a click. It is
 for one engineer on their own machine: loopback only, no auth, one job at a time (a second run is
 refused with 409 because the extract cache and boto3 clients are process-global). **The UI and the

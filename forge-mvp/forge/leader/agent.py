@@ -101,7 +101,7 @@ Landing the work:
 - It refuses rather than tidies up: a dirty work tree, a branch that already exists, a folder
   that is not a git repository. Pass the refusal on in their words and let them fix it. Never
   suggest FORGE could stash, force or amend anything — it will not.
-- It does not push. Tell them the push command came back for them to run.
+- It does not push. The landing card shows the push command; the branch stays local.
 - If landing fails, pass on exactly what it reported about the repository's state and stop. Never
   tell the user to finish it by hand with `git add .` or a manual commit: that stages FORGE's own
   files and anything else the output folder holds, which is what landing exists to filter out.
