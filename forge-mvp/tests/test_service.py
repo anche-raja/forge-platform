@@ -14,7 +14,10 @@ from forge.config import ForgeConfig
 from tests.conftest import mocked_aws, write_config
 
 LEGACY = "package com.corp.user;\nimport javax.persistence.Entity;\npublic class UserAction {}\n"
-HIGH = "package com.corp;\npublic class WebSecurityConfig extends WebSecurityConfigurerAdapter {}\n"
+# The javax import is what puts it in javax-to-jakarta (the pack selects by content);
+# the class name is what makes it HIGH risk.
+HIGH = ("package com.corp;\nimport javax.servlet.Filter;\n"
+        "public class WebSecurityConfig extends WebSecurityConfigurerAdapter {}\n")
 
 
 @pytest.fixture

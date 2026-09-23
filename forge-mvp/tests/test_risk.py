@@ -84,13 +84,31 @@ def test_jsp_ognl_density(count, points):
 
 def test_pack_content_matcher_hit_is_high_by_rule():
     class Spec:
-        content_matchers = (("**/*.java", r"@EnableGlobalMethodSecurity"),)
+        high_risk_matchers = (("**/*.java", r"@EnableGlobalMethodSecurity"),)
 
     src = _java("@EnableGlobalMethodSecurity public class GlobalSecurityConfig {}")
     score, tier, reasons = score_unit("/p/GlobalSecurityConfig.java", src, Spec())
     assert tier == "HIGH" and "matched the pack's content selector: HIGH by rule" in reasons
     # The same file under a pack with no matchers is just a small Java file.
     assert score_unit("/p/GlobalSecurityConfig.java", src)[1] == "LOW"
+
+
+def test_plain_content_matcher_hit_adds_no_risk():
+    """A matcher that only selects relevant files (javax.servlet users) is not a hazard."""
+    class Spec:
+        content_matchers = (("**/*.java", r"javax\.servlet"),)
+        high_risk_matchers = ()
+
+    src = _java("import javax.servlet.Filter; public class F {}")
+    assert score_unit("/p/F.java", src, Spec())[1] == "LOW"
+
+
+def test_packs_flag_only_security_config_as_high_risk():
+    from forge.packs import load_packs
+
+    registry = load_packs()
+    flagged = {p for p in registry.order if registry[p].high_risk_matchers}
+    assert flagged == {"springsec-to-springsec6"}
 
 
 def test_score_is_capped_at_100():

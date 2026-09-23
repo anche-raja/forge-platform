@@ -20,7 +20,7 @@ from tests.conftest import llm_reply, mocked_aws, write_config
 
 JAVAX = """package com.corp;
 import javax.servlet.http.HttpServletRequest;
-public class A { void f(HttpServletRequest r) {} }
+public class A { boolean f(HttpServletRequest r) { return r instanceof Object; } }
 """
 JAKARTA = JAVAX.replace("javax.servlet", "jakarta.servlet")
 JAKARTA_21 = JAKARTA.replace("public class A", "public final class A")

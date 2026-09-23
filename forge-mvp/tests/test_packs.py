@@ -640,6 +640,11 @@ def test_builtin_phase_scanning_is_unchanged(tmp_path):
     java21 = [Path(f).name for f in scan_java_files(str(src), "java21").files]
     struts = [Path(f).name for f in scan_java_files(str(src), "struts2-modernize").files]
     assert java21 == ["Foo.java"]
+    # struts2-modernize selects Java by content: a class that never touches
+    # Struts is not sent, the descriptor still is by name.
+    assert sorted(struts) == ["struts-config.xml"]
+    (src / "com/corp/Foo.java").write_text("import com.opensymphony.xwork2.ActionSupport;\n", encoding="utf-8")
+    struts = [Path(f).name for f in scan_java_files(str(src), "struts2-modernize").files]
     assert sorted(struts) == ["Foo.java", "struts-config.xml"]
 
 
@@ -829,3 +834,40 @@ def test_web_bootstrap_packs_selectors_match_the_extractor(library):
         assert pack.context == "web_bootstrap"
         for sel in pack.selectors:
             assert ext.provides(sel), f"{pid} uses selector '{sel}' the extractor does not provide"
+
+
+# ─── Packs select only files they can change ─────────────────────────────────
+
+def test_javax_to_jakarta_takes_only_files_that_reference_jakarta_ee(tmp_path):
+    """Imports and fully qualified uses are in; JDK javax.* and plain classes are out."""
+    from forge.utils.file_scanner import scan_java_files
+
+    base = tmp_path / "src/main/java/com/corp"
+    base.mkdir(parents=True)
+    files = {
+        "Imports.java": "import javax.servlet.Filter;\nclass Imports {}\n",
+        "Qualified.java": "class Qualified { javax.servlet.http.HttpSession s; }\n",
+        "JdkOnly.java": "import javax.sql.DataSource;\nimport javax.xml.parsers.DocumentBuilder;\nclass JdkOnly {}\n",
+        "Plain.java": "class Plain {}\n",
+    }
+    for name, body in files.items():
+        (base / name).write_text(body, encoding="utf-8")
+
+    taken = sorted(Path(f).name for f in scan_java_files(str(tmp_path), "javax-to-jakarta").files)
+    assert taken == ["Imports.java", "Qualified.java"]
+
+
+@pytest.mark.parametrize("body, taken", [
+    ("class A { Integer i = new Integer(1); }", True),            # Rule 1: boxed constructor
+    ("class A { Runnable r = new Runnable() { public void run() {} }; }", True),  # Rule 2: anonymous class
+    ("class A { boolean f(Object o) { return o instanceof String; } }", True),    # Rule 2: instanceof
+    ('class A { String q = "select *"\n    + "from t"; }', True),  # Rule 2: multi-line concatenation
+    ("class A { byte[] b = s.getBytes(); }", True),                # Rule 3: default charset
+    ("class A { Calendar c; }", True),                             # Rule 4: date/time
+    ("class A { private final String name; String getName() { return name; } }", False),
+])
+def test_java8_to_java21_takes_only_files_with_something_to_rewrite(tmp_path, body, taken):
+    from forge.utils.file_scanner import scan_java_files
+
+    (tmp_path / "A.java").write_text(body + "\n", encoding="utf-8")
+    assert bool(scan_java_files(str(tmp_path), "java8-to-java21").files) is taken

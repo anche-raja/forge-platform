@@ -157,10 +157,15 @@ def _applies_to(meta: dict, where: Path) -> Tuple[Dict[str, str], ...]:
                 f"{where}: applies_to key must be 'file_glob', 'content_match' or 'selector', got '{key}'"
             )
         if key == "content_match":
-            if not isinstance(value, dict) or set(value) != {"glob", "pattern"}:
+            # `risk: high` marks a pattern that finds dangerous files (a security
+            # config), not merely relevant ones; only then is a hit HIGH by rule.
+            if (not isinstance(value, dict) or not {"glob", "pattern"} <= set(value)
+                    or not set(value) <= {"glob", "pattern", "risk"}):
                 raise PackError(
-                    f"{where}: applies_to 'content_match' needs exactly {{glob, pattern}}, got {value!r}"
+                    f"{where}: applies_to 'content_match' needs {{glob, pattern}} and optionally risk, got {value!r}"
                 )
+            if "risk" in value and value["risk"] != "high":
+                raise PackError(f"{where}: applies_to 'content_match' risk may only be 'high', got {value['risk']!r}")
             try:
                 re.compile(value["pattern"])
             except re.error as e:

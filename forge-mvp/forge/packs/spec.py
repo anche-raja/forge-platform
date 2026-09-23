@@ -153,6 +153,20 @@ class PackSpec:
         )
 
     @property
+    def high_risk_matchers(self) -> Tuple[Tuple[str, str], ...]:
+        """The ``content_matchers`` declared ``risk: high``.
+
+        Most content matchers only say a file is *relevant* ("it imports
+        javax.servlet"). A few say it is *dangerous* ("it configures Spring
+        Security"), and only those make a hit HIGH risk by rule.
+        """
+        return tuple(
+            (a["content_match"]["glob"], a["content_match"]["pattern"])  # type: ignore[index]
+            for a in self.applies_to
+            if "content_match" in a and a["content_match"].get("risk") == "high"  # type: ignore[union-attr]
+        )
+
+    @property
     def selectors(self) -> Tuple[str, ...]:
         """Named file sets that only a context extractor can resolve.
 

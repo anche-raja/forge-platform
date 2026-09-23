@@ -14,7 +14,13 @@ detect:
     - import_prefix: "javax.xml.bind"
     - dependency: "javax.servlet:javax.servlet-api"
 applies_to:
-  - file_glob: "**/*.java"
+  # Only files that reference a Jakarta EE javax.* package. Not anchored on
+  # `import`: a fully qualified use (javax.servlet.http.HttpSession in a
+  # signature) needs migrating too. JDK javax.* (sql, crypto, xml.parsers) is
+  # deliberately absent -- those stay, so a file using only them is not sent.
+  - content_match:
+      glob: "**/*.java"
+      pattern: '\bjavax\.(servlet|persistence|validation|transaction|ejb|enterprise|faces|el|jms|mail|ws\.rs|websocket|interceptor|inject|annotation\.(Resource|PostConstruct|PreDestroy)|xml\.(bind|soap|ws))\b'
 context: none
 depends_on: []
 decisions: []
@@ -23,7 +29,9 @@ eliminates:
   - "javax.annotation:javax.annotation-api"
   - "javax.validation:validation-api"
 acceptance:
-  - no_match: '^import javax\.(servlet|persistence|validation|transaction|ejb|enterprise|faces|el|jms|mail|ws\.rs|websocket|interceptor|annotation\.(Resource|PostConstruct|PreDestroy)|xml\.(bind|soap|ws))'
+  # Same package list as applies_to, and unanchored for the same reason: a
+  # fully qualified javax.servlet reference left behind is still unmigrated.
+  - no_match: '\bjavax\.(servlet|persistence|validation|transaction|ejb|enterprise|faces|el|jms|mail|ws\.rs|websocket|interceptor|inject|annotation\.(Resource|PostConstruct|PreDestroy)|xml\.(bind|soap|ws))\b'
     scope: "**/*.java"
   - count_unchanged: '^import javax\.(sql|crypto|net|naming|security\.auth|xml\.(parsers|transform|stream|xpath)|imageio|swing|management|script|tools|lang\.model|annotation\.processing)'
     scope: "**/*.java"

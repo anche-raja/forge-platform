@@ -12,7 +12,10 @@ import migrate
 from forge.decisions import Decision, find_entry, load_decisions
 from tests.conftest import llm_reply, write_config
 
-HIGH = "package com.corp;\npublic class WebSecurityConfig extends WebSecurityConfigurerAdapter {}\n"
+# The javax import is what puts it in javax-to-jakarta (the pack selects by content);
+# the class name is what makes it HIGH risk.
+HIGH = ("package com.corp;\nimport javax.servlet.Filter;\n"
+        "public class WebSecurityConfig extends WebSecurityConfigurerAdapter {}\n")
 LOW = "package com.corp;\nimport javax.persistence.Entity;\npublic class Util {}\n"
 MIGRATED = "package com.corp;\n// migrated by the model\n"
 STAGED = Path(".forge-staging/src/main/java/com/corp/WebSecurityConfig.java")

@@ -105,6 +105,14 @@ def _extractor_for(spec):
     return extractor
 
 
+def _content_matches(path: Path, patterns) -> bool:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return any(re.search(p, content) for p in patterns)
+
+
 def scan_java_files(
     source_dir: str,
     phase: str = "java21",
@@ -164,15 +172,6 @@ def scan_java_files(
             if "src/test" in rel_path and not _wants_tests(spec):
                 continue
 
-            excluded_by = _excluded_by(rel_path, exclude_globs)
-            if excluded_by:
-                # Only report a path the phase would otherwise have taken —
-                # every other file in the tree is already none of its business.
-                if spec.includes(rel_path):
-                    skipped.append(SkippedFile(path=str(abs_path), package="",
-                                               reason=f"excluded by scope glob '{excluded_by}'"))
-                continue
-
             # Packs match on the path ("**/WEB-INF/web.xml"); a PhaseSpec reads
             # the basename off it. Passing the relative path satisfies both.
             matched = spec.includes(rel_path)
@@ -180,6 +179,17 @@ def scan_java_files(
                 pattern for glob, pattern in getattr(spec, "content_matchers", ())
                 if glob_match(glob, rel_path)
             ]
+
+            excluded_by = _excluded_by(rel_path, exclude_globs)
+            if excluded_by:
+                # Only report a path the phase would otherwise have taken —
+                # every other file in the tree is already none of its business.
+                # A pack that selects by content would have taken it only if the
+                # content matches, so that is read before the file is reported.
+                if matched or (matchers and _content_matches(abs_path, matchers)):
+                    skipped.append(SkippedFile(path=str(abs_path), package="",
+                                               reason=f"excluded by scope glob '{excluded_by}'"))
+                continue
             if not matched and not matchers:
                 continue
 

@@ -10,7 +10,17 @@ detect:
     - property_lt: {name: "maven.compiler.release", value: "21"}
     - gradle_property_lt: {name: "sourceCompatibility", value: "21"}
 applies_to:
-  - file_glob: "**/*.java"
+  # Only files carrying something a transform rule below acts on: a removed
+  # API (Rule 1), an idiom candidate -- anonymous class, instanceof, switch,
+  # multi-line string concatenation (Rule 2), a default-charset or exec call
+  # (Rule 3), or Date/Calendar/SimpleDateFormat (Rule 4). A file with none of
+  # these has nothing to rewrite and costs no model call. Not selected by
+  # content: `record` and `var` candidates, which no pattern can recognise
+  # reliably -- a file is still offered them when another trigger sends it.
+  # Keep this list in step with the rules: a rule with no trigger here never runs.
+  - content_match:
+      glob: "**/*.java"
+      pattern: '\.(stop|suspend|resume)\(\)|runFinalizersOnExit|\bvoid\s+finalize\s*\(|\bSecurityManager\b|\bAccessController\b|\.newInstance\(\)|\bnew\s+(Integer|Long|Short|Byte|Character|Boolean|Double|Float)\s*\(|\bsun\.|\bnew\s+[\w.]+(<[^>]*>)?\s*\([^()]*\)\s*\{|\binstanceof\b|\bswitch\s*\(|"\s*\+\s*\n\s*"|"\s*\n\s*\+\s*"|\bnew\s+String\s*\(|\.getBytes\(\s*\)|\bnew\s+(FileReader|FileWriter|InputStreamReader|OutputStreamWriter|PrintWriter|PrintStream)\s*\(|\.exec\s*\(|\bnew\s+Date\s*\(|\bCalendar\b|\bSimpleDateFormat\b'
 context: none
 depends_on: [build-maven-modernize]
 decisions: [idiom_aggressiveness]

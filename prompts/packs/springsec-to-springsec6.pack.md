@@ -13,6 +13,7 @@ applies_to:
   - content_match:
       glob: "**/*.java"
       pattern: 'WebSecurityConfigurerAdapter|@EnableWebSecurity|@EnableGlobalMethodSecurity|@EnableMethodSecurity|GlobalMethodSecurityConfiguration|SecurityFilterChain'
+      risk: high   # security configuration: every hit is HIGH risk by rule
 context: none
 depends_on: [spring-to-spring6]
 decisions: []

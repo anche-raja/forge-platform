@@ -62,9 +62,11 @@ def score_unit(
 ) -> Tuple[int, str, List[str]]:
     """``(score 0–100, tier, reasons)`` for one unit.
 
-    ``spec`` is the pack (or phase) migrating it; its ``content_matchers`` mark
-    files the pack itself singled out by content — a security config, say —
-    and a hit there is HIGH by rule. ``ctx_summary`` may carry an extracted
+    ``spec`` is the pack (or phase) migrating it; its ``high_risk_matchers``
+    (``content_match`` entries declared ``risk: high``) mark files the pack
+    singled out as dangerous — a security config, say — and a hit there is
+    HIGH by rule. A plain ``content_match`` only selects relevant files and
+    adds nothing to the score. ``ctx_summary`` may carry an extracted
     ``filter_chain`` to size a descriptor's fan-out without re-parsing it.
     """
     name = Path(file_path).name
@@ -131,7 +133,7 @@ def score_unit(
         if ognl:
             reasons.append(f"OGNL expressions: {ognl}")
 
-    matchers = getattr(spec, "content_matchers", ()) or ()
+    matchers = getattr(spec, "high_risk_matchers", ()) or ()
     if matchers and suffix == ".java":
         for _glob, pattern in matchers:
             try:

@@ -412,10 +412,10 @@ def test_scope_globs_exclude_files_from_the_scan(tmp_path):
 
     src = tmp_path / "src/main/java/com/acme"
     src.mkdir(parents=True)
-    (src / "Keep.java").write_text("package com.acme;\nclass Keep {}\n", encoding="utf-8")
+    (src / "Keep.java").write_text("package com.acme;\nimport javax.servlet.Filter;\nclass Keep {}\n", encoding="utf-8")
     db = tmp_path / "db"
     db.mkdir()
-    (db / "Drop.java").write_text("package com.acme;\nclass Drop {}\n", encoding="utf-8")
+    (db / "Drop.java").write_text("package com.acme;\nimport javax.servlet.Filter;\nclass Drop {}\n", encoding="utf-8")
 
     everything = scan_java_files(str(tmp_path), "javax-to-jakarta")
     assert len(everything.files) == 2

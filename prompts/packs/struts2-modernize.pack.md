@@ -9,7 +9,10 @@ detect:
     - import_prefix: "com.opensymphony.xwork2"
     - file_glob: "**/struts*.xml"
 applies_to:
-  - file_glob: "**/*.java"
+  # Java files that touch Struts/XWork; the descriptors below by name.
+  - content_match:
+      glob: "**/*.java"
+      pattern: '\bcom\.opensymphony\.xwork2\b|\borg\.apache\.struts2\b'
   - file_glob: "**/struts*.xml"
   - file_glob: "**/*-validation.xml"
   - file_glob: "**/validators.xml"

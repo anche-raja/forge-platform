@@ -9,7 +9,10 @@ detect:
     - import_prefix: "org.springframework"
     - file_glob: "**/applicationContext*.xml"
 applies_to:
-  - file_glob: "**/*.java"
+  # Java files that use Spring at all; the XML contexts below by name.
+  - content_match:
+      glob: "**/*.java"
+      pattern: '\borg\.springframework\b'
   - file_glob: "**/applicationContext*.xml"
   - file_glob: "**/spring-*.xml"
 context: spring_bean_graph
