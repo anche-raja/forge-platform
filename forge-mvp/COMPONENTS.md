@@ -287,9 +287,9 @@ compile consumes one of the *same* retries the reviewer uses.
 | `forge/leader/landing.py` | 416 | `land_on_branch`. |
 | `forge/leader/settings.py` | 68 | The `leader:` config block. |
 
-The twelve tools: `set_project`, `profile_project`, `resolve_intent`, `estimate_pack`, `run_pack`,
+The thirteen tools: `set_project`, `profile_project`, `resolve_intent`, `estimate_pack`, `run_pack`,
 `check_acceptance`, `list_held_files`, `apply_review_decisions`, `generate_tests`, `pack_feedback`,
-`list_artifacts`, `land_on_branch`.
+`list_artifacts`, `build_project`, `land_on_branch`.
 
 **The model sequences; it does not decide what is true.** It chooses which tool to call and when to
 stop and ask. It cannot decide which packs exist (evidence does), which files a pack takes, what

@@ -29,8 +29,8 @@ The modules, and what each one exists to hold:
 - ``cards``     the only place a queue entry, a guardrail finding or an
   acceptance result becomes something a model may read. GUARDRAILS.md §7 one
   layer up.
-- ``tools``     the closed catalogue of twelve wrappers, plus the evidence,
-  spend and approval gates. Three of the twelve exist because the wizard was
+- ``tools``     the closed catalogue of thirteen wrappers, plus the evidence,
+  spend and approval gates. Three of the thirteen exist because the wizard was
   deleted: ``set_project`` (the leader asks for the folder instead of a form),
   ``list_artifacts`` (what step 9 showed) and ``land_on_branch``.
 - ``landing``   the only code in FORGE that writes into the user's own

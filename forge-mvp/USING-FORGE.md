@@ -125,6 +125,16 @@ signal that the pack itself should change.
 
 ## Landing on a branch
 
+**First, FORGE builds the project.** After the last pack, the chat compiles your source with the
+migrated files laid over it, using the project's own build: each Maven reactor in dependency order,
+on the JDK your target Java version names. A compile catches what no reviewer can — a file a pack
+missed, a stray character in a migrated file. You get a card with the result and, on a failure, the
+compiler's own lines. You can also ask for it any time: *"does it build?"*
+
+The landing confirmation shows that verdict beside the button: **passed**, **failed**, **not built
+yet**, or **stale** — the migrated files changed after the build, so ask for a new one. A failed
+build does not block landing; the decision is yours.
+
 Say *"put it on a branch"*. FORGE creates the branch, copies the migrated files in, and makes one
 commit. It **never pushes** — it hands you the push command.
 

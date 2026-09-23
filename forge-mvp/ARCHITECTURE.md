@@ -281,7 +281,8 @@ python migrate.py ./myapp --phase java21 --resume
 
 Flags: `--phase` (a built-in phase or any complete pack — see §12), `--dry-run`, `--resume`,
 `--file`, `--output-dir` (default `./migrated`), `--config`, `--no-metrics`, `--list-packs`,
-`--discover`, `--intent` (§15), `--acceptance` / `--acceptance-only` / `--acceptance-build`, `--generate-tests` /
+`--discover`, `--intent` (§15), `--acceptance` / `--acceptance-only` / `--acceptance-build`, `--build-project`
+(the project's own build over source + output; exit 1 on a failure, 2 when nothing could be built), `--generate-tests` /
 `--generate-tests-only` / `--run-tests` (§14), `--apply-decisions`, `--feedback-report`, and
 `--ui` / `--port` / `--no-browser` for the local web UI (§13).
 
@@ -722,11 +723,20 @@ History is LangChain messages and is never the raw chunk: a `tool_use` block wit
 raises `KeyError` on replay. Every `toolUse` gets a matching `toolResult`, including invalid ones,
 because Bedrock rejects a `toolResult` with no `toolUse`.
 
-### The twelve tools
+### The thirteen tools
 
 `set_project`, `profile_project`, `resolve_intent`, `estimate_pack`, `run_pack`,
 `check_acceptance`, `list_held_files`, `apply_review_decisions`, `generate_tests`, `pack_feedback`,
-`list_artifacts`, `land_on_branch`.
+`list_artifacts`, `build_project`, `land_on_branch`.
+
+`build_project` compiles source + output with the project's own build
+([forge/verify/project_build.py](forge/verify/project_build.py)): `project_build.command` if set,
+otherwise every Maven reactor — a pom no other pom lists as a module — with `mvn install` in
+dependency order, into an isolated local repository (`~/.forge/m2`), on the JDK
+`/usr/libexec/java_home` reports for `target_java_version`. It writes `project-build.json`;
+`land_on_branch`'s confirmation card shows that verdict — passed, failed, not run, or **stale**
+when the migrated files changed after the build — and never refuses on it. The leader sees the
+verdict and the failing step, never the compiler output, which goes to the card only.
 
 Every one is a wrapper over `forge/service.py` — "add behaviour to the service, never to a route or
 a CLI branch" applies to a tool too. None of them raises: a failure is an `ok: false` observation,

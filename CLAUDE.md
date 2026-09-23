@@ -80,6 +80,8 @@ Original spec in `forge-mvp/PHASE0-SPEC.md`. Key design points:
 - **LangGraph graph**: `guardrails_pre → java_upgrade → java_reviewer → guardrails_post → write_file → verify_build → update_state`
 - **Parallel files**: `max_parallel_files` (8 in the generated agents.yaml, 1 when absent) runs that many files of a pack at once; results stay in scan order, cancel starts nothing new, Maven build verification stays sequential. See ARCHITECTURE §8.
 - **Packs select by content**: javax-to-jakarta, struts2, spring6 and java21 take only Java files matching what they change (`content_match`), not `**/*.java`. A `content_match` hit is HIGH risk only when the entry says `risk: high`.
+- **Project build before landing**: `build_project` (chat) / `--build-project` (CLI) compiles source + output with the project's own build — Maven reactors in order into `~/.forge/m2`, or `project_build.command` — and writes `project-build.json`. Landing shows the verdict (passed / failed / not run / stale) and never refuses on it. The leader sees the verdict, never compiler output.
+- **javax-to-jakarta is a complement**: it selects and checks any `javax.` not in `STAYS_JAVAX_PREFIXES` (`forge/utils/java_checks.py`: JDK + JSR-305, JCache, JDO ...). Tests hold the pack pattern and that tuple together.
 - **Retry loop**: reviewer score 50–79 routes back to `java_upgrade` with feedback injected into prompt; max 2 retries. A failed build reuses the same loop and the same budget.
 - **Bedrock Guardrails** called as a standalone `ApplyGuardrail` API call — not inline with model invocation. Used both pre (INPUT) and post (OUTPUT).
 - **DynamoDB checkpointer**: LangGraph uses `DynamoDBSaver` with `thread_id = file_path`

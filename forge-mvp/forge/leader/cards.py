@@ -149,7 +149,8 @@ def estimate_card(pack: str, units: int, generated: int, est_usd: float, unit_co
 
 
 def confirm_card(pending_id: str, tool: str, title: str, args: dict, est_usd: float, *,
-                 units: Optional[int] = None, decisions: Optional[list] = None) -> dict:
+                 units: Optional[int] = None, decisions: Optional[list] = None,
+                 build: Optional[dict] = None) -> dict:
     """What the click asserts, in full.
 
     ``decisions`` is verbatim — including each ``note``, which reaches the
@@ -157,9 +158,31 @@ def confirm_card(pending_id: str, tool: str, title: str, args: dict, est_usd: fl
     model wrote that note, the human's click is signing it, so the human has to
     be able to read it first.
     """
-    return {"kind": "confirm", "pending_id": pending_id, "tool": tool, "title": title,
+    card = {"kind": "confirm", "pending_id": pending_id, "tool": tool, "title": title,
             "args": dict(args or {}), "est_usd": round(float(est_usd), 4),
             "units": units, "decisions": decisions}
+    if build is not None:
+        # Landing shows the last build of this output beside the button: the
+        # click is the user's to make, with or without a green build.
+        card["build"] = build_status_obs(build)
+    return card
+
+
+def build_status_obs(status: dict) -> dict:
+    """The build verdict without its output: what the leader may see, and the landing card shows."""
+    status = status if isinstance(status, dict) else {}
+    return {"outcome": str(status.get("outcome") or "not_run"), "stale": bool(status.get("stale")),
+            "detail": cap(status.get("detail")) or "", "failed_step": status.get("failed_step"),
+            "built_at": status.get("built_at")}
+
+
+def build_card(record: dict) -> dict:
+    """The build result with the failing lines. The compiler output stays in the browser."""
+    record = record if isinstance(record, dict) else {}
+    return {"kind": "build", **build_status_obs(record),
+            "java_home": record.get("java_home"), "seconds": record.get("seconds"),
+            "steps": [str(s) for s in (record.get("steps") or [])],
+            "tail": [str(t) for t in (record.get("tail") or [])]}
 
 
 def unified_diff(original: str, transformed: str, rel: str) -> tuple:

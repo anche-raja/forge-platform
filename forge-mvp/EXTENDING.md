@@ -131,6 +131,11 @@ Globs use FORGE's own matcher, not `fnmatch`: `*` stops at `/`, `**/` crosses di
 > - Over-matching is cheap (one wasted file), under-matching silently skips work. When unsure,
 >   widen the pattern.
 > - Don't anchor on `^import` if a fully qualified use also needs changing.
+> - For a pack that **must** change every occurrence, write the complement of what stays rather than
+>   a list of what moves. javax-to-jakarta selects "any `javax.` that is not JDK or another spec that
+>   stays javax" — a list of Jakarta packages would miss one, and the pack's leftover check, using the
+>   same pattern, would miss it too. The complement fails the cheap way: an unknown package costs one
+>   call and a check failure that names it.
 >
 > A `content_match` only *selects*. Add `risk: high` when a hit means the file is dangerous, not just
 > relevant — springsec's matcher finds security configuration, so every hit is HIGH risk by rule:

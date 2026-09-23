@@ -11,6 +11,7 @@ verifier) are imported inside the functions that need them, so a test can
 patch them before they are first bound.
 """
 
+import json
 import tempfile
 import threading
 from dataclasses import dataclass, field, replace
@@ -639,6 +640,85 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
                "generated_tests": testgen_result.paths["record"] if testgen_result else None},
         acceptance=acceptance_outcome, cancelled=cancelled, testgen=testgen_result,
     )
+
+
+# ─── project build ────────────────────────────────────────────────────────────
+
+PROJECT_BUILD_NAME = "project-build.json"
+_BUILD_SECTION = "## Project build"
+
+
+def build_project(source_dir: str, output_dir: str, config: ForgeConfig, *, on_event: OnEvent = None) -> dict:
+    """Build the migrated project -- source with the output laid over it -- with its own build.
+
+    The last check before landing, and the one that catches every file a pack
+    missed: see ``forge/verify/project_build.py``. Writes ``project-build.json``
+    beside the report (``land_on_branch`` reads it), adds a section to the
+    report, and emits one ``build`` event. Costs no model call. Never raises on
+    a failed build; the result says what failed.
+    """
+    from forge.verify import project_build
+    from forge.verify.merged_tree import MergedTree
+
+    source_dir = str(Path(source_dir).resolve())
+    out = Path(output_dir)
+    emit(on_event, {"type": "build_start"})
+    with tempfile.TemporaryDirectory(prefix="forge-build-") as tmp:
+        merged = MergedTree(source_dir, str(out) if out.is_dir() else None,
+                            deleted=run_manifest.deleted_paths(str(out)) if out.is_dir() else ())
+        result = project_build.run(str(merged.materialize(tmp)), config)
+
+    record = {
+        "outcome": result.outcome, "detail": result.detail, "failed_step": result.failed_step,
+        "tail": result.tail, "java_home": result.java_home, "seconds": result.seconds,
+        "steps": project_build.summarize(result.steps),
+        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source_dir": source_dir,
+        "fingerprint": project_build.output_fingerprint(source_dir, str(out)),
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    (out / PROJECT_BUILD_NAME).write_text(json.dumps(record, indent=2), encoding="utf-8")
+    _write_build_section(out / "migration-report.md", record)
+    emit(on_event, {"type": "build", **{k: record[k] for k in
+                    ("outcome", "detail", "failed_step", "tail", "java_home", "seconds", "steps")}})
+    return record
+
+
+def build_status(source_dir: str, output_dir: str) -> dict:
+    """The last build of this output: ``pass``/``fail``/``skip``/``not_run``, and whether it is stale.
+
+    Stale means the migrated files changed after the build (another pack ran,
+    a held file was approved), so its verdict is about a tree that no longer
+    exists.
+    """
+    from forge.verify import project_build
+
+    path = Path(output_dir) / PROJECT_BUILD_NAME
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"outcome": "not_run", "stale": False}
+    current = project_build.output_fingerprint(str(Path(source_dir).resolve()), output_dir)
+    return {**record, "stale": record.get("fingerprint") != current}
+
+
+def _write_build_section(report: Path, record: dict) -> None:
+    lines = [_BUILD_SECTION, "",
+             f"- **Result:** {record['outcome'].upper()} — {record['detail']}",
+             f"- **JDK:** {record.get('java_home') or '(default)'}",
+             f"- **Built at:** {record['built_at']} ({record.get('seconds', 0)}s)", ""]
+    lines += [f"- {s}" for s in record.get("steps") or []]
+    if record.get("tail"):
+        lines += ["", "```", *record["tail"], "```"]
+    section = "\n".join(lines) + "\n"
+    text = report.read_text(encoding="utf-8") if report.is_file() else "# FORGE Migration Report\n"
+    if _BUILD_SECTION in text:
+        head, rest = text.split(_BUILD_SECTION, 1)
+        nxt = rest.find("\n## ")
+        text = head + section + (rest[nxt + 1:] if nxt >= 0 else "")
+    else:
+        text = text.rstrip("\n") + "\n\n" + section
+    report.write_text(text, encoding="utf-8")
 
 
 # ─── acceptance ───────────────────────────────────────────────────────────────

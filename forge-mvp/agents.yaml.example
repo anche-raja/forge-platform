@@ -140,6 +140,22 @@ secret_scan:
     min_bits: 4.0
   allow: []
 
+# ─── Project build (the last check before landing) ───────────────────────────
+# `migrate.py <src> --build-project` and the chat's build_project tool compile
+# source + output with the project's own build. Leave everything empty to
+# auto-detect: every Maven reactor (a pom.xml no other pom lists as a module),
+# built with `mvn install` in dependency order, on the JDK that
+# /usr/libexec/java_home reports for target_java_version.
+#   command     run this verbatim at the project root instead (Gradle, build.sh ...)
+#   java_home   pin the JDK
+#   maven_repo  isolated local repository, so migrated snapshots never replace
+#               the original project's artifacts in ~/.m2 (default ~/.forge/m2)
+project_build:
+  command: ""
+  java_home: ""
+  maven_repo: ""
+  timeout_seconds: 1200
+
 # ─── Throughput ──────────────────────────────────────────────────────────────
 # Files of one pack migrated at the same time. Each file is its own graph run,
 # so they are independent; results are still recorded in scan order. 1 is

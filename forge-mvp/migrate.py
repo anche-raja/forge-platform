@@ -54,6 +54,16 @@ def _print_event(event: dict) -> None:
         for r in event["results"]:
             print(f"  [{r['outcome'].upper():4}] {r['kind']:<16} {r['detail']}")
         print(f"Acceptance record: {event['path']}")
+    elif t == "build_start":
+        print("Building the migrated project…")
+    elif t == "build":
+        print(f"Build: {event['outcome'].upper()} — {event['detail']}")
+        if event.get("java_home"):
+            print(f"  JDK: {event['java_home']}")
+        for step in event.get("steps") or []:
+            print(f"  {step}")
+        for line in event.get("tail") or []:
+            print(f"  | {line}")
     elif t == "testgen_start":
         run_str = " | running them" if event["run_tests"] else ""
         print(f"\nTest generation ({event['style']}) — {event['targets']} class(es), "
@@ -208,6 +218,16 @@ def _acceptance_only(args) -> int:
     return outcome.exit_code
 
 
+def _build_project(args) -> int:
+    """Build source + --output-dir with the project's own build. Exit 0 pass, 1 fail, 2 could not build."""
+    from forge import service
+    from forge.config import ForgeConfig
+
+    record = service.build_project(str(Path(args.source_dir).resolve()), args.output_dir, ForgeConfig(args.config),
+                                   on_event=_print_event)
+    return {"pass": 0, "fail": 1}.get(record["outcome"], 2)
+
+
 def _generate_tests_only(args) -> int:
     """Write tests for an existing --output-dir. Exit 0 only when nothing needs a human."""
     from forge import service
@@ -285,6 +305,9 @@ def main():
                         help="Skip migration; run acceptance checks against an existing --output-dir")
     parser.add_argument("--acceptance-build", action="store_true",
                         help="Also run `build` acceptance checks (needs the toolchain; slow)")
+    parser.add_argument("--build-project", action="store_true",
+                        help="Build the source with --output-dir laid over it, using the project's own build "
+                             "(Maven reactors in order, or project_build.command). Exit 1 on a failed build")
     parser.add_argument("--generate-tests", action="store_true",
                         help="After the run, generate JUnit 5 tests for the files it wrote")
     parser.add_argument("--generate-tests-only", action="store_true",
@@ -317,6 +340,8 @@ def main():
         return _apply_decisions(args)
     if args.generate_tests_only:
         return _generate_tests_only(args)
+    if args.build_project:
+        return _build_project(args)
     if not args.phase:
         parser.error("--phase is required")
     if args.acceptance_only:

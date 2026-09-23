@@ -1,4 +1,4 @@
-"""The closed catalogue: the only twelve things the leader can do.
+"""The closed catalogue: the only thirteen things the leader can do.
 
 Everything here is a wrapper over :mod:`forge.service`. No behaviour lives in
 this file — "add behaviour to the service, never to a route or a CLI branch"
@@ -23,7 +23,7 @@ worth spelling out is a run that succeeded and whose *cards* then failed to
 render: the run result is still returned. Paid work is never discarded by a
 rendering bug.
 
-Two of the twelve are new in increment 2 and invert an assumption the first one
+Two of the thirteen are new in increment 2 and invert an assumption the first one
 made. A chat no longer arrives with a project attached: the owner's objection to
 the wizard was *"I requested to change with prompt instead of this project
 setup"*, so ``set_project`` exists and every other tool refuses with
@@ -247,6 +247,17 @@ TOOL_DEFS: List[dict] = [
             "The files a run left in the output directory — report, review page, profile, "
             "acceptance record — with their sizes and a download link each. Free. Names and sizes "
             "only: you do not see what is in them."
+        ),
+        "parameters": dict(_EMPTY_SCHEMA),
+    },
+    {
+        "name": "build_project",
+        "description": (
+            "Compile the migrated project with its own build (its Maven reactors in order, or the "
+            "configured command), source with the output laid over it. No model call and no cost; "
+            "it can take minutes. Run it after the last pack of the plan, before offering "
+            "land_on_branch. The result is pass, fail or skip; the failing lines go to the user's "
+            "card, not to you."
         ),
         "parameters": dict(_EMPTY_SCHEMA),
     },
@@ -538,7 +549,12 @@ class Toolbox:
                 count = 0
             title = (f"Commit {count} migrated file(s) onto a new branch '{branch}' "
                      f"in {self.ctx.source_dir}")
-            return self._park(name, args, 0.0, title, units=count)
+            from forge import service
+            try:
+                build = service.build_status(self.ctx.source_dir, self.ctx.output_dir)
+            except Exception:  # noqa: BLE001 — a missing verdict is "not run", never a failed turn
+                build = {"outcome": "not_run", "stale": False}
+            return self._park(name, args, 0.0, title, units=count, build=build)
 
         if name not in _SPENDING_TOOLS:
             return None
@@ -560,14 +576,18 @@ class Toolbox:
                           units=count)
 
     def _park(self, name: str, args: dict, est: float, title: str, *,
-              units: Optional[int] = None, decisions: Optional[list] = None) -> ToolOutcome:
+              units: Optional[int] = None, decisions: Optional[list] = None,
+              build: Optional[dict] = None) -> ToolOutcome:
         pending_id = self.convo.add_pending(name, args, est, title)
-        card = cards.confirm_card(pending_id, name, title, args, est, units=units, decisions=decisions)
+        card = cards.confirm_card(pending_id, name, title, args, est, units=units, decisions=decisions,
+                                  build=build)
         observation = {
             "status": "needs_confirmation", "pending_id": pending_id, "tool": name,
             "est_usd": round(float(est), 4), "title": title,
             "note": "nothing has run. Only the user pressing Confirm on the card can run it.",
         }
+        if build is not None:
+            observation["build"] = cards.build_status_obs(build)
         return ToolOutcome(True, observation, [card], title, needs_confirmation=True, pending_id=pending_id)
 
     # ── plumbing ─────────────────────────────────────────────────────────────
@@ -1156,6 +1176,16 @@ class Toolbox:
                     found.append(str(path))
         return found
 
+    def _build_project(self, args: dict, tool_id: str) -> ToolOutcome:
+        """The project's own build over source + output. Free, local, never gated."""
+        from forge import service
+
+        record = service.build_project(self.ctx.source_dir, self.ctx.output_dir, self.effective_config(),
+                                       on_event=self._relay(tool_id))
+        observation = cards.build_status_obs(record)
+        return ToolOutcome(True, observation, [cards.build_card(record)],
+                           f"build: {record['outcome']} — {cards.cap(record['detail'])}")
+
     def _land_on_branch(self, args: dict, tool_id: str) -> ToolOutcome:
         """The one write into the user's own repository. Confirmed, and refusing.
 
@@ -1212,6 +1242,7 @@ _HANDLERS: Dict[str, Callable[[Toolbox, dict, str], ToolOutcome]] = {
     "generate_tests": Toolbox._generate_tests,
     "pack_feedback": Toolbox._pack_feedback,
     "list_artifacts": Toolbox._list_artifacts,
+    "build_project": Toolbox._build_project,
     "land_on_branch": Toolbox._land_on_branch,
 }
 

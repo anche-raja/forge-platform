@@ -842,6 +842,7 @@
     else if (kind === 'feedback') { feedbackCard(el, card); }
     else if (kind === 'artifacts') { artifactsCard(el, card); }
     else if (kind === 'land') { landCard(el, card); }
+    else if (kind === 'build') { buildCard(el, card); }
     else { noteCard(el, kind || 'card', 'This page does not know that card.'); }
     fit();
   }
@@ -1036,6 +1037,7 @@
       + (args ? '<details><summary class="hint">Exactly what it will be called with</summary>'
         + '<p class="hint mono">' + esc(args) + '</p></details>' : '')
       + table
+      + (card.build ? buildLine(card.build) : '')
       + '<div class="row"><button type="button" class="primary c-act" data-do="confirm">Run</button>'
       + '<button type="button" class="c-act" data-do="decline">Not now</button>'
       + '<span class="hint c-answer"></span></div>');
@@ -1391,6 +1393,33 @@
 
   // The end of the road: the migration is on a branch in the user's own
   // repository. Nothing was pushed — the command to do that is theirs to run.
+  // The last build of this output, as the landing confirmation shows it. A
+  // failed or stale build never disables Confirm: the decision is the user's.
+  function buildLine(b) {
+    b = obj(b);
+    var outcome = str(b.outcome || 'not_run');
+    var label = { pass: 'Build passed', fail: 'Build FAILED', skip: 'Build skipped', not_run: 'Not built yet' }[outcome] || outcome;
+    // Colours come from the existing tag classes in app.css.
+    var cls = { pass: 'PASS', fail: 'FAIL', skip: 'skip' }[outcome] || 'INCOMPLETE';
+    return '<p>' + tag(label, cls) + (b.stale ? ' ' + tag('stale — the output changed since', 'INCOMPLETE') : '')
+      + (b.detail ? ' <span class="hint">' + esc(b.detail) + '</span>' : '')
+      + (outcome === 'not_run' ? ' <span class="hint">Ask FORGE to build the project first if you want to know it compiles.</span>' : '')
+      + '</p>';
+  }
+
+  function buildCard(el, card) {
+    var steps = arr(card.steps);
+    var tail = arr(card.tail);
+    var outcome = str(card.outcome);
+    html(el, head('Project build', ' ' + tag(outcome.toUpperCase(), { pass: 'PASS', fail: 'FAIL' }[outcome] || 'skip')
+      + (card.stale ? ' ' + tag('stale', 'INCOMPLETE') : ''))
+      + '<p class="hint">' + esc(card.detail || '') + (card.seconds != null ? ' · ' + esc(card.seconds) + 's' : '')
+      + (card.java_home ? ' · JDK <span class="mono">' + esc(card.java_home) + '</span>' : '') + '</p>'
+      + (steps.length ? '<ul>' + steps.map(function (s) { return '<li class="mono">' + esc(s) + '</li>'; }).join('') + '</ul>' : '')
+      + (tail.length ? '<details' + (card.outcome === 'fail' ? ' open' : '') + '><summary>' + tail.length
+        + ' line(s) of build output</summary><pre>' + esc(tail.join('\n')) + '</pre></details>' : ''));
+  }
+
   function landCard(el, card) {
     var packs = arr(card.packs);
     var files = arr(card.files).map(function (f) { return str(f); });
