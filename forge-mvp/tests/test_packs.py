@@ -871,3 +871,62 @@ def test_java8_to_java21_takes_only_files_with_something_to_rewrite(tmp_path, bo
 
     (tmp_path / "A.java").write_text(body + "\n", encoding="utf-8")
     assert bool(scan_java_files(str(tmp_path), "java8-to-java21").files) is taken
+
+
+# ─── javax-to-jakarta: the complement of what stays javax ────────────────────
+
+_JAKARTA_SAMPLES = [
+    "javax.servlet.Filter", "javax.servlet.http.HttpSession", "javax.persistence.Entity",
+    "javax.inject.Inject", "javax.json.JsonObject", "javax.xml.bind.JAXBContext",
+    "javax.ws.rs.GET", "javax.annotation.PostConstruct", "javax.annotation.Resource",
+    "javax.transaction.Transactional", "javax.batch.api.Batchlet", "javax.security.enterprise.SecurityContext",
+]
+
+
+def _javax_pack_pattern():
+    import re
+    from forge.packs import load_packs
+
+    spec = load_packs()["javax-to-jakarta"]
+    (_glob, pattern), = spec.content_matchers
+    no_match = [c for c in spec.acceptance if c.kind == "no_match"]
+    assert [c.value for c in no_match] == [pattern], "selection and the leftover check must be one rule"
+    return re.compile(pattern)
+
+
+@pytest.mark.parametrize("name", _JAKARTA_SAMPLES)
+def test_javax_pack_takes_every_jakarta_package_and_the_writer_check_agrees(name):
+    from forge.utils.java_checks import find_unmigrated_javax_imports
+
+    assert _javax_pack_pattern().search(f"import {name};")
+    assert find_unmigrated_javax_imports(f"import {name};") == [name]
+
+
+def test_javax_pack_leaves_everything_that_stays_javax():
+    """The pack's exclusions and java_checks' STAYS_JAVAX_PREFIXES are one list."""
+    from forge.utils.java_checks import STAYS_JAVAX_PREFIXES, find_unmigrated_javax_imports
+
+    pattern = _javax_pack_pattern()
+    for prefix in STAYS_JAVAX_PREFIXES:
+        name = prefix + "Thing" if prefix.endswith(".") else prefix
+        assert not pattern.search(f"import {name};"), f"{name} stays javax but the pack would take it"
+        assert find_unmigrated_javax_imports(f"import {name};") == []
+
+
+def test_every_exclusion_in_the_pack_is_in_java_checks():
+    """The reverse direction: nothing the pack leaves alone is unknown to java_checks."""
+    import re
+    from forge.utils.java_checks import STAYS_JAVAX_PREFIXES
+
+    pattern = _javax_pack_pattern().pattern
+    body = pattern[pattern.index("(?!(") + 4: pattern.rindex(")\\b)")]    # inside (?!( ... )\b)
+    names = set()
+    for alt in re.split(r"\|(?![^()]*\))", body):          # top-level alternatives only
+        m = re.fullmatch(r"(.+?)\\\.\((.+)\)", alt)
+        if m:
+            names |= {f"{m.group(1)}.{leaf}" for leaf in m.group(2).split("|")}
+        else:
+            names.add(alt)
+    names = {n.replace("\\.", ".") for n in names}
+    listed = {p.removeprefix("javax.").rstrip(".") for p in STAYS_JAVAX_PREFIXES}
+    assert names == listed

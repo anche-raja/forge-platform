@@ -14,13 +14,18 @@ detect:
     - import_prefix: "javax.xml.bind"
     - dependency: "javax.servlet:javax.servlet-api"
 applies_to:
-  # Only files that reference a Jakarta EE javax.* package. Not anchored on
-  # `import`: a fully qualified use (javax.servlet.http.HttpSession in a
-  # signature) needs migrating too. JDK javax.* (sql, crypto, xml.parsers) is
-  # deliberately absent -- those stay, so a file using only them is not sent.
+  # Every javax.* reference that is NOT a JDK package or a non-Jakarta spec
+  # (JSR-305 nullness, JCache, JDO, Portlet ...): the complement of an
+  # allowlist, not a list of Jakarta targets. A list can miss a package
+  # (javax.json, javax.batch, ...) and a missed package would be invisible to
+  # both the selection and the check below; the complement cannot. Unknown JDK
+  # packages fail cheap instead: one wasted call, and a check that names them.
+  # The list must equal STAYS_JAVAX_PREFIXES in forge/utils/java_checks.py
+  # (tests/test_packs.py holds them together). Not anchored on `import`, so a
+  # fully qualified use (javax.servlet.http.HttpSession) is caught too.
   - content_match:
       glob: "**/*.java"
-      pattern: '\bjavax\.(servlet|persistence|validation|transaction|ejb|enterprise|faces|el|jms|mail|ws\.rs|websocket|interceptor|inject|annotation\.(Resource|PostConstruct|PreDestroy)|xml\.(bind|soap|ws))\b'
+      pattern: '\bjavax\.(?!(accessibility|annotation\.processing|crypto|imageio|lang\.model|management|naming|net|print|rmi|script|security\.(auth|cert|sasl)|smartcardio|sound|sql|swing|tools|transaction\.xa|xml\.(catalog|crypto|datatype|namespace|parsers|stream|transform|validation|xpath|XMLConstants)|cache|money|measure|vecmath|usb|jdo|portlet|help|media|speech|annotation\.(Nonnull|Nullable|CheckForNull|CheckReturnValue|ParametersAreNonnullByDefault|ParametersAreNullableByDefault|Nonnegative|RegEx|Syntax|MatchesPattern|OverridingMethodsMustInvokeSuper|WillClose|WillNotClose|WillCloseWhenClosed|Signed|Untainted|Tainted|Detainted|PropertyKey|concurrent|meta))\b)'
 context: none
 depends_on: []
 decisions: []
@@ -29,11 +34,12 @@ eliminates:
   - "javax.annotation:javax.annotation-api"
   - "javax.validation:validation-api"
 acceptance:
-  # Same package list as applies_to, and unanchored for the same reason: a
-  # fully qualified javax.servlet reference left behind is still unmigrated.
-  - no_match: '\bjavax\.(servlet|persistence|validation|transaction|ejb|enterprise|faces|el|jms|mail|ws\.rs|websocket|interceptor|inject|annotation\.(Resource|PostConstruct|PreDestroy)|xml\.(bind|soap|ws))\b'
+  # Same complement as applies_to, over the whole project: any non-JDK javax
+  # reference left anywhere fails, with its file and line.
+  - no_match: '\bjavax\.(?!(accessibility|annotation\.processing|crypto|imageio|lang\.model|management|naming|net|print|rmi|script|security\.(auth|cert|sasl)|smartcardio|sound|sql|swing|tools|transaction\.xa|xml\.(catalog|crypto|datatype|namespace|parsers|stream|transform|validation|xpath|XMLConstants)|cache|money|measure|vecmath|usb|jdo|portlet|help|media|speech|annotation\.(Nonnull|Nullable|CheckForNull|CheckReturnValue|ParametersAreNonnullByDefault|ParametersAreNullableByDefault|Nonnegative|RegEx|Syntax|MatchesPattern|OverridingMethodsMustInvokeSuper|WillClose|WillNotClose|WillCloseWhenClosed|Signed|Untainted|Tainted|Detainted|PropertyKey|concurrent|meta))\b)'
     scope: "**/*.java"
-  - count_unchanged: '^import javax\.(sql|crypto|net|naming|security\.auth|xml\.(parsers|transform|stream|xpath)|imageio|swing|management|script|tools|lang\.model|annotation\.processing)'
+  # And the JDK packages must come through untouched.
+  - count_unchanged: '^import javax\.(accessibility|annotation\.processing|crypto|imageio|lang\.model|management|naming|net|print|rmi|script|security\.(auth|cert|sasl)|smartcardio|sound|sql|swing|tools|transaction\.xa|xml\.(catalog|crypto|datatype|namespace|parsers|stream|transform|validation|xpath|XMLConstants))\b'
     scope: "**/*.java"
 ---
 

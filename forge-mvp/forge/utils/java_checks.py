@@ -38,7 +38,9 @@ _JDK_JAVAX_PREFIXES = (
     "javax.sql.",
     "javax.swing.",
     "javax.tools.",
+    "javax.transaction.xa.",
     "javax.xml.catalog.",
+    "javax.xml.crypto.",
     "javax.xml.datatype.",
     "javax.xml.namespace.",
     "javax.xml.parsers.",
@@ -49,6 +51,50 @@ _JDK_JAVAX_PREFIXES = (
     "javax.xml.XMLConstants",
 )
 
+# javax.* packages that are neither JDK nor Jakarta EE: independent specs that
+# never moved to jakarta.* and must be left alone too. JSR-305's nullness
+# annotations share javax.annotation with Jakarta's @PostConstruct/@Resource,
+# so they are listed by name -- a blanket "javax.annotation" would pass an
+# unmigrated @PostConstruct.
+_NON_JAKARTA_JAVAX_PREFIXES = (
+    "javax.cache.",
+    "javax.money.",
+    "javax.measure.",
+    "javax.vecmath.",
+    "javax.usb.",
+    "javax.jdo.",
+    "javax.portlet.",
+    "javax.help.",
+    "javax.media.",
+    "javax.speech.",
+    "javax.annotation.Nonnull",
+    "javax.annotation.Nullable",
+    "javax.annotation.CheckForNull",
+    "javax.annotation.CheckReturnValue",
+    "javax.annotation.ParametersAreNonnullByDefault",
+    "javax.annotation.ParametersAreNullableByDefault",
+    "javax.annotation.Nonnegative",
+    "javax.annotation.RegEx",
+    "javax.annotation.Syntax",
+    "javax.annotation.MatchesPattern",
+    "javax.annotation.OverridingMethodsMustInvokeSuper",
+    "javax.annotation.WillClose",
+    "javax.annotation.WillNotClose",
+    "javax.annotation.WillCloseWhenClosed",
+    "javax.annotation.Signed",
+    "javax.annotation.Untainted",
+    "javax.annotation.Tainted",
+    "javax.annotation.Detainted",
+    "javax.annotation.PropertyKey",
+    "javax.annotation.concurrent.",
+    "javax.annotation.meta.",
+)
+
+# Everything that stays javax.* after a Jakarta migration. The javax-to-jakarta
+# pack's selection and acceptance pattern is the complement of this list, and
+# tests/test_packs.py holds the two together.
+STAYS_JAVAX_PREFIXES = _JDK_JAVAX_PREFIXES + _NON_JAKARTA_JAVAX_PREFIXES
+
 _IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?(javax\.[\w.]*\*?)\s*;", re.MULTILINE)
 
 
@@ -57,13 +103,19 @@ def is_jdk_javax(fqcn: str) -> bool:
     return fqcn.startswith(_JDK_JAVAX_PREFIXES)
 
 
+def stays_javax(fqcn: str) -> bool:
+    """True when a javax.* name is JDK or a non-Jakarta spec, and so is left alone."""
+    return fqcn.startswith(STAYS_JAVAX_PREFIXES)
+
+
 def find_unmigrated_javax_imports(source: str) -> List[str]:
     """Return javax.* imports that should have become jakarta.* but did not.
 
-    JDK javax packages (javax.crypto, javax.sql, ...) are excluded — rewriting
-    those would break the code.
+    JDK javax packages (javax.crypto, javax.sql, ...) and non-Jakarta specs
+    (JSR-305 javax.annotation.Nonnull, JCache javax.cache) are excluded —
+    rewriting those would break the code.
     """
-    return [m for m in _IMPORT_RE.findall(source) if not is_jdk_javax(m)]
+    return [m for m in _IMPORT_RE.findall(source) if not stays_javax(m)]
 
 
 # ─── package declaration / scope ─────────────────────────────────────────────
