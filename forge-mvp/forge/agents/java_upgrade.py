@@ -90,10 +90,27 @@ class JavaUpgradeAgent(BaseAgent):
             return self._malformed(state, file_status, f"Failed to parse transform output as JSON: {e}",
                                    bedrock_calls, cost)
 
+        # An empty `files` map is the model saying "nothing here needs changing"
+        # (issue #17): the unit is DONE, nothing is written and no reviewer is
+        # paid to grade nothing -- it used to score 0 and reach a human. That
+        # reading holds only where no change was demanded: a generated unit
+        # must produce its file, and a retry was sent back *because* the file
+        # needs changes (a reviewer's, the compiler's or a human's), so an
+        # empty answer there is a non-answer and goes round the retry loop.
+        # A retry after an unreadable reply is a first answer in all but name.
+        changes_demanded = bool(human_note) or (retry_count > 0 and not file_status.get("transform_malformed"))
         try:
             if not isinstance(result, dict):
                 raise TransformShapeError(f"output is a {type(result).__name__}, expected an object")
+            if "files" not in result:
+                # Absent is not empty: only an explicit {} is read as "unchanged".
+                raise TransformShapeError("no 'files' key; a file that needs no change is \"files\": {}")
             result = {**result, "files": normalize_files(result.get("files"))}
+            unchanged = not result["files"] and not result.get("deleted_files")
+            if unchanged and file_status.get("generate"):
+                raise TransformShapeError("'files' is empty, but this unit is generated and must be written")
+            if unchanged and changes_demanded:
+                raise TransformShapeError("'files' is empty, but this retry was asked to change the file")
         except TransformShapeError as e:
             # One malformed answer is one file retried, never the end of the run.
             _log.warning("Transform output for %s has the wrong shape: %s", file_path, e)
@@ -107,6 +124,7 @@ class JavaUpgradeAgent(BaseAgent):
             file_status["error"] = None
 
         file_status["transform_output"] = result
+        file_status["unchanged"] = unchanged
         # struts-spring6 reports XML configs it replaced with Java @Configuration.
         deleted = result.get("deleted_files") or []
         if isinstance(deleted, list) and deleted:

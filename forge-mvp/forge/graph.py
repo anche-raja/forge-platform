@@ -45,7 +45,7 @@ def build_graph(config: ForgeConfig):
         """
         file_status = dict(state["current_file"])
         if (not check_syntax or file_status.get("status") == "MANUAL_REVIEW"
-                or file_status.get("transform_malformed")):
+                or file_status.get("transform_malformed") or file_status.get("unchanged")):
             return state
         # This attempt's verdict replaces the last one's, so a retry that
         # parses does not carry the previous failure's error forward.
@@ -68,6 +68,20 @@ def build_graph(config: ForgeConfig):
         elif verdict == syntax.SKIPPED and _SYNTAX_SKIPPED not in findings:
             findings.append(_SYNTAX_SKIPPED)
         file_status["guardrail_findings"] = findings
+        return {**state, "current_file": file_status}
+
+    def no_change(state: ForgeState) -> ForgeState:
+        """The transform found nothing to change: DONE, with nothing to review or write.
+
+        Nothing reaches the reviewer, guardrails_post, the hold gate or the
+        build: each of them judges or lands transformed bytes, and there are
+        none. The source file stays as it is, which is the model's answer;
+        `unchanged` keeps that answer visible in the report and the audit trail.
+        """
+        file_status = dict(state["current_file"])
+        file_status["status"] = "DONE"
+        file_status["written_paths"] = []
+        _log.info("%s needs no change", file_status["file_path"])
         return {**state, "current_file": file_status}
 
     def java_reviewer(state: ForgeState) -> ForgeState:
@@ -191,6 +205,8 @@ def build_graph(config: ForgeConfig):
         fs = state["current_file"]
         if fs.get("status") == "MANUAL_REVIEW":
             return "manual_queue"
+        if fs.get("unchanged"):
+            return "no_change"
         if not fs.get("transform_malformed") and fs.get("syntax_verdict") != syntax.FAIL:
             return "java_reviewer"
         if (fs.get("retry_count") or 0) < config.get("max_retries", 2):
@@ -221,6 +237,7 @@ def build_graph(config: ForgeConfig):
     graph.add_node("guardrails_pre", guardrails_pre)
     graph.add_node("java_upgrade", java_upgrade)
     graph.add_node("syntax_check", syntax_check)
+    graph.add_node("no_change", no_change)
     graph.add_node("java_reviewer", java_reviewer)
     graph.add_node("guardrails_post", guardrails_post)
     graph.add_node("write_file", write_file)
@@ -240,6 +257,7 @@ def build_graph(config: ForgeConfig):
     graph.add_edge("java_upgrade", "syntax_check")
     graph.add_conditional_edges("syntax_check", route_syntax, {
         "java_reviewer": "java_reviewer",
+        "no_change": "no_change",
         "increment_retry": "increment_retry",
         "manual_queue": "manual_queue",
     })
@@ -256,6 +274,7 @@ def build_graph(config: ForgeConfig):
     })
     # A held unit never reaches verify_build: nothing was written to output.
     graph.add_edge("hold_for_review", "update_state")
+    graph.add_edge("no_change", "update_state")
     graph.add_edge("write_file", "verify_build")
     graph.add_conditional_edges("verify_build", route_verify, {
         "update_state": "update_state",
