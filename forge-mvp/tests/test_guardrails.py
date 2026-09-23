@@ -117,3 +117,27 @@ def test_guardrail_intervened_terminates_at_blocked_node(config, java_file):
         assert result["files_passed"] == 0
         # java_upgrade was never called — no transform_output
         assert result["current_file"]["transform_output"] is None
+
+
+def test_guardrail_findings_never_carry_the_matched_text():
+    """A PII hit's `match` is the secret itself; findings name the kind only."""
+    from unittest.mock import MagicMock, patch
+    from forge.guardrails.bedrock_guardrails import BedrockGuardrails
+
+    secret = "AKIA" + "Q" * 16
+    client = MagicMock()
+    client.apply_guardrail.return_value = {"action": "GUARDRAIL_INTERVENED", "assessments": [{
+        "sensitiveInformationPolicy": {"piiEntities": [{"type": "AWS_ACCESS_KEY", "match": secret, "action": "BLOCKED"}]},
+        "wordPolicy": {"customWords": [{"match": "ignore previous instructions", "action": "BLOCKED"}]},
+        "contentPolicy": {"filters": [{"type": "PROMPT_ATTACK", "confidence": "HIGH", "action": "BLOCKED"}]},
+        "invocationMetrics": {"guardrailProcessingLatency": 12},
+    }]}
+    config = MagicMock(aws_region="us-east-1", guardrail_id="g", guardrail_version="3")
+    config.get.return_value = None
+    with patch("forge.guardrails.bedrock_guardrails.boto3") as boto:
+        boto.client.return_value = client
+        result = BedrockGuardrails(config).evaluate("x", "INPUT")
+    text = " | ".join(result["findings"])
+    assert secret not in text and "ignore previous" not in text
+    assert "AWS_ACCESS_KEY BLOCKED" in text and "PROMPT_ATTACK HIGH BLOCKED" in text
+    assert "invocationMetrics" not in text

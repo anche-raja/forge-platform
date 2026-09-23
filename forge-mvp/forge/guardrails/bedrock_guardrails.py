@@ -19,6 +19,32 @@ def intervention_reason(result: dict, source: Literal["INPUT", "OUTPUT"]) -> str
     return f"Bedrock guardrail intervened on {what} ({detail})"
 
 
+def _summarize(data) -> str:
+    """What a policy assessment found, by type and action -- never the matched text.
+
+    Bedrock's assessments carry the offending bytes under ``match`` (a PII
+    entity, a regex hit, a banned word). Findings travel to DynamoDB, the
+    report and the review page, so quoting a match would copy an AWS key into
+    three more places; GUARDRAILS.md's rule is that findings name a kind, not
+    the content. Keeps ``type``/``name``, ``action`` and ``confidence`` only.
+    """
+    if not isinstance(data, dict):
+        return "assessment"
+    parts = []
+    for group, items in data.items():
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            label = item.get("type") or item.get("name") or group
+            bits = [str(label)]
+            if item.get("confidence"):
+                bits.append(str(item["confidence"]))
+            if item.get("action"):
+                bits.append(str(item["action"]))
+            parts.append(" ".join(bits))
+    return ", ".join(sorted(set(parts))) or "assessment"
+
+
 class BedrockGuardrails:
     def __init__(self, config: ForgeConfig):
         self.client = boto3.client("bedrock-runtime", region_name=config.aws_region,
@@ -47,7 +73,7 @@ class BedrockGuardrails:
             for category, data in assessment.items():
                 if category not in policy_keys or not data:
                     continue
-                findings.append(f"{category}: {data}")
+                findings.append(f"{category}: {_summarize(data)}")
         return {
             "action": action,
             "findings": findings,
