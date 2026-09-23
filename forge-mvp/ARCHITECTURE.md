@@ -715,6 +715,13 @@ POST /api/chat {message}
    └─ emit usage {leader_calls, leader_cost_usd, spend_usd}
 ```
 
+**The step cap stops a loop, not a plan.** A step whose every call was a `run_pack` that settled
+one more pack of the plan — a selected pack not already finished when the turn began, run to
+`done` or found empty, once per pack per turn — does not count toward `leader.max_steps`. A
+ten-pack plan used to stop after seven packs with "say continue". Those free steps can never
+outnumber the packs left in the plan, so a model re-running a pack, naming one outside the plan
+or calling anything else is still capped.
+
 **Why the gate is an allow-list and not a deny-list.** `parse_partial_json` silently *repairs*
 truncated tool arguments: `{"pack":"javax-to-jakarta","dry_r` accumulates into a valid-looking
 `{"pack":"javax-to-jakarta"}` — with `dry_run` gone. Pressing Stop on a proposed dry run could

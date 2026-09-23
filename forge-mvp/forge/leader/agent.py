@@ -342,12 +342,43 @@ class LeaderAgent:
 
     # ── the model loop (§6 step 3) ───────────────────────────────────────────
 
+    @staticmethod
+    def _advances_plan(convo, call: dict, outcome: ToolOutcome, forced, before: set, advanced: set) -> bool:
+        """Did this call move the plan forward: one more selected pack, run or found empty?
+
+        Each pack can advance the plan once per turn and only if it was not
+        already finished when the turn began, so the steps this excuses from
+        ``max_steps`` are bounded by the packs left in the plan. A model that
+        re-runs a pack, names one outside the plan, or loops on a refusal is
+        counted like any other call.
+        """
+        observation = outcome.observation if isinstance(outcome.observation, dict) else {}
+        pack = str(observation.get("pack") or "")
+        if (call.get("name") != "run_pack" or forced is not None or not outcome.ok
+                or outcome.needs_confirmation or observation.get("status") not in ("done", "nothing")
+                or pack not in (convo.selected_packs or []) or pack in before or pack in advanced):
+            return False
+        advanced.add(pack)
+        return True
+
     def _model_loop(self, convo, ctx, toolbox, emit, cancel) -> int:
+        """Up to ``max_steps`` model calls — not counting the ones that ran the plan.
+
+        The cap is there to stop a confused loop, not a plan: a ten-pack plan is
+        at least ten calls, and counting them stopped the first real run after
+        seven packs with "say continue" (#22). A step whose every tool call
+        advanced the plan is free; ``_advances_plan`` is what keeps that finite.
+        """
         steps = 0
+        counted = 0
         gated = False
         hit_cap = True
-        for _ in range(self.settings.max_steps):
+        with convo.lock:
+            before = set(convo.completed or []) | set(getattr(convo, "nothing_to_do", None) or [])
+        advanced: set = set()
+        while counted < self.settings.max_steps:
             steps += 1
+            counted += 1
             message_id = _new_id("m")
             acc, completed, cancelled = self._stream(convo, ctx, emit, cancel, message_id)
             self._accrue(convo, acc)
@@ -380,6 +411,7 @@ class LeaderAgent:
                 hit_cap = False
                 break
 
+            plan_step = True
             for call in kept:
                 problem = errors.get(call["id"])
                 if problem is not None:
@@ -394,6 +426,10 @@ class LeaderAgent:
                 outcome = self._run_tool(convo, toolbox, call["name"], call["args"], emit,
                                          tool_id=call["id"], forced=forced)
                 gated = gated or outcome.needs_confirmation
+                if not self._advances_plan(convo, call, outcome, forced, before, advanced):
+                    plan_step = False
+            if plan_step:
+                counted -= 1
 
         if hit_cap:
             notice = (f"I have used my {self.settings.max_steps} steps for this turn. "
