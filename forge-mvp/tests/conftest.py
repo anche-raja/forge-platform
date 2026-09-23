@@ -6,6 +6,8 @@ in one place.
 """
 
 import json
+import os
+import sys
 from pathlib import Path
 import contextlib
 from unittest.mock import MagicMock, patch
@@ -16,6 +18,67 @@ from langchain_core.messages.tool import tool_call_chunk
 
 from forge.config import ForgeConfig
 from forge.state import make_file_status
+
+# ─── the owner's real output directory is off limits ─────────────────────────
+#
+# `./migrated` is the default output directory of the CLI, the UI's request
+# bodies and `set_project`, and it is relative to the working directory: run
+# from forge-mvp, as documented, that is the `migrated/` the owner's real runs
+# write to. Tests that let the default through rewrote the discovery profile
+# there on every run, and once left fixture JSON in five artifacts and on the
+# front of decisions-applied.jsonl.
+#
+# The hook refuses any write under it before the write lands, and the fixture
+# fails the test that tried even when the code under test swallowed the error.
+# Comparing the directory before and after the run would only report the damage,
+# and would fail the suite whenever a real run was writing there at the same
+# time. It sees this process only: a test that shells out to migrate.py must
+# pass --output-dir itself.
+
+REAL_OUTPUT_DIR = str(Path(__file__).resolve().parents[1] / "migrated")
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+_real_output_writes = []
+
+
+def _in_real_output(path, dir_fd) -> bool:
+    if path is None or isinstance(path, int):
+        return False    # a file descriptor, not a path
+    path = os.fsdecode(path)
+    if dir_fd not in (None, -1) and not os.path.isabs(path):
+        return False    # relative to a directory fd, not the cwd: rmtree's own walk
+    full = os.path.realpath(path)
+    return full == REAL_OUTPUT_DIR or full.startswith(REAL_OUTPUT_DIR + os.sep)
+
+
+def _refuse_real_output_writes(event, args):
+    if event == "open":                                 # (path, mode, flags)
+        targets = [(args[0], None)] if args[2] & _WRITE_FLAGS else []
+    elif event in ("os.mkdir", "os.remove", "os.rmdir", "shutil.rmtree"):
+        targets = [(args[0], args[-1])]                 # (path, ..., dir_fd)
+    elif event == "os.rename":                          # os.replace too; moving out is a delete
+        targets = [(args[0], args[2]), (args[1], args[3])]
+    else:
+        return
+    for path, dir_fd in targets:
+        if _in_real_output(path, dir_fd):
+            _real_output_writes.append(f"{event} {os.fsdecode(path)}")
+            raise PermissionError(f"refused: a test tried to write into {REAL_OUTPUT_DIR}, "
+                                  "where real runs land")
+
+
+sys.addaudithook(_refuse_real_output_writes)
+
+
+@pytest.fixture(autouse=True)
+def _real_output_untouched():
+    before = len(_real_output_writes)
+    yield
+    tried = _real_output_writes[before:]
+    if tried:
+        pytest.fail(f"this test tried to write into {REAL_OUTPUT_DIR}, where the owner's real runs "
+                    f"land: {tried}. Give it an output_dir under tmp_path, or monkeypatch.chdir(tmp_path).",
+                    pytrace=False)
+
 
 _BASE_YAML = """\
 transform_model: us.anthropic.claude-opus-4-8

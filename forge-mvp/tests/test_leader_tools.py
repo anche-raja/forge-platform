@@ -52,6 +52,14 @@ def ctx(project, tmp_path):
                           config=config, base_config=config)
 
 
+@pytest.fixture(autouse=True)
+def _cwd(tmp_path, monkeypatch):
+    """``set_project`` with no ``output_dir`` profiles into ``./migrated`` — the
+    working directory's, which under ``pytest`` is forge-mvp, where the owner's
+    real runs land. Each test here starts in its own ``tmp_path`` instead."""
+    monkeypatch.chdir(tmp_path)
+
+
 def _box(ctx, convo=None, *, events=None, cancel=None, **settings):
     convo = convo if convo is not None else Conversation()
     resolved = LeaderSettings.from_config(ctx.config)
