@@ -29,6 +29,10 @@ class ScanResult(NamedTuple):
     # do not exist yet, so they are not in `files`; the transform is given the
     # extracted context instead of a source.
     generated: Tuple[str, ...] = ()
+    # Files whose path fits one of the pack's content_match globs but whose text
+    # does not match: nothing in them for this pack to change, so not sent. A
+    # count, not a list -- on a large project it runs to hundreds.
+    passed_over: int = 0
 
 
 def _excluded_by(rel_path: str, exclude_globs: Sequence[str]) -> str:
@@ -161,6 +165,7 @@ def scan_java_files(
     source_path = Path(source_dir).resolve()
     results: List[str] = []
     skipped: List[SkippedFile] = []
+    passed_over = 0
 
     for root, dirs, files in os.walk(source_path):
         # Prune build/vendor/VCS dirs in-place so os.walk doesn't descend.
@@ -203,6 +208,7 @@ def scan_java_files(
             # A content matcher answers "is this the security config?" from the
             # file's own bytes — no extractor, so the pack stays runnable.
             if not matched and not any(re.search(p, content) for p in matchers):
+                passed_over += 1
                 continue
 
             # Reuses the content already read above — no extra I/O.
@@ -267,4 +273,5 @@ def scan_java_files(
             len(skipped), scope_package_prefix,
         )
 
-    return ScanResult(files=sorted(results), skipped=sorted(skipped), generated=tuple(sorted(set(generated))))
+    return ScanResult(files=sorted(results), skipped=sorted(skipped), generated=tuple(sorted(set(generated))),
+                      passed_over=passed_over)

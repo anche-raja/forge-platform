@@ -27,6 +27,8 @@ def _print_event(event: dict) -> None:
     elif t == "start":
         gen_str = f" (+{event['generated']} generated)" if event["generated"] else ""
         print(f"FORGE — phase: {event['phase']} | files: {event['files']}{gen_str} | dry-run: {event['dry_run']}")
+        if event.get("passed_over"):
+            print(f"{event['passed_over']} file(s) had nothing for this pack to change and were not sent")
     elif t == "file":
         score_str = f", score: {event['score']}" if event["score"] is not None else ""
         print(f"[{event['index']}/{event['total']}] {event['label']} → {event['status']}{score_str}")

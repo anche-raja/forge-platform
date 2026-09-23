@@ -47,7 +47,7 @@ def test_run_writes_the_same_artifacts_as_the_cli_and_returns_totals(tmp_path, p
     out = tmp_path / "out"
     assert (out / "migration-report.md").exists() and (out / "manual-review-queue.json").exists()
     assert (out / "src/main/java/com/corp/user/UserAction.java").exists()
-    assert {k: v for k, v in result.totals.items() if k != "cost_usd"} == {"total": 2, "passed": 2, "manual": 0, "blocked": 0, "held": 0, "bedrock_calls": 6}
+    assert {k: v for k, v in result.totals.items() if k != "cost_usd"} == {"total": 2, "passed": 2, "manual": 0, "blocked": 0, "held": 0, "bedrock_calls": 6, "passed_over": 0}
     assert result.totals["cost_usd"] > 0
     assert result.paths["report"] == str(out / "migration-report.md")
     assert result.paths["page"] is None, "nothing needed review"
@@ -60,7 +60,7 @@ def test_events_arrive_in_order_and_carry_what_the_cli_prints(tmp_path, project)
     _, events = _run(tmp_path, project)
     types = [e["type"] for e in events]
     assert types == ["start", "file", "file", "summary"]
-    assert events[0] == {"type": "start", "phase": "javax-to-jakarta", "files": 2, "generated": 0, "dry_run": False, "total": 2}
+    assert events[0] == {"type": "start", "phase": "javax-to-jakarta", "files": 2, "generated": 0, "dry_run": False, "total": 2, "passed_over": 0}
     first = events[1]
     assert (first["index"], first["total"], first["label"], first["status"], first["score"]) == (1, 2, "Other.java", "DONE", 95)
     assert events[-1]["passed"] == 2 and events[-1]["report"].endswith("migration-report.md")
@@ -215,3 +215,18 @@ def test_cli_prints_exactly_the_historical_lines(tmp_path, project, capsys):
         "Summary: 2 passed | 0 manual | 0 blocked | 6 Bedrock calls",
         f"Report: {out / 'migration-report.md'}",
     ]
+
+
+def test_files_with_nothing_to_change_are_counted_and_said(tmp_path, project, capsys):
+    """A Java file with no Jakarta EE javax reference is passed over -- and the run says so."""
+    (project / "src/main/java/com/corp/Plain.java").write_text(
+        "package com.corp;\npublic class Plain {}\n", encoding="utf-8")
+    result, events = _run(tmp_path, project)
+    assert result.totals["passed_over"] == 1 and result.totals["total"] == 2
+    assert events[0]["passed_over"] == 1
+    report = (tmp_path / "out/migration-report.md").read_text(encoding="utf-8")
+    assert "nothing for this pack to change, not sent):** 1" in report
+
+    import migrate
+    migrate._print_event(events[0])
+    assert "1 file(s) had nothing for this pack to change and were not sent" in capsys.readouterr().out

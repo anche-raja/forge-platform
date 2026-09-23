@@ -489,6 +489,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
 
     skipped: list = []
     generated: Sequence[str] = ()
+    passed_over = 0
     if single_file:
         # Naming a file explicitly beats a config default — no scope filtering.
         files = [str(Path(single_file).resolve())]
@@ -506,6 +507,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         exclude_globs = config.get("scope_exclude_globs") or []
         scan = scan_java_files(source_dir, phase, prefix, exclude_globs)
         files, skipped, generated = scan.files, scan.skipped, scan.generated
+        passed_over = scan.passed_over
         if skipped:
             emit(on_event, {"type": "skipped", "count": len(skipped), "prefix": prefix})
         if not files and not generated:
@@ -529,7 +531,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
 
     total = len(units)
     emit(on_event, {"type": "start", "phase": phase, "files": len(files), "generated": len(generated),
-                    "dry_run": dry_run, "total": total})
+                    "dry_run": dry_run, "total": total, "passed_over": passed_over})
 
     workers = _workers_for(config)
 
@@ -588,7 +590,8 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
 
     report_path = output_root / "migration-report.md"
     generate_report(output_path=str(report_path), phase=phase, source_dir=source_dir, file_statuses=all_statuses,
-                    bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost, skipped=skipped)
+                    bedrock_calls=total_bedrock_calls, estimated_cost_usd=total_cost, skipped=skipped,
+                    passed_over=passed_over)
 
     deleted = [d for fs in all_statuses for d in (fs.get("deleted_files") or [])]
 
@@ -618,6 +621,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         "held": sum(1 for fs in all_statuses if fs.get("status") == "HELD"),
         "bedrock_calls": total_bedrock_calls,
         "cost_usd": round(total_cost, 6),
+        "passed_over": passed_over,
     }
     emit(on_event, {"type": "summary", **totals, "report": str(report_path)})
 

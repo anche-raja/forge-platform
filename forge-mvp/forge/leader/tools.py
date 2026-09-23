@@ -862,6 +862,7 @@ class Toolbox:
         units = len(scan.files) + generated
         est = round(units * self.settings.unit_cost_usd, 4)
         observation = {"pack": pack, "units": units, "generated": generated, "est_usd": est,
+                       "passed_over": scan.passed_over,
                        "unit_cost_usd": self.settings.unit_cost_usd, "note": DRY_RUN_NOTE}
         card = cards.estimate_card(pack, units, generated, est, self.settings.unit_cost_usd, DRY_RUN_NOTE)
         return ToolOutcome(True, observation, [card], f"{pack}: {units} file(s), about ${est:.2f}")

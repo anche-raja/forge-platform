@@ -14,6 +14,7 @@ def generate_report(
     bedrock_calls: int,
     estimated_cost_usd: float = 0.0,
     skipped: Sequence[SkippedFile] = (),
+    passed_over: int = 0,
 ) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
@@ -38,6 +39,7 @@ def generate_report(
         f"- **Source directory:** {source_dir}",
         f"- **Files scanned:** {len(file_statuses)}",
         f"- **Files skipped (out of scope):** {len(skipped)}",
+        f"- **Files passed over (nothing for this pack to change, not sent):** {passed_over}",
         f"- **Files passed (DONE):** {counts.get('DONE', 0)}",
         f"- **Files retried:** {retried}",
         f"- **Files manual review:** {counts.get('MANUAL_REVIEW', 0)}",
