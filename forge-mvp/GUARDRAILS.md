@@ -214,9 +214,11 @@ Four things the detector gets right on purpose:
   code, so `key` counts only when a qualifier alongside it says the key is cryptographic or an API
   credential — `apiKey`, `encryptionKey`, `privateKey`. The key-material rules keep the looser
   reading, because they carry a second constraint the name alone does not: the value must have key
-  *shape*.
+  *shape*. `seed` is read the same way: `totpSeed` and `RANDOM_SEED` are credentials,
+  `CORE_SEED_LOCATION` names the rows a schema is loaded with.
 - **Placeholders and references are not secrets.** `${db.password}`, `@db.password@`, `changeme`,
-  `ENC(...)` (jasypt — already encrypted), empty values and `xxxx` are all suppressed. Without this
+  `ENC(...)` (jasypt — already encrypted), empty values and `xxxx` are all suppressed, including
+  when a line-based reading sees them still quoted (`password="${db.password}"/>`). Without this
   the gate blocks a large share of any real configuration tree.
 - **Dense is not the same as secret.** UUIDs, checksums, fully-qualified class names, paths and MIME
   types are excluded from the entropy rule, and long runs of pure hex are left to the

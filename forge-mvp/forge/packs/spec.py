@@ -111,6 +111,10 @@ class PackSpec:
     acceptance: Tuple[AcceptanceCheck, ...]
     transform_prompt: str
     review_prompt: str
+    # Whether applies_to also reaches src/test. Test sources are left out by
+    # default; a pack whose change breaks the tests' compile (a package move)
+    # sets this, because a test still importing javax.servlet no longer builds.
+    include_tests: bool = False
     source_path: Path = field(compare=False, default=Path())
 
     # ── PhaseSpec compatibility ──────────────────────────────────────────────

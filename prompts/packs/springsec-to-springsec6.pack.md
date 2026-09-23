@@ -107,6 +107,13 @@ Check 5 — Ancillary configuration preserved (10 pts):
 CSRF, session management, headers, entry point, access-denied handler, logout, remember-me and
 the password encoder unchanged.
 
+Checks that do not apply: a check that does not apply to this file earns its full points. A check
+applies when the file contains what it is about, or when this file is where the transform had to
+introduce it; it does not apply when there is nothing here for it to judge (a check about Java
+code, on a descriptor that holds none). Name the checks that did not apply in `feedback`. Never
+score a check 0 for having nothing to examine: 0 is for a subject that is present and wrong, or
+missing where this file had to supply it.
+
 Scoring: PASS >= 80, RETRY 50-79, MANUAL < 50.
 
 Respond ONLY with valid JSON:

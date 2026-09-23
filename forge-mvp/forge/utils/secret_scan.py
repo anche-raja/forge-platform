@@ -104,7 +104,7 @@ _TOKEN_PATTERNS: List[tuple] = [
 _CRED_TOKENS = frozenset({
     "password", "passwd", "pwd", "passphrase", "secret", "secrets",
     "token", "tokens", "credential", "credentials", "apikey", "authorization",
-    "keystore", "truststore", "salt", "iv", "seed", "hmac",
+    "keystore", "truststore", "salt", "iv", "hmac",
     "accesskey", "secretkey", "privatekey", "clientsecret", "sharedkey",
 })
 
@@ -119,9 +119,21 @@ _KEY_QUALIFIERS = frozenset({
     "shared", "consumer", "license", "activation", "aes", "des", "rsa", "hmac",
 })
 
-# The key-material detectors keep the broad reading of "key", because they carry
-# a second constraint the name alone does not: the value must have key shape.
-_KEY_NAME_TOKENS = _CRED_TOKENS | _KEY_TOKEN
+# "seed" is the same trade as "key": a TOTP or wallet seed is a secret, but
+# CORE_SEED_LOCATION and seedData name the rows a schema is loaded with. It
+# counts only beside a qualifier that makes it cryptographic, or — through the
+# key-material rules below — when the value has key shape.
+_SEED_TOKEN = frozenset({"seed", "seeds"})
+
+_SEED_QUALIFIERS = _KEY_QUALIFIERS | frozenset({
+    "key", "random", "rng", "prng", "secure", "entropy", "otp", "totp", "hotp",
+    "mfa", "phrase", "mnemonic", "wallet",
+})
+
+# The key-material detectors keep the broad reading of "key" and "seed", because
+# they carry a second constraint the name alone does not: the value must have
+# key shape.
+_KEY_NAME_TOKENS = _CRED_TOKENS | _KEY_TOKEN | _SEED_TOKEN
 
 _TOKEN_SPLIT = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]*|[a-z]+|\d+")
 
@@ -175,7 +187,9 @@ _PLACEHOLDER = re.compile(
 # A configuration key, a fully-qualified class name, a path, a label.
 _PROPERTY_NAME = re.compile(r"^[a-z0-9]+(?:[.\-][a-z0-9]+)+$")
 _FQCN = re.compile(r"^(?:[A-Za-z_$][\w$]*\.){2,}[A-Za-z_$][\w$]*$")
-_PATHLIKE = re.compile(r"^[./~]|^[\w.\-]+(?:/[\w.\-]+)+$|^[A-Za-z]:[\\/]")
+_PATHLIKE = re.compile(r"^[./~]|^[\w.\-*]+(?:/[\w.\-*]+)+$|^[A-Za-z]:[\\/]")
+# A Spring resource location is a path behind a scheme: classpath*:db/seed/*.sql.
+_RESOURCE_PREFIX = re.compile(r"^(?:classpath\*?|file|jar):", re.IGNORECASE)
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 _SENTENCE_END = re.compile(r"[:.?!,;]$")
 _MIME_OR_HEADER = re.compile(r"^[\w.\-]+/[\w.\-+]+$")
@@ -198,6 +212,8 @@ def _is_credential_named(name: str) -> bool:
     t = _tokens(name)
     if t & _CRED_TOKENS:
         return True
+    if t & _SEED_TOKEN and t & _SEED_QUALIFIERS:
+        return True
     return bool(t & _KEY_TOKEN) and bool(t & _KEY_QUALIFIERS)
 
 
@@ -213,7 +229,7 @@ def _is_obviously_not_a_secret(value: str) -> bool:
         return True
     if _PROPERTY_NAME.fullmatch(value) or _FQCN.fullmatch(value):
         return True
-    if _PATHLIKE.search(value) or _UUID.fullmatch(value):
+    if _PATHLIKE.search(_RESOURCE_PREFIX.sub("", value, count=1)) or _UUID.fullmatch(value):
         return True
     if _MIME_OR_HEADER.fullmatch(value) or _SENTENCE_END.search(value):
         return True
@@ -222,6 +238,17 @@ def _is_obviously_not_a_secret(value: str) -> bool:
     if len(set(value)) <= 2:  # "aaaaaaaa", "ababab"
         return True
     return False
+
+
+# A value read off a whole line keeps its quotes and whatever closes the line:
+# password="${db.password}"/> on its own line of a multi-line XML element.
+_QUOTED_VALUE = re.compile(r'^(["\'])(.*)\1\s*(?:/?>|[;,])?$')
+
+
+def _unquote(value: str) -> str:
+    """The value inside its quotes, so the placeholder test sees ``${...}``."""
+    m = _QUOTED_VALUE.match(value)
+    return m.group(2) if m else value
 
 
 def _entropy_bits(value: str) -> float:
@@ -294,6 +321,7 @@ def _find_credential_assignments(source: str) -> List[SecretFinding]:
     def consider(name: str, value: str, offset: int, shape: str) -> None:
         if not _is_credential_named(name):
             return
+        value = _unquote(value)
         if len(value) < _MIN_CRED_VALUE_LEN or _is_obviously_not_a_secret(value):
             return
         out.append(SecretFinding(_line_of(source, offset), f"credential assigned to '{name}' ({shape})"))

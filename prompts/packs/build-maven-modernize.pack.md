@@ -159,6 +159,20 @@ transaction, plus the JDBC driver where the container owns the DataSource — re
 A bundled container API scores 0: it deploys and then fails with `LinkageError`. Coordinates, profiles, repositories,
 unrelated dependency versions and existing comments preserved.
 
+Checks that do not apply: a check that does not apply to this file earns its full points. A check
+applies when the file contains what it is about, or when this file is where the transform had to
+introduce it; it does not apply when there is nothing here for it to judge (a check about Java
+code, on a descriptor that holds none). Name the checks that did not apply in `feedback`. Never
+score a check 0 for having nothing to examine: 0 is for a subject that is present and wrong, or
+missing where this file had to supply it.
+
+Parent and child modules: score only what this pom itself declares — the parent's values may not
+be in view. A child module that inherits `maven.compiler.release`, the BOM imports or plugin
+versions from its `<parent>` satisfies Checks 1 and 3 for those settings: award the points and say
+they are inherited, because the transform puts them in the parent on purpose. What the child does
+declare is still judged — its own leftover `maven.compiler.source`/`target`, a version it pins for
+something a BOM manages, or a plugin it configures at an old version scores as the check says.
+
 Scoring: PASS >= 80, RETRY 50-79, MANUAL < 50.
 
 Respond ONLY with valid JSON:

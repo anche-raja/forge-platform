@@ -333,6 +333,10 @@ def parse_pack(path: Path) -> PackSpec:
     applies_to = _applies_to(meta, path)
     _validate_context_contract(context, applies_to, path)
 
+    include_tests = meta.get("include_tests", False)
+    if not isinstance(include_tests, bool):
+        raise PackError(f"{path}: 'include_tests' must be true or false, got {include_tests!r}")
+
     if not transform:
         raise PackError(f"{path}: '## transform' section is empty")
     if not review:
@@ -359,6 +363,7 @@ def parse_pack(path: Path) -> PackSpec:
         acceptance=_acceptance(meta, path, _str_list(meta, "decisions", path)),
         transform_prompt=transform,
         review_prompt=review,
+        include_tests=include_tests,
         source_path=path,
     )
 

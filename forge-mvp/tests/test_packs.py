@@ -468,6 +468,26 @@ def test_complete_pack_rubric_sums_to_100(pack_id, library):
 
 
 @pytest.mark.parametrize("pack_id", [p.id for p in load_packs().complete])
+def test_complete_pack_rubric_gives_a_check_that_does_not_apply_its_full_points(pack_id, library):
+    """Issue #18: struts-services.xml scored 10 because the only check that applied
+    was worth 10. A check with nothing in the file to judge is not a failed check."""
+    review = " ".join(library[pack_id].review_prompt.split())
+    assert "a check that does not apply to this file earns its full points" in review
+    assert "Never score a check 0 for having nothing to examine" in review
+    # The rule sits in the rubric, ahead of the verdict bands the model reads last.
+    assert review.index("earns its full points") < review.index("Scoring: PASS")
+
+
+def test_build_rubric_credits_what_a_child_module_inherits(library):
+    """Issue #18: 7 of 10 AMS child poms scored 0-45 on settings their parent holds."""
+    review = " ".join(library["build-maven-modernize"].review_prompt.split())
+    assert "score only what this pom itself declares" in review
+    assert "inherits `maven.compiler.release`, the BOM imports or plugin versions" in review
+    # ...without letting a child's own stale declarations through.
+    assert "What the child does declare is still judged" in review
+
+
+@pytest.mark.parametrize("pack_id", [p.id for p in load_packs().complete])
 def test_packs_that_rewrite_java_state_the_jdk_javax_carve_out(pack_id, library):
     """Telling a model 'zero javax.* allowed' without the JDK carve-out invites
     it to rewrite javax.sql to jakarta.sql and break the build.
@@ -855,6 +875,79 @@ def test_javax_to_jakarta_takes_only_files_that_reference_jakarta_ee(tmp_path):
 
     taken = sorted(Path(f).name for f in scan_java_files(str(tmp_path), "javax-to-jakarta").files)
     assert taken == ["Imports.java", "Qualified.java"]
+
+
+# ─── test sources: issue #16 ─────────────────────────────────────────────────
+
+def _test_source_tree(root: Path) -> Path:
+    """A module whose tests import what the main code imports."""
+    main = root / "web/src/main/java/com/corp/web"
+    test = root / "web/src/test/java/com/corp/web"
+    other = root / "web/src/test/java/org/vendor"
+    for d in (main, test, other):
+        d.mkdir(parents=True)
+    (main / "LoginAction.java").write_text(
+        "package com.corp.web;\nimport javax.servlet.http.HttpServletRequest;\n"
+        "import com.opensymphony.xwork2.ActionSupport;\n"
+        "import org.springframework.stereotype.Component;\n"
+        "public class LoginAction extends ActionSupport {}\n", encoding="utf-8")
+    (test / "LoginActionTest.java").write_text(
+        "package com.corp.web;\nimport javax.servlet.http.HttpServletRequest;\n"
+        "import com.opensymphony.xwork2.ActionInvocation;\n"
+        "import org.springframework.mock.web.MockHttpServletRequest;\n"
+        "import org.junit.Test;\npublic class LoginActionTest {}\n", encoding="utf-8")
+    (other / "VendorTest.java").write_text(
+        "package org.vendor;\nimport javax.servlet.Filter;\nclass VendorTest {}\n", encoding="utf-8")
+    return root
+
+
+def _taken(root: Path, phase: str, prefix: str = "") -> list:
+    from forge.utils.file_scanner import scan_java_files
+
+    return sorted(str(Path(f).relative_to(root.resolve())) for f in
+                  scan_java_files(str(root), phase, prefix).files)
+
+
+def test_package_move_packs_take_test_sources_too(tmp_path):
+    """A test still importing javax.servlet or XWork does not compile after the run,
+    and both packs' leftover checks scan it -- so the packs must migrate it."""
+    root = _test_source_tree(tmp_path)
+    test = "web/src/test/java/com/corp/web/LoginActionTest.java"
+    main = "web/src/main/java/com/corp/web/LoginAction.java"
+
+    assert test in _taken(root, "javax-to-jakarta") and main in _taken(root, "javax-to-jakarta")
+    assert test in _taken(root, "struts2-modernize") and main in _taken(root, "struts2-modernize")
+
+
+def test_other_packs_still_leave_test_sources_alone(tmp_path):
+    root = _test_source_tree(tmp_path)
+    assert _taken(root, "spring-to-spring6") == ["web/src/main/java/com/corp/web/LoginAction.java"]
+    # junit4-to-junit5 takes tests by glob, as before, and nothing else.
+    assert _taken(root, "junit4-to-junit5") == [
+        "web/src/test/java/com/corp/web/LoginActionTest.java",
+        "web/src/test/java/org/vendor/VendorTest.java",
+    ]
+
+
+def test_scope_prefix_still_governs_a_test_source(tmp_path):
+    from forge.utils.file_scanner import scan_java_files
+
+    root = _test_source_tree(tmp_path)
+    result = scan_java_files(str(root), "javax-to-jakarta", "com.corp")
+    assert not any("VendorTest" in f for f in result.files)
+    assert any("VendorTest" in s.path and s.package == "org.vendor" for s in result.skipped)
+
+
+def test_include_tests_is_declared_by_exactly_the_package_move_packs():
+    from forge.packs import load_packs
+
+    wanting = sorted(p.id for p in load_packs().values() if p.include_tests)
+    assert wanting == ["javax-to-jakarta", "struts2-modernize"]
+
+
+def test_include_tests_must_be_a_boolean(packs):
+    write_pack(packs, "p", frontmatter=_fm("p", include_tests="sometimes"))
+    assert "include_tests" in load_error(packs)
 
 
 @pytest.mark.parametrize("body, taken", [

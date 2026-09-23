@@ -147,6 +147,15 @@ Globs use FORGE's own matcher, not `fnmatch`: `*` stops at `/`, `**/` crosses di
 >       risk: high
 > ```
 
+> ### Test sources are left out unless you say so
+>
+> The scanner skips `src/test` by default. A pack that exists to migrate tests says so with a glob
+> that names `src/test` (junit4-to-junit5). A pack whose change the tests must follow to compile
+> — a package move — sets `include_tests: true` at the top level, and its `applies_to` then reads
+> `src/test` like `src/main`. javax-to-jakarta and struts2-modernize do: a test still importing
+> `javax.servlet` or XWork no longer builds, and their leftover checks scan `**/*.java`, tests
+> included.
+
 ---
 
 ## The two sections
@@ -177,6 +186,12 @@ Check 2 — Logger semantics preserved (40 pts): ...
 > its rubric scored 0 unless every Struts tag had been *removed* — so a perfectly correct migration
 > capped at 80 against a pass threshold of 80, one point from manual review, on every JSP in the
 > project. Read the two sections against each other before you ship.
+
+> **A check that does not apply earns its full points.** A pack's files are not all alike: a Struts
+> descriptor has no action setters, a child `pom.xml` inherits its Java level and BOMs from the
+> parent. Scored as failures, those checks sent `struts-services.xml` to 10 and seven AMS child
+> poms below 50. Every complete pack carries the same "Checks that do not apply" paragraph before
+> its `Scoring:` line — copy it, and `tests/test_packs.py` checks it is there.
 
 ---
 

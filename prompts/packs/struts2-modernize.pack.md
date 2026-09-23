@@ -17,6 +17,9 @@ applies_to:
   - file_glob: "**/*-validation.xml"
   - file_glob: "**/validators.xml"
   - file_glob: "**/*.ftl"
+# Tests too: a test that still imports com.opensymphony.xwork2 does not compile against the
+# migrated dependencies, and the leftover check below scans them.
+include_tests: true
 context: none
 depends_on: [build-maven-modernize, javax-to-jakarta]
 decisions: [web_framework]
@@ -197,6 +200,13 @@ Check 5 — DTD and scope discipline (10 pts):
 The DOCTYPE is a real DTD — 6.5 or the existing one, **never an invented 7.0**. FreeMarker
 `parameters` renamed to `attributes`. No Spring MVC annotation, no controller conversion, no
 business-logic change: this is a version upgrade, not a framework migration.
+
+Checks that do not apply: a check that does not apply to this file earns its full points. A check
+applies when the file contains what it is about, or when this file is where the transform had to
+introduce it; it does not apply when there is nothing here for it to judge (a check about Java
+code, on a descriptor that holds none). Name the checks that did not apply in `feedback`. Never
+score a check 0 for having nothing to examine: 0 is for a subject that is present and wrong, or
+missing where this file had to supply it.
 
 Scoring: PASS >= 80, RETRY 50-79, MANUAL < 50.
 
