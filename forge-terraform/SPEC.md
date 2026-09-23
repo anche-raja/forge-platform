@@ -203,7 +203,7 @@ Bedrock policy:
   bedrock:ApplyGuardrail — on the guardrail ARN created above
 
 DynamoDB policy:
-  dynamodb:PutItem, GetItem, UpdateItem, DeleteItem, Query, Scan, DescribeTable — on both table ARNs and their /index/*
+  dynamodb:PutItem, GetItem, UpdateItem, DeleteItem, BatchWriteItem, Query, Scan, DescribeTable — on both table ARNs and their /index/*
 
 CloudWatch policy:
   cloudwatch:PutMetricData — resource *
