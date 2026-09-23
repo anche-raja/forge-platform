@@ -418,6 +418,9 @@ def test_the_chat_can_take_a_project_from_a_sentence_and_land_it_without_a_form(
     (out / "src/main/java/com/corp/user/UserAction.java").write_text(
         "package com.corp.user;\nimport jakarta.persistence.Entity;\npublic class UserAction {}\n",
         encoding="utf-8")
+    # A run records what it wrote; landing takes only recorded files (#25).
+    from forge.utils import run_manifest
+    run_manifest.record(str(out), "javax-to-jakarta", [str(out / "src/main/java/com/corp/user/UserAction.java")])
     # The artifact that must never be committed: it carries the source verbatim.
     (out / QUEUE_NAME).write_text(json.dumps({"run": "r1", "entries": []}), encoding="utf-8")
 

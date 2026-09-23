@@ -326,7 +326,9 @@ approving an old card could apply a different pack's transform to a different fi
 a bad ref name — each is a distinct message. It never stashes, never forces, never amends, never
 pushes. It stages only the paths it copied, never `-A`. It never commits FORGE's own artifacts, and
 a test cross-checks `ARTIFACT_NAMES` against `ui/app.py`'s `ARTIFACTS` so a new artifact cannot
-silently start being committed.
+silently start being committed. It copies only files the run manifest (`.forge-writes.json`) or an
+approval in `decisions-applied.jsonl` accounts for; any other file in the output directory is left
+behind and named in the result (`skipped`), so a stray fixture cannot ride into the commit.
 
 ---
 

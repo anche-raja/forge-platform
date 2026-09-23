@@ -22,6 +22,12 @@ history they did not choose to put it in. That one file is the reason
 and a test cross-checks it against ``forge/ui/app.py``'s ``ARTIFACTS`` so a new
 artifact cannot quietly start being committed.
 
+**What lands is also only what FORGE wrote.** A file in ``output_dir`` that no
+run recorded in ``.forge-writes.json`` -- and no reviewer approved in
+``decisions-applied.jsonl`` -- is not part of the migration: a stray test
+fixture, a file someone copied in by hand, a ``.DS_Store``. It is left behind
+and named in the result, never committed (:func:`unrecorded_files`).
+
 **A failed step reports the state; it does not roll back.** Half-undoing a
 checkout is how a tool turns one problem into two. Every git call is
 ``subprocess.run`` with a list argv and ``check=False``, and a non-zero exit
@@ -29,12 +35,14 @@ comes back as a refusal carrying git's own stderr and a sentence saying which
 branch the repository is now on.
 """
 
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from forge.utils import run_manifest
 from forge.utils.file_writer import STAGING_DIR
 
 # FORGE's own output, which is never project code. `manual-review-queue.json`
@@ -60,6 +68,7 @@ ARTIFACT_NAMES = frozenset({
     "test-generation-report.md",
     "decisions-applied.jsonl",
     "pack-feedback.md",
+    "project-build.json",
 })
 
 # The line the repository's own history carries on work Claude had a hand in.
@@ -103,29 +112,105 @@ def is_artifact(rel: str) -> bool:
     # project code. Same rule merged_tree.py already applies.
     if rel.startswith("decisions") and rel.endswith(".json"):
         return True
+    # The run manifest: FORGE's bookkeeping, and it once landed as an added file.
+    if rel == run_manifest.MANIFEST_NAME:
+        return True
     return rel in ARTIFACT_NAMES
 
 
-def landable_files(output_dir: str) -> List[str]:
-    """Every migrated file in ``output_dir``, relative and sorted.
+# Written by the operating system, not by anyone; never landed and not worth
+# naming in a result either.
+_OS_NOISE = frozenset({".DS_Store", "Thumbs.db", "desktop.ini"})
+# How many unrecorded paths a result names; the count is always exact.
+SKIPPED_CAP = 50
 
-    Held units under ``.forge-staging/`` are excluded because they are exactly
-    the files a human has not approved — landing them would be the hold gate
-    with no gate.
+
+def recorded_files(output_dir: str) -> set:
+    """Relative paths FORGE put in ``output_dir``: what a run wrote, and what a human approved.
+
+    ``.forge-writes.json`` is the run manifest. The applied-decisions log is
+    read too because an approval promoted from staging was not recorded in the
+    manifest before ``service.apply`` started doing so, and a file a human
+    signed off on must not be dropped from a landing for a bookkeeping gap.
     """
+    recorded = set(run_manifest.load(str(Path(output_dir).expanduser())))
+    try:
+        from forge.decisions import APPLIED_LOG
+        text = (Path(output_dir).expanduser() / APPLIED_LOG).read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    for row in _json_objects(text):
+        if row.get("decision") == "approve" and row.get("applied"):
+            rel = str(row.get("file") or "").replace("\\", "/")
+            if rel and not rel.startswith("/") and ".." not in rel.split("/"):
+                recorded.add(rel)
+    return recorded
+
+
+def _json_objects(text: str):
+    """Every JSON object in a JSONL log, even two run together on one line.
+
+    The real AMS log starts with a test fixture glued to the first approval
+    (no newline between them); reading it line by line would drop that approval.
+    """
+    decoder = json.JSONDecoder()
+    i, n = 0, len(text)
+    while i < n:
+        while i < n and text[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            return
+        try:
+            obj, i = decoder.raw_decode(text, i)
+        except ValueError:
+            nxt = text.find("\n", i)
+            if nxt < 0:
+                return
+            i = nxt + 1
+            continue
+        if isinstance(obj, dict):
+            yield obj
+
+
+def _scan(output_dir: str):
+    """``(landable, unrecorded)``: project files in ``output_dir``, split by provenance."""
     root = Path(output_dir).expanduser()
     if not output_dir or not root.is_dir():
-        return []
-    found: List[str] = []
+        return [], []
+    recorded = recorded_files(output_dir)
+    landable: List[str] = []
+    unrecorded: List[str] = []
     for dirpath, dirs, files in os.walk(root):
         # `.git` would only be here if the output directory were itself a
         # repository; copying it into another one is never right.
         dirs[:] = sorted(d for d in dirs if d not in (STAGING_DIR, ".git"))
         for name in sorted(files):
             rel = str((Path(dirpath) / name).relative_to(root)).replace("\\", "/")
-            if not is_artifact(rel):
-                found.append(rel)
-    return sorted(found)
+            if is_artifact(rel) or name in _OS_NOISE:
+                continue
+            (landable if rel in recorded else unrecorded).append(rel)
+    return sorted(landable), sorted(unrecorded)
+
+
+def landable_files(output_dir: str) -> List[str]:
+    """Every migrated file in ``output_dir`` that FORGE recorded, relative and sorted.
+
+    Held units under ``.forge-staging/`` are excluded because they are exactly
+    the files a human has not approved — landing them would be the hold gate
+    with no gate. Files no run recorded are excluded too (:func:`unrecorded_files`).
+    """
+    return _scan(output_dir)[0]
+
+
+def unrecorded_files(output_dir: str) -> List[str]:
+    """Files in ``output_dir`` that no run wrote and no human approved.
+
+    Landing leaves them behind and reports them. A pytest fixture once sat in
+    the real output folder for two days, and a landing that trusted the
+    directory would have committed ``com/corp/Other.java`` into the customer's
+    repository.
+    """
+    return _scan(output_dir)[1]
 
 
 # ─── git, always as a list argv ───────────────────────────────────────────────
@@ -231,9 +316,16 @@ def preconditions(source_dir: str, output_dir: str, branch: str) -> Optional[str
     out = Path(output_dir or "").expanduser()
     if not output_dir or not out.is_dir():
         return f"no output directory at {output_dir or '(none)'} — run a pack first, there is nothing migrated to land"
-    if not landable_files(output_dir):
+    landable, unrecorded = _scan(output_dir)
+    if not landable:
+        extra = ""
+        if unrecorded:
+            shown = ", ".join(unrecorded[:5]) + (f" and {len(unrecorded) - 5} more" if len(unrecorded) > 5 else "")
+            extra = (f" It does hold {len(unrecorded)} file(s) no FORGE run recorded ({shown}); "
+                     "those are never landed.")
         return (f"{output_dir} holds no migrated files — only FORGE's own artifacts, and held "
-                "units that are still waiting on a human. Run a pack, or settle the held files first.")
+                "units that are still waiting on a human. Run a pack, or settle the held files first."
+                + extra)
     return None
 
 
@@ -273,7 +365,8 @@ def land(source_dir: str, output_dir: str, branch: str, *, message: Optional[str
 
     Returns a JSON-safe dict: ``{"ok": False, "error", "state"?}`` or
     ``{"ok": True, "branch", "files_changed", "deleted", "commit", "packs",
-    "push_command", "files"}``. Nothing here raises for a git failure — the
+    "push_command", "files", "skipped", "skipped_count"}``. ``skipped`` names files
+    in ``output_dir`` that were left behind because no run recorded them. Nothing here raises for a git failure — the
     caller is a tool, and a tool failure is an observation (R6).
     """
     branch = str(branch or "").strip()
@@ -283,8 +376,23 @@ def land(source_dir: str, output_dir: str, branch: str, *, message: Optional[str
 
     source = str(Path(source_dir).expanduser().resolve())
     out_root = Path(output_dir).expanduser()
-    files = landable_files(output_dir)
+    files, unrecorded = _scan(output_dir)
     was_on = _current_branch(source)
+
+    # Everything that can be known before the branch exists is checked here,
+    # so a landing either happens whole or leaves the repository untouched.
+    # `git add` refuses an ignored path outright, and on AMS that refusal
+    # came after the checkout and the copy -- a half-landed branch.
+    try:
+        ignored = _ignored(source, files)
+    except RuntimeError as e:   # GitUnavailable included
+        return _fail(str(e), f"nothing was copied and no branch was created; the repository is still on {was_on}")
+    if ignored:
+        files = [f for f in files if f not in ignored]
+        if not files:
+            return _fail(f"every migrated file is ignored by the repository's .gitignore "
+                         f"({', '.join(sorted(ignored)[:5])}{' …' if len(ignored) > 5 else ''})",
+                         f"nothing was copied and no branch was created; the repository is still on {was_on}")
 
     try:
         made = _git(source, "checkout", "-b", branch)
@@ -350,9 +458,37 @@ def land(source_dir: str, output_dir: str, branch: str, *, message: Optional[str
             "files": copied,
             "deleted_files": removed,
             "source_dir": source,
+            # Not FORGE's to commit, so not committed -- and said, so the user
+            # can see what is sitting in the output directory.
+            "skipped": unrecorded[:SKIPPED_CAP],
+            "skipped_count": len(unrecorded),
+            # Recorded, but the repository's .gitignore excludes them; git add
+            # would refuse them, so they were never copied.
+            "ignored": sorted(ignored)[:SKIPPED_CAP],
+            "ignored_count": len(ignored),
         }
     except GitUnavailable as e:
         return _fail(str(e), f"the repository may be on branch '{branch}'; check with `git status`")
+
+
+def _ignored(source: str, files: Sequence[str]) -> set:
+    """The paths among ``files`` the repository's ignore rules exclude.
+
+    Asked of git itself (``check-ignore``), so every .gitignore, the global
+    excludes file and ``.git/info/exclude`` all count. A tracked file is never
+    reported -- git adds those whatever the rules say. Raises RuntimeError
+    when git cannot answer, which the caller turns into a refusal before the
+    branch exists.
+    """
+    found: set = set()
+    for start in range(0, len(files), ADD_BATCH):
+        chunk = list(files[start:start + ADD_BATCH])
+        proc = _git(source, "check-ignore", "--", *chunk)
+        if proc.returncode == 0:
+            found |= {line.strip() for line in (proc.stdout or "").splitlines() if line.strip()}
+        elif proc.returncode != 1:     # 1 is "none of these is ignored"
+            raise RuntimeError(f"git could not check the ignore rules: {_stderr(proc)}")
+    return found
 
 
 def _remove_superseded(source: str, deleted: Iterable[str]) -> List[str]:

@@ -916,9 +916,18 @@ def apply(decisions: Sequence[Any], source_dir: str, output_dir: str, config: Fo
     def verify_build(written):
         return verifier.verify({"dry_run": False, "output_dir": output_dir, "current_file": {"written_paths": written}})
 
+    def put_status(fs) -> None:
+        state_manager.put_file_status(fs)
+        # An approved or retried-to-DONE unit is now in the output tree, so it
+        # is recorded like any run's write: landing takes only recorded files,
+        # and the next pack's overlap guard needs to know who owns it.
+        if fs.get("status") == "DONE" and fs.get("written_paths"):
+            run_manifest.record(output_dir, fs.get("phase") or phase or "java21", fs["written_paths"],
+                                deleted=fs.get("deleted_files") or ())
+
     outcomes, remaining = apply_decisions(
         decided, queue, source_dir=source_dir, output_dir=output_dir,
-        put_status=state_manager.put_file_status, verify_build=verify_build, rerun=rerun, dry_run=dry_run,
+        put_status=put_status, verify_build=verify_build, rerun=rerun, dry_run=dry_run,
     )
     for o in outcomes:
         emit(on_event, {"type": "apply_outcome", "file": o.file, "decision": o.decision, "applied": o.applied,

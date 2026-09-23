@@ -1224,6 +1224,11 @@ class Toolbox:
             "commit": result["commit"],
             "packs": result["packs"],
             "push_command": result["push_command"],
+            # Files in the output directory no run recorded: left behind, named here.
+            "skipped_unrecorded": result.get("skipped") or [],
+            "skipped_count": result.get("skipped_count", 0),
+            # Recorded, but the repository's .gitignore excludes them: not copied.
+            "ignored": result.get("ignored") or [],
         }
         return ToolOutcome(True, observation, [cards.land_card(result)],
                            f"{result['files_changed']} file(s) committed on {result['branch']} "

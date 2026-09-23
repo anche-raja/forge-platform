@@ -29,6 +29,7 @@ from forge.leader.convo import Conversation
 from forge.leader.landing import ARTIFACT_NAMES
 from forge.leader.settings import LeaderSettings
 from forge.leader.tools import ProjectContext, Toolbox
+from forge.utils import run_manifest
 from forge.utils.file_writer import STAGING_DIR
 from tests.conftest import write_config
 
@@ -102,6 +103,8 @@ def _output(tmp_path, *, migrated: bool = True) -> Path:
         target = out / MIGRATED_REL
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(MIGRATED, encoding="utf-8")
+        # What a run leaves behind: the file, and the manifest entry saying who wrote it.
+        run_manifest.record(str(out), "javax-to-jakarta", [str(target)])
     for name in ARTIFACT_NAMES:
         (out / name).write_text(f"{ARTIFACT_MARKER} in {name}\n", encoding="utf-8")
     held = out / STAGING_DIR / "src/main/java/com/corp/Held.java"
@@ -327,6 +330,143 @@ def test_a_generated_commit_message_names_the_packs_and_a_given_one_is_used_verb
                     message="Land the jakarta migration")
     assert mine.ok is True, mine.observation
     assert _git(repo, "log", "-1", "--pretty=%s") == "Land the jakarta migration"
+
+
+# ─── only what a run recorded lands ──────────────────────────────────────────
+
+STRAY_REL = "src/main/java/com/corp/Other.java"
+
+
+def test_a_file_no_run_recorded_is_left_behind_and_named(repo, tmp_path, config):
+    """Issue #25: a pytest fixture sat in the real output folder for two days.
+
+    ``com/corp/Other.java`` was never written by a FORGE run, so it is not in
+    ``.forge-writes.json`` and must not be committed into the user's repository
+    -- and the user is told it is there, rather than it vanishing quietly.
+    """
+    out = _output(tmp_path)
+    stray = out / STRAY_REL
+    stray.write_text("package com.corp; class Other {}\n", encoding="utf-8")
+    (out / ".DS_Store").write_bytes(b"\0")
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert _commit_files(repo) == [MIGRATED_REL]
+    assert STRAY_REL not in _work_tree(repo), "an unrecorded file was copied into the repository"
+    assert outcome.observation["skipped_unrecorded"] == [STRAY_REL]
+    assert outcome.observation["skipped_count"] == 1, ".DS_Store is noise, not a finding"
+    assert stray.is_file(), "landing reports the stray file; deleting it is the user's call"
+
+
+def test_an_approved_file_lands_even_when_the_manifest_never_heard_of_it(repo, tmp_path, config):
+    """Approvals were not recorded in the manifest before this fix.
+
+    The seven pom.xml files approved on AMS are in ``decisions-applied.jsonl``
+    and not in ``.forge-writes.json``; a human signed them off, so they land.
+    """
+    out = _output(tmp_path)
+    approved = "ams/pom.xml"
+    (out / "ams").mkdir()
+    (out / approved).write_text("<project/>\n", encoding="utf-8")
+    # The real log begins with a fixture glued to the first approval, no newline between.
+    (out / "decisions-applied.jsonl").write_text(
+        json.dumps({"original": "class X {}"})
+        + json.dumps({"run": "r", "file": approved, "pack": "build-maven-modernize", "decision": "approve",
+                    "applied": True, "status_after": "DONE"}) + "\n"
+        + json.dumps({"run": "r", "file": STRAY_REL, "pack": "x", "decision": "reject",
+                      "applied": True, "status_after": "REJECTED"}) + "\n", encoding="utf-8")
+    (out / STRAY_REL).write_text("class Other {}\n", encoding="utf-8")
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert _commit_files(repo) == sorted([MIGRATED_REL, approved])
+    assert outcome.observation["skipped_unrecorded"] == [STRAY_REL], "a rejection is not an approval"
+
+
+def test_os_junk_and_forge_artifacts_never_land_even_when_the_manifest_names_them(repo, tmp_path, config):
+    """The AMS landing staged ``.forge-writes.json`` and copied ``project-build.json``.
+
+    Provenance is not enough on its own: a manifest that somehow listed an
+    artifact, or a ``.DS_Store`` the Finder dropped into a migrated package,
+    must still stay out of the user's repository.
+    """
+    out = _output(tmp_path)
+    (out / "project-build.json").write_text(f'{{"outcome": "{ARTIFACT_MARKER}"}}', encoding="utf-8")
+    (out / "src/main/java/com/corp/user/.DS_Store").write_bytes(b"\0\0")
+    run_manifest.record(str(out), "javax-to-jakarta",
+                        [str(out / "project-build.json"), str(out / "src/main/java/com/corp/user/.DS_Store")])
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert _commit_files(repo) == [MIGRATED_REL]
+    tree = _work_tree(repo)
+    assert not any(p.endswith(".DS_Store") for p in tree), tree
+    assert run_manifest.MANIFEST_NAME not in tree and "project-build.json" not in tree, tree
+
+
+def test_a_gitignored_file_is_left_out_with_a_note_instead_of_failing_git_add(repo, tmp_path, config):
+    """``git add`` refuses an ignored path, and on AMS it refused after the checkout.
+
+    ``check-ignore`` runs before the branch exists; an ignored file is dropped
+    and named, and everything else lands whole.
+    """
+    (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore logs")
+    out = _output(tmp_path)
+    log = out / "src/main/java/com/corp/user/debug.log"
+    log.write_text("noise\n", encoding="utf-8")
+    run_manifest.record(str(out), "javax-to-jakarta", [str(log)])
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is True, outcome.observation
+    assert _commit_files(repo) == [MIGRATED_REL]
+    assert outcome.observation["ignored"] == ["src/main/java/com/corp/user/debug.log"]
+    assert _git(repo, "status", "--porcelain") == "", "a half-landing: something was copied and not committed"
+
+
+def test_when_every_file_is_ignored_nothing_is_copied_and_no_branch_is_made(repo, tmp_path, config):
+    (repo / ".gitignore").write_text("src/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore src")
+    out = _output(tmp_path)
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is False
+    assert "ignored" in outcome.observation["error"]
+    assert _branches(repo) == ["main"] and _head(repo) == "main"
+    assert _work_tree(repo) == [".gitignore", "README.md"], "a refused landing copied files anyway"
+
+
+def test_a_refused_landing_copies_nothing_at_all(repo, tmp_path, config):
+    """A failed precondition leaves the repository exactly as it was: no branch, no file."""
+    (repo / "README.md").write_text("an unfinished edit\n", encoding="utf-8")
+    out = _output(tmp_path)
+    (out / STRAY_REL).write_text("class Other {}\n", encoding="utf-8")
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is False
+    assert _branches(repo) == ["main"]
+    assert _work_tree(repo) == ["README.md"]
+    assert _git(repo, "status", "--porcelain") == "M README.md"
+
+
+def test_an_output_holding_only_unrecorded_files_is_refused_and_says_what_is_there(repo, tmp_path, config):
+    out = _output(tmp_path, migrated=False)
+    (out / "src/main/java/com/corp").mkdir(parents=True)
+    (out / STRAY_REL).write_text("class Other {}\n", encoding="utf-8")
+
+    outcome, _ = _land(repo, out, config)
+
+    assert outcome.ok is False
+    assert STRAY_REL in outcome.observation["error"]
+    assert _branches(repo) == ["main"]
 
 
 # ─── the cross-check that keeps the list honest ──────────────────────────────

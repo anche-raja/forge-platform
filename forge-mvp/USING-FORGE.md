@@ -169,6 +169,13 @@ because the work tree is never clean. Add `migrated/` to your `.gitignore`.
 FORGE's own working files — reports, the review queue — are never committed. The review queue holds
 copies of your source, so it must not end up in a commit.
 
+Only files a FORGE run wrote (recorded in `.forge-writes.json`) or a reviewer approved are
+committed. Anything else sitting in the output directory — a file copied in by hand, a leftover
+test fixture — is left where it is and listed in the landing result, so you can decide what it is.
+`.DS_Store` and similar operating-system files are never landed. A migrated file your repository's
+`.gitignore` excludes is left out and named too; all of this is decided before the branch is
+created, so a refused landing leaves your repository exactly as it was.
+
 ---
 
 ## What FORGE can migrate
