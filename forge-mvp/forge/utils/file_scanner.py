@@ -13,7 +13,8 @@ _log = get_logger(__name__)
 
 # Re-exported under the historical name; the definition lives in forge.utils.fs
 # so the context extractors can share it without importing this module.
-from forge.utils.fs import EXCLUDED_DIRS as _EXCLUDED_DIRS  # noqa: E402
+from forge.utils.fs import EXCLUDED_DIRS as _EXCLUDED_DIRS  # noqa: E402,F401
+from forge.utils.fs import prune_dirs  # noqa: E402
 
 
 class SkippedFile(NamedTuple):
@@ -173,8 +174,9 @@ def scan_java_files(
     passed_over = 0
 
     for root, dirs, files in os.walk(source_path):
-        # Prune build/vendor/VCS dirs in-place so os.walk doesn't descend.
-        dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS]
+        # Prune build/vendor/VCS dirs, and FORGE's own output (a `.migrated`
+        # inside the repository), in place so os.walk doesn't descend.
+        prune_dirs(root, dirs)
 
         for fname in files:
             abs_path = Path(root) / fname

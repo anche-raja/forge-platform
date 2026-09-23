@@ -24,7 +24,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from forge.extract import Extractor, register
 from forge.extract.selectors import server_config, servlet_components
-from forge.utils.fs import EXCLUDED_DIRS, is_test_path
+from forge.utils.fs import is_test_path, prune_dirs
 from forge.utils.java_checks import declared_package
 from forge.utils.telemetry import get_logger
 
@@ -164,7 +164,8 @@ def _walk(root: Path) -> Iterator[Path]:
     """Files under ``root``, pruning build/VCS dirs and test sources."""
     root = Path(root)
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS)
+        prune_dirs(dirpath, dirs)
+        dirs.sort()
         rel_dir = str(Path(dirpath).relative_to(root)).replace("\\", "/")
         if is_test_path(rel_dir + "/"):
             dirs[:] = []

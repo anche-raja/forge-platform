@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from forge.utils.fs import EXCLUDED_DIRS, is_test_path
+from forge.utils.fs import is_test_path, prune_dirs
 
 _MAX_TEXT_BYTES = 2 * 1024 * 1024
 _TEXT_EXT = {".java", ".jsp", ".jspf", ".jspx", ".xml", ".properties", ".ftl", ".tag", ".tagf",
@@ -134,7 +134,8 @@ def _prefix_counts(imports: Iterable[str]) -> Dict[str, int]:
 
 def _walk(root: Path) -> Iterable[Path]:
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS)
+        prune_dirs(dirpath, dirs)
+        dirs.sort()
         for f in sorted(files):
             yield Path(dirpath) / f
 

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
-from forge.utils.fs import EXCLUDED_DIRS, is_test_path
+from forge.utils.fs import is_test_path, prune_dirs
 from forge.utils.java_checks import declared_package
 from forge.utils.telemetry import get_logger
 
@@ -208,7 +208,8 @@ def test_rel_path_for(package: str, type_name: str) -> str:
 
 def walk_java(root: Path):
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS and d not in _ARTIFACT_DIRS)
+        prune_dirs(dirpath, dirs, also=_ARTIFACT_DIRS)
+        dirs.sort()
         for name in sorted(files):
             if name.endswith(".java"):
                 yield Path(dirpath) / name

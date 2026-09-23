@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from forge.testgen.targets import TestTarget, read_surface, walk_java
-from forge.utils.fs import is_test_path
+from forge.utils.fs import is_test_path, keep_dir
 
 _IMPORT_RE = re.compile(r"^\s*import\s+(?:static\s+)?([\w.]+)\s*;", re.MULTILINE)
 _TYPE_USE_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]{2,})\b")
@@ -61,7 +61,10 @@ def available_test_libraries(source_dir: str, output_dir: Optional[str] = None) 
         if not base.is_dir():
             continue
         for name in _BUILD_FILES:
-            for path in list(base.glob(name)) + list(base.glob(f"*/{name}")):
+            # One level down is a module -- unless it is excluded or FORGE's own
+            # output (a `.migrated` inside the repository holds copies of these).
+            nested = [p for p in base.glob(f"*/{name}") if keep_dir(base, p.parent.name)]
+            for path in list(base.glob(name)) + nested:
                 try:
                     text += path.read_text(encoding="utf-8", errors="replace")
                 except OSError:

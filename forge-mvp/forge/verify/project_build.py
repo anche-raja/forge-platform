@@ -34,7 +34,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
-from forge.utils.fs import EXCLUDED_DIRS
+from forge.utils.fs import prune_dirs
 
 DEFAULT_TIMEOUT = 1200
 DEFAULT_MAVEN_REPO = "~/.forge/m2"
@@ -159,7 +159,10 @@ def find_reactors(root: str) -> List[Path]:
     base = Path(root).resolve()
     poms: Dict[Path, _Pom] = {}
     for dirpath, dirs, files in os.walk(base):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS and not d.startswith("."))
+        # FORGE's own output is never a reactor: a `.migrated` inside the
+        # repository holds a copy of the very poms being built.
+        prune_dirs(dirpath, dirs)
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         if "pom.xml" in files:
             pom = _read_pom(Path(dirpath) / "pom.xml")
             if pom is not None:

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator, Optional, Sequence, Tuple
 
 from forge.packs.glob import glob_match
-from forge.utils.fs import EXCLUDED_DIRS
+from forge.utils.fs import prune_dirs
 
 _MAX_TEXT_BYTES = 2 * 1024 * 1024
 
@@ -29,16 +29,27 @@ class MergedTree:
 
     # ── enumeration ──────────────────────────────────────────────────────────
 
-    def _walk(self, root: Path) -> Iterator[Path]:
+    def _walk(self, root: Path, skip: Optional[Path] = None) -> Iterator[Path]:
+        """Files under ``root``. FORGE output below it is pruned, and so is ``skip``.
+
+        ``skip`` is this view's own output directory when it lies inside the
+        source (the chat's ``<repo>/.migrated``): pruned by path as well as by
+        :func:`prune_dirs`, because an output directory the user named and no
+        run has written to yet carries neither the name nor a marker.
+        """
         for dirpath, dirs, files in os.walk(root):
-            dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS)
+            prune_dirs(dirpath, dirs)
+            if skip is not None:
+                dirs[:] = [d for d in dirs if Path(dirpath, d).resolve() != skip]
+            dirs.sort()
             for f in sorted(files):
                 yield Path(dirpath) / f
 
     def rel_paths(self) -> Iterator[str]:
         """Every relative path in the merged view, source first then output-only additions."""
         seen = set()
-        for p in self._walk(self.source):
+        inside = self.output if self.output and self.output.is_relative_to(self.source) else None
+        for p in self._walk(self.source, skip=inside):
             rel = str(p.relative_to(self.source)).replace("\\", "/")
             if rel in self.deleted:
                 continue
