@@ -78,7 +78,7 @@ Rule 6 — Every deviation, including one you believe is an improvement, goes in
 the before and after rule. There are no silent security changes.
 
 Respond ONLY with valid JSON:
-{"files": {...}, "deleted_files": [], "manual_flags": [...]}
+{"files": {"<path>": "<full content>"}, "deleted_files": [], "manual_flags": [...]}
 
 ## review
 

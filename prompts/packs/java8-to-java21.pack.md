@@ -77,7 +77,7 @@ Rule 5 — Do not change: logging framework, exception types, method signatures 
 serialization form (`serialVersionUID`), or anything a framework reflects over.
 
 Respond ONLY with valid JSON:
-{"files": {...}, "deleted_files": [], "manual_flags": [...]}
+{"files": {"<path>": "<full content>"}, "deleted_files": [], "manual_flags": [...]}
 
 ## review
 

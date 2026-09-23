@@ -7,7 +7,7 @@ from forge.context.inject import context_block_for, declared_context
 from forge.phases import get_phase
 from forge.state import ForgeState
 from forge.utils.cost import accrue
-from forge.utils.llm_json import extract_json
+from forge.utils.llm_json import TransformShapeError, extract_json, normalize_files
 from forge.utils.telemetry import get_logger
 
 _log = get_logger(__name__)
@@ -89,6 +89,17 @@ class JavaUpgradeAgent(BaseAgent):
             _log.warning("Transform output for %s was not valid JSON: %s", file_path, e)
             file_status["status"] = "MANUAL_REVIEW"
             file_status["error"] = f"Failed to parse transform output as JSON: {e}"
+            return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
+
+        try:
+            if not isinstance(result, dict):
+                raise TransformShapeError(f"output is a {type(result).__name__}, expected an object")
+            result = {**result, "files": normalize_files(result.get("files"))}
+        except TransformShapeError as e:
+            # One malformed answer is one file for a human, never the end of the run.
+            _log.warning("Transform output for %s has the wrong shape: %s", file_path, e)
+            file_status["status"] = "MANUAL_REVIEW"
+            file_status["error"] = f"Transform output has the wrong shape: {e}"
             return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
 
         file_status["transform_output"] = result

@@ -127,7 +127,7 @@ flattening it changes which class wins. Preserve the module list and `<library-d
 flag any module that is being retired so the assembly is updated rather than left dangling.
 
 Respond ONLY with valid JSON:
-{"files": {...}, "deleted_files": [], "manual_flags": [...]}
+{"files": {"<path>": "<full content>"}, "deleted_files": [], "manual_flags": [...]}
 
 ## review
 

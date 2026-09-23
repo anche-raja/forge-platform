@@ -100,3 +100,38 @@ def test_upgrade_with_feedback(config, java_file):
         assert "PREVIOUS REVIEW FEEDBACK" in human_content
         assert "javax.persistence.Entity was not migrated" in human_content
         assert result["current_file"]["status"] == "REVIEWING"
+
+
+def _state_for(java_file):
+    return {
+        "current_file": make_file_status(java_file, "java21"), "phase": "java21", "dry_run": False,
+        "source_dir": str(Path(java_file).parent), "output_dir": "./migrated",
+        "target_java_version": "21", "target_spring_version": "3",
+        "files_processed": 0, "files_passed": 0, "files_retried": 0,
+        "files_manual": 0, "files_blocked": 0,
+        "bedrock_calls": 0, "estimated_cost_usd": 0.0, "messages": [],
+    }
+
+
+def test_upgrade_unwraps_file_objects(config, java_file):
+    """{"path": {"code": ...}} reaches the reviewer and writer as plain text."""
+    m = MagicMock()
+    m.content = json.dumps({"files": {java_file: {"language": "java", "code": "class Example {}"}}})
+    with patch("forge.agents.java_upgrade.ChatBedrockConverse") as MockLLM:
+        MockLLM.return_value.invoke.return_value = m
+        from forge.agents.java_upgrade import JavaUpgradeAgent
+        result = JavaUpgradeAgent(config).run(_state_for(java_file))
+    assert result["current_file"]["status"] == "REVIEWING"
+    assert result["current_file"]["transform_output"]["files"] == {java_file: "class Example {}"}
+
+
+def test_upgrade_unreadable_files_is_manual_review_not_a_crash(config, java_file):
+    m = MagicMock()
+    m.content = json.dumps({"files": {java_file: {"language": "java"}}})
+    with patch("forge.agents.java_upgrade.ChatBedrockConverse") as MockLLM:
+        MockLLM.return_value.invoke.return_value = m
+        from forge.agents.java_upgrade import JavaUpgradeAgent
+        result = JavaUpgradeAgent(config).run(_state_for(java_file))
+    assert result["current_file"]["status"] == "MANUAL_REVIEW"
+    assert "wrong shape" in result["current_file"]["error"]
+    assert result["bedrock_calls"] == 1

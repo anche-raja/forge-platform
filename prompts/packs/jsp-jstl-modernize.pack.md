@@ -67,7 +67,7 @@ changes, no accessibility or style "improvements", no whitespace normalisation i
 whitespace-sensitive regions (`<pre>`, inline scripts, textareas).
 
 Respond ONLY with valid JSON:
-{"files": {...}, "deleted_files": [], "manual_flags": [...]}
+{"files": {"<path>": "<full content>"}, "deleted_files": [], "manual_flags": [...]}
 
 ## review
 

@@ -85,7 +85,7 @@ Rule 6 — Preserve every bean name, qualifier, profile and `@Order`. Framework 
 `getBean("name")` call sites depend on them.
 
 Respond ONLY with valid JSON:
-{"files": {...}, "deleted_files": ["<xml config replaced by java config>"], "manual_flags": [...]}
+{"files": {"<path>": "<full content>"}, "deleted_files": ["<xml config replaced by java config>"], "manual_flags": [...]}
 
 ## review
 

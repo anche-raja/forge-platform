@@ -82,7 +82,7 @@ listed in `manual_flags`. Never delete a test, never merge two tests, never weak
 make it pass, and never add assertions the original did not make.
 
 Respond ONLY with valid JSON:
-{"files": {...}, "deleted_files": [], "manual_flags": [...]}
+{"files": {"<path>": "<full content>"}, "deleted_files": [], "manual_flags": [...]}
 
 ## review
 

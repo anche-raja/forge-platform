@@ -42,3 +42,34 @@ def test_reasoning_before_unfenced_json():
 def test_no_object_still_fails(reply):
     with pytest.raises(json.JSONDecodeError):
         extract_json(reply)
+
+
+# ─── normalize_files ──────────────────────────────────────────────────────────
+
+from forge.utils.llm_json import TransformShapeError, normalize_files  # noqa: E402
+
+
+def test_normalize_files_passes_strings_through():
+    assert normalize_files({"A.java": "class A {}"}) == {"A.java": "class A {}"}
+
+
+def test_normalize_files_unwraps_the_shape_seen_live():
+    """Sonnet 4.5 on java8-to-java21: the text under "code", beside metadata."""
+    files = {"A.java": {"language": "java", "code": "class A {}", "changelog": ["x"]}}
+    assert normalize_files(files) == {"A.java": "class A {}"}
+
+
+def test_normalize_files_empty_is_empty():
+    assert normalize_files(None) == {}
+    assert normalize_files({}) == {}
+
+
+@pytest.mark.parametrize("files", [
+    ["A.java"],                                        # not a map
+    {"A.java": 42},                                    # not text
+    {"A.java": {"language": "java"}},                  # no text at all
+    {"A.java": {"code": "class A {}", "content": "class B {}"}},  # two candidates: ambiguous
+])
+def test_normalize_files_rejects_what_it_cannot_read(files):
+    with pytest.raises(TransformShapeError):
+        normalize_files(files)

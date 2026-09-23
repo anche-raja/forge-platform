@@ -124,7 +124,7 @@ of any dependency not covered by the rules above. A pinned version with a commen
 pin is a decision someone already made — keep both.
 
 Respond ONLY with valid JSON:
-{"files": {...}, "deleted_files": [], "manual_flags": [...]}
+{"files": {"<path>": "<full content>"}, "deleted_files": [], "manual_flags": [...]}
 
 ## review
 
