@@ -9,6 +9,8 @@ an unreadable reviewer reply (#19).
 import contextlib
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tests.conftest import CLEAN_JAVA, llm_reply, make_state, write_config
 
 
@@ -29,12 +31,16 @@ def _files(java_file, text=CLEAN_JAVA):
 _PASS = {"score": 95, "verdict": "PASS", "feedback": "", "checks": {}}
 
 
+_CLEAN = {"verdict": "PASS", "findings": [], "reason": ""}
+
+
 def _run(tmp_path, java_file, transforms, *, reviews=(_PASS,), guardrail=None, phase="java21",
-         dry_run=True, **config):
+         dry_run=True, pre=_CLEAN, post=_CLEAN, build=None, patches=(), **config):
     """One unit through the real graph; every Bedrock touchpoint scripted.
 
     ``transforms`` and ``reviews`` are answered in turn (the last review
-    repeats); ``guardrail`` maps "INPUT"/"OUTPUT" to an ApplyGuardrail response.
+    repeats); ``guardrail`` maps "INPUT"/"OUTPUT" to an ApplyGuardrail response;
+    ``build`` is the verdict every build verification returns.
     """
     from forge.graph import build_graph
 
@@ -42,11 +48,16 @@ def _run(tmp_path, java_file, transforms, *, reviews=(_PASS,), guardrail=None, p
     guardrail = guardrail or {}
     with contextlib.ExitStack() as stack:
         boto = stack.enter_context(patch("forge.guardrails.bedrock_guardrails.boto3"))
-        stack.enter_context(patch("forge.agents.guardrails_pre.ChatBedrockConverse"))
+        pre_llm = stack.enter_context(patch("forge.agents.guardrails_pre.ChatBedrockConverse"))
         up = stack.enter_context(patch("forge.agents.java_upgrade.ChatBedrockConverse"))
         rev = stack.enter_context(patch("forge.review.java_reviewer.ChatBedrockConverse"))
-        post = stack.enter_context(patch("forge.agents.guardrails_post.ChatBedrockConverse"))
+        post_llm = stack.enter_context(patch("forge.agents.guardrails_post.ChatBedrockConverse"))
         saver = stack.enter_context(patch("forge.graph.DynamoDBSaver"))
+        if build is not None:
+            verifier = stack.enter_context(patch("forge.graph.BuildVerifier"))
+            verifier.return_value.verify.return_value = build
+        for target, kwargs in patches:
+            stack.enter_context(patch(target, **kwargs))
         from langgraph.checkpoint.memory import MemorySaver
         saver.return_value = MemorySaver()
 
@@ -55,7 +66,8 @@ def _run(tmp_path, java_file, transforms, *, reviews=(_PASS,), guardrail=None, p
         up.return_value.invoke.side_effect = [_reply(a) for a in transforms]
         answers = [_reply(r) for r in reviews]
         rev.return_value.invoke.side_effect = lambda messages: answers.pop(0) if len(answers) > 1 else answers[0]
-        post.return_value.invoke.return_value = llm_reply({"verdict": "PASS", "findings": [], "reason": ""})
+        pre_llm.return_value.invoke.return_value = llm_reply(pre)
+        post_llm.return_value.invoke.return_value = llm_reply(post)
         result = build_graph(cfg).invoke(make_state(java_file, tmp_path, phase=phase, dry_run=dry_run),
                                          config={"configurable": {"thread_id": java_file}})
     return result, up.return_value.invoke, rev.return_value.invoke
@@ -202,6 +214,100 @@ def test_a_score_that_is_not_a_number_is_unreadable_not_a_crash(tmp_path, java_f
     odd = {"score": "ninety", "verdict": "PASS", "feedback": "", "checks": {}}
     result, _, review = _run(tmp_path, java_file, [_files(java_file)], reviews=[odd, _PASS])
     assert result["current_file"]["status"] == "DONE" and review.call_count == 2
+
+
+# ─── #26: every unit a human is handed says why ──────────────────────────────
+
+_INTERVENED = {"action": "GUARDRAIL_INTERVENED", "assessments": []}
+_LOW = {"score": 30, "verdict": "MANUAL", "feedback": "logic dropped", "checks": {}}
+_MID = {"score": 60, "verdict": "RETRY", "feedback": "fix X", "checks": {}}
+_PERFECT = {"score": 100, "verdict": "PASS", "feedback": "", "checks": {}}
+_DIRTY = CLEAN_JAVA.replace("jakarta.servlet", "javax.servlet")
+
+
+def _secret(*_a, **_k):
+    finding = MagicMock()
+    finding.describe.return_value = "aws-access-key at line 3"
+    return [finding]
+
+
+def _syntax_fail(files, config):
+    from forge.verify import syntax
+    return syntax.FAIL, ["UserAction.java:3: error: illegal start of type"]
+
+
+# (id, expected status, _run kwargs, extra assertion on the error)
+_STOPS = [
+    ("guardrail-input", "BLOCKED", dict(guardrail={"INPUT": _INTERVENED}), "source file"),
+    ("secret-scan", "BLOCKED", dict(patches=[("forge.agents.guardrails_pre.find_secrets",
+                                              {"side_effect": _secret})]), "secret scan"),
+    ("too-large", "BLOCKED", dict(complexity_block_threshold=3), "complexity_block_threshold"),
+    ("preflight-block-no-reason", "BLOCKED",
+     dict(preflight_model_check=True, pre={"verdict": "BLOCK", "findings": [], "reason": ""}),
+     "pre-flight"),
+    ("source-unreadable", "MANUAL_REVIEW",
+     dict(patches=[("forge.agents.java_upgrade.open", {"create": True, "side_effect": OSError("gone")})]),
+     "Cannot read file"),
+    ("transform-malformed", "MANUAL_REVIEW", dict(transforms=[_BROKEN] * 3), "parse transform output"),
+    ("syntax-fail", "MANUAL_REVIEW",
+     dict(syntax_check=True, patches=[("forge.verify.syntax.check_files", {"side_effect": _syntax_fail})]),
+     "does not parse"),
+    ("review-below-retry", "MANUAL_REVIEW", dict(reviews=[_LOW]), "Review score 30 is below retry_threshold"),
+    ("review-retries-spent", "MANUAL_REVIEW", dict(reviews=[_MID]),
+     "Review score 60 is below pass_threshold 80 after 2 retries: fix X"),
+    ("review-unreadable", "MANUAL_REVIEW", dict(reviews=[_BAD_REVIEW]), "Failed to parse reviewer response"),
+    ("guardrail-output", "MANUAL_REVIEW", dict(reviews=[_PERFECT], guardrail={"OUTPUT": _INTERVENED}),
+     "transform output"),
+    ("javax-left", "MANUAL_REVIEW", dict(transforms=[_DIRTY], reviews=[_PERFECT]), "Unmigrated javax"),
+    ("post-check-block-no-reason", "MANUAL_REVIEW",
+     dict(post_model_check="block", post={"verdict": "BLOCK", "findings": [], "reason": ""}),
+     "post-transform check"),
+    ("build-fails", "MANUAL_REVIEW", dict(build={"verdict": "FAIL", "output": "cannot find symbol Foo"}),
+     "Build verification failed after 2 retries: cannot find symbol Foo"),
+]
+
+
+@pytest.mark.parametrize("status, kwargs, expected", [s[1:] for s in _STOPS], ids=[s[0] for s in _STOPS])
+def test_every_manual_review_and_blocked_unit_carries_a_reason(tmp_path, java_file, status, kwargs, expected):
+    kwargs = dict(kwargs)
+    transforms = kwargs.pop("transforms", None) or [_files(java_file)] * 3
+    transforms = [t if t is not _DIRTY else _files(java_file, _DIRTY) for t in transforms]
+    result, _, _ = _run(tmp_path, java_file, transforms, **kwargs)
+    fs = result["current_file"]
+    assert fs["status"] == status
+    assert str(fs.get("error") or "").strip(), f"{status} with no error: {fs}"
+    assert expected in fs["error"]
+    assert "pipeline bug" not in fs["error"]
+
+
+def test_the_ams_case_a_perfect_score_stopped_by_the_output_guardrail(tmp_path, java_file):
+    """AmsUserDetailsServiceImplTest (junit4-to-junit5): review 100, retries 0,
+    no post-check verdict. The one path that fits is an ApplyGuardrail
+    intervention on OUTPUT, which returned before step 2 and 3 with no error.
+    The reason names the policy and never the bytes it matched."""
+    assessment = {"sensitiveInformationPolicy": {"piiEntities": [
+        {"type": "PASSWORD", "match": "hunter2", "action": "BLOCKED"}]}}
+    gr = {"OUTPUT": {"action": "GUARDRAIL_INTERVENED", "assessments": [assessment]}}
+    result, _, review = _run(tmp_path, java_file, [_files(java_file)], reviews=[_PERFECT], guardrail=gr,
+                             phase="junit4-to-junit5")
+    fs = result["current_file"]
+    assert fs["status"] == "MANUAL_REVIEW" and fs["review_score"] == 100 and fs["retry_count"] == 0
+    assert fs.get("post_check_verdict") is None
+    assert fs["error"] == "Bedrock guardrail intervened on the transform output (sensitiveInformationPolicy)"
+    assert "hunter2" not in fs["error"]
+
+
+def test_a_path_with_no_reason_is_still_given_one(tmp_path, java_file):
+    """The backstop: a node that stops a unit and forgets to say why."""
+    def forgetful(self, state):
+        return {**state, "current_file": {**state["current_file"], "status": "MANUAL_REVIEW", "error": ""}}
+
+    result, _, _ = _run(tmp_path, java_file, [_files(java_file)],
+                        patches=[("forge.agents.guardrails_post.GuardrailsPostAgent.run",
+                                  {"new": forgetful})])
+    fs = result["current_file"]
+    assert fs["status"] == "MANUAL_REVIEW"
+    assert "no recorded reason" in fs["error"]
 
 
 def test_a_generated_unit_must_produce_its_file(tmp_path):

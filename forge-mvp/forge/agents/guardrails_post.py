@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
-from forge.guardrails.bedrock_guardrails import BedrockGuardrails
+from forge.guardrails.bedrock_guardrails import BedrockGuardrails, intervention_reason
 from forge.state import ForgeState
 from forge.utils.cost import accrue
 from forge.utils.java_checks import find_unmigrated_javax_imports
@@ -112,6 +112,9 @@ class GuardrailsPostAgent(BaseAgent):
         if gr_result["intervened"]:
             _log.info("Guardrail intervened on output for %s", file_status["file_path"])
             file_status["status"] = "MANUAL_REVIEW"
+            # This return skips steps 2 and 3, so without a reason here the unit
+            # reads as "review 100, no error, no post-check verdict" (issue #26).
+            file_status["error"] = intervention_reason(gr_result, "OUTPUT")
             return {**state, "current_file": file_status}
 
         # Step 2: Deterministic Rule 1 enforcement. "Zero javax.* in output" is a
@@ -156,7 +159,9 @@ class GuardrailsPostAgent(BaseAgent):
         file_status["post_check_verdict"] = verdict
         if verdict == "BLOCK" and mode == "block":
             file_status["status"] = "MANUAL_REVIEW"
-            file_status["error"] = result.get("reason", "Blocked by post-transform check")
+            # `or`, not a .get default: a model that answers "reason": "" must
+            # not leave a held unit with an empty error.
+            file_status["error"] = result.get("reason") or "Blocked by post-transform check"
         elif verdict == "BLOCK":
             _log.info("Post-check advised against %s (advisory, not held): %s",
                       file_status["file_path"], result.get("reason", ""))

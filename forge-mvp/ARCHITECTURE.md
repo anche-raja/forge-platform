@@ -160,8 +160,8 @@ review is Nova Pro, which matches.
 | `guardrails_post` | Bedrock Guardrails (OUTPUT) + **Opus 4.8** | Verify zero `javax.*` left (`java21`, and `javax-to-jakarta` onwards in pack order), no new security issues, naming | `BLOCK` → `manual_queue`; else continue |
 | `hold_for_review` | local FS | Stage transformed files under `./migrated/.forge-staging/` when `decisions.risk_ceiling` says a human decides first | status `HELD` |
 | `write_file` | local FS | Write transformed files to `./migrated/` preserving package path (no-op on `--dry-run`) | status `DONE` |
-| `manual_queue` | — | Mark file for human review | status `MANUAL_REVIEW` |
-| `blocked` | — | Terminal block | status `BLOCKED` |
+| `manual_queue` | — | Mark file for human review. Every unit it marks carries a non-empty `error`: the stopping node's reason, or one built here from the review score or the build verdict | status `MANUAL_REVIEW` |
+| `blocked` | — | Terminal block, with the same non-empty `error` guarantee | status `BLOCKED` |
 | `update_state` | — | Increment run counters (processed/passed/retried/manual/blocked) | → `END` |
 
 ### Retry + feedback loop

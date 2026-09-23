@@ -105,7 +105,7 @@ Three details the picture carries that prose does not:
 | — | `score_unit()` | local | Deterministic risk tier. Runs **before any verdict** so even a blocked file reaches the queue with its reasons. | records tier |
 | 1 | `secret_scan` | local | Any credential: key material, vendor-prefixed tokens, credentials in URLs and connection strings, credential-named assignments across Java/XML/properties/YAML, and high-entropy literals. | `BLOCKED`, verdict `SECRET_BLOCKED_LOCALLY` |
 | 2 | file size | local | Does the line count exceed `complexity_block_threshold`? | `BLOCKED`, verdict `TOO_LARGE` |
-| 3 | `ApplyGuardrail` | AWS policy | The published guardrail, `source = INPUT`. | `BLOCKED` |
+| 3 | `ApplyGuardrail` | AWS policy | The published guardrail, `source = INPUT`. | `BLOCKED`, `error` naming the policies (never the matched bytes) |
 | — | pre-flight ask | Opus 4.8 | **Off by default** (`preflight_model_check`). When on, asks only about reflection, native calls, generated code and unreachable control flow — never secrets, PII or packages. | `BLOCK` → `BLOCKED` |
 
 Clean output sets status `TRANSFORMING`. `route_pre` sends `BLOCKED` to the `blocked` node and
@@ -136,7 +136,7 @@ Local, deterministic, no network, about 0.2 s per file.
 | # | Check | Where | What it asks | On a hit |
 |---|---|---|---|---|
 | — | collect output | local | Did the transform produce any files at all? | `MANUAL_REVIEW` |
-| 4 | `ApplyGuardrail` | AWS policy | The same policy over the transformed bytes, `source = OUTPUT`. `PROMPT_ATTACK` is set to `NONE` on output. | `MANUAL_REVIEW` |
+| 4 | `ApplyGuardrail` | AWS policy | The same policy over the transformed bytes, `source = OUTPUT`. `PROMPT_ATTACK` is set to `NONE` on output. | `MANUAL_REVIEW`, `error` naming the policies (never the matched bytes) |
 | 5 | `javax.*` check | local | Rule 1: zero Jakarta-EE `javax.*` imports remain. [forge/utils/java_checks.py](forge/utils/java_checks.py). Only in `java21` and in `javax-to-jakarta` and the packs ordered after it — a pack that runs earlier (`java8-to-java21`) is expected to leave them (`javax_check_applies`) | `MANUAL_REVIEW` |
 | 6 | post-check ask | transform model | Deprecated patterns left behind, a security regression introduced, business logic or null checks destroyed. | Finding only (`post_model_check: advisory`, the default). `block` restores `MANUAL_REVIEW`; `off` skips the call |
 

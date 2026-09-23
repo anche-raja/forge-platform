@@ -137,15 +137,48 @@ def build_graph(config: ForgeConfig):
         _log.info("Held %s for review (%s)", file_status["file_path"], file_status["hold_reason"])
         return {**state, "current_file": file_status}
 
-    def manual_queue(state: ForgeState) -> ForgeState:
+    # Every MANUAL_REVIEW and BLOCKED unit carries a non-empty `error`: it is the
+    # first thing the report and the review page show a human, and a unit held
+    # with none -- review 100, no error, no post-check verdict (issue #26) -- is
+    # one nobody can act on. Nodes that stop a unit say why themselves; the two
+    # routes that stop one on a number (the review score, the build verdict)
+    # leave it to manual_queue, and _reason_for is also the backstop for a path
+    # added later without one.
+    def _excerpt(text, limit: int = 300) -> str:
+        text = " ".join(str(text or "").split())
+        return text if len(text) <= limit else text[:limit] + "..."
+
+    def _reason_for(fs, status: str) -> str:
+        retries = fs.get("retry_count") or 0
+        after = f" after {retries} retr{'y' if retries == 1 else 'ies'}" if retries else ""
+        score = fs.get("review_score")
+        pass_threshold = config.get("pass_threshold", 80)
+        # The score first: a build that failed on an earlier attempt leaves its
+        # verdict behind, and this attempt may have stopped at the review.
+        if status == "MANUAL_REVIEW" and score is not None and score < pass_threshold:
+            retry_threshold = config.get("retry_threshold", 50)
+            bar = (f"below retry_threshold {retry_threshold}" if score < retry_threshold
+                   else f"below pass_threshold {pass_threshold}{after}")
+            feedback = _excerpt(fs.get("review_feedback"))
+            return f"Review score {score} is {bar}" + (f": {feedback}" if feedback else "")
+        if status == "MANUAL_REVIEW" and fs.get("build_verdict") == "FAIL":
+            return f"Build verification failed{after}: {_excerpt(fs.get('build_output'))}"
+        _log.warning("%s reached %s without a recorded reason", fs.get("file_path"), status)
+        return (f"{status} with no recorded reason (guardrail_pre_verdict={fs.get('guardrail_pre_verdict')}, "
+                f"guardrail_post_verdict={fs.get('guardrail_post_verdict')}); this is a pipeline bug")
+
+    def _stop(state: ForgeState, status: str) -> ForgeState:
         file_status = dict(state["current_file"])
-        file_status["status"] = "MANUAL_REVIEW"
+        file_status["status"] = status
+        if not str(file_status.get("error") or "").strip():
+            file_status["error"] = _reason_for(file_status, status)
         return {**state, "current_file": file_status}
 
+    def manual_queue(state: ForgeState) -> ForgeState:
+        return _stop(state, "MANUAL_REVIEW")
+
     def blocked(state: ForgeState) -> ForgeState:
-        file_status = dict(state["current_file"])
-        file_status["status"] = "BLOCKED"
-        return {**state, "current_file": file_status}
+        return _stop(state, "BLOCKED")
 
     def increment_retry(state: ForgeState) -> ForgeState:
         file_status = dict(state["current_file"])
