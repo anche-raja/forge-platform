@@ -258,6 +258,10 @@ resource "aws_iam_role_policy" "dynamodb" {
           "dynamodb:GetItem",
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
+          # mark_pending() seeds every unit of a run through batch_writer(),
+          # which is BatchWriteItem -- a separate action from PutItem. Without
+          # it every live run fails on its first DynamoDB call.
+          "dynamodb:BatchWriteItem",
           "dynamodb:Query",
           "dynamodb:Scan",
           "dynamodb:DescribeTable"
