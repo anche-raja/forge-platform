@@ -1104,7 +1104,7 @@
         + '<pre class="c-diff c-diffrest" hidden></pre>'
         + '<button type="button" class="c-diffmore" hidden></button></div>'
         + (card.diff_truncated ? '<p class="hint">The diff itself was truncated before it reached this page.</p>' : '')
-        : '<p class="hint">No diff: ' + (str(card.status) === 'BLOCKED' ? 'this unit was blocked before it was transformed.' : 'nothing was transformed for this unit.') + '</p>')
+        : '<p class="hint">No diff: ' + esc(str(card.status) === 'BLOCKED' ? 'this unit was blocked before it was transformed' + (card.unblock ? ': ' + str(card.unblock) : '.') : 'nothing was transformed for this unit.') + '</p>')
       + block('Also transformed', card.also_transformed)
       + block('Superseded files', card.deleted_files)
       + '<div class="c-decide" data-card="' + esc(id) + '" hidden>'

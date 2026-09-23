@@ -783,6 +783,12 @@ decides what a model may see.* One test plants a marker in every field that carr
 asserts it reaches no observation, no `ToolMessage` and not the state block — while the browser's
 card still carries it.
 
+A BLOCKED entry has no transform to decide on, so its observation says why instead: `blocked_by`
+(`secret_scan`, `guardrail`, `too_large`, `unreadable`, `preflight_check`), read from the
+`guardrail_pre_verdict` the pre-flight node recorded, and `unblock`, a fixed platform sentence on
+what the user can change (the file, `secret_scan.allow`, the threshold). The leader names the cause
+without being shown what matched.
+
 ### Review cards carry a run stamp
 
 Every run overwrites the one `manual-review-queue.json`, transcripts keep cards indefinitely, and

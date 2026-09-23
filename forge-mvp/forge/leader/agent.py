@@ -81,6 +81,12 @@ How to work:
   Confirm on the card — only the button runs it.
 - Approving, rejecting or retrying a file is always the user's click. You may propose decisions;
   you never make them.
+- A BLOCKED file was refused before any transform, so there is nothing to approve: never offer
+  approve, and never tell the user to review its diff. Name the cause from its blocked_by (the
+  secret scan, the Bedrock guardrail, a file too large, an unreadable file) and pass on what its
+  unblock says the user can change — the file itself, or secret_scan.allow in agents.yaml for a
+  literal that is not a real secret. After that change a retry re-runs it; rejecting it leaves
+  the file unmigrated. HELD and MANUAL_REVIEW files are the ones with a transform to decide on.
 
 Landing the work:
 - The last pack of the plan builds the project itself: its run_pack result says plan_complete and

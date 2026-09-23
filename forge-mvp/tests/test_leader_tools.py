@@ -358,6 +358,41 @@ def test_a_blocked_entry_never_gets_a_diff_and_a_generated_one_never_crashes(ctx
     assert empty.ok is True and empty.cards[0]["diff"] is None, "a transform that produced nothing has no diff"
 
 
+def test_a_blocked_file_tells_the_leader_why_and_what_to_change_without_the_secret(ctx):
+    """The leader told a user to "approve, reject or retry" a BLOCKED server.xml
+    (#24). The observation now names the cause from the verdict guardrails_pre
+    recorded, with a fixed sentence on what the user can change — and still
+    never the matched bytes."""
+    _plant_queue(ctx, status="BLOCKED", extra={
+        "guardrail_pre_verdict": "SECRET_BLOCKED_LOCALLY", "error": "Local secret scan: AWS access key id at line 1",
+        "review_score": None, "review_verdict": None, "build_verdict": None, "review_feedback": None,
+        "build_output": None, "hold_reason": None, "transformed": {}})
+    held = _box(ctx, _seed(Conversation(), ["javax-to-jakarta"])).execute("list_held_files", {}, tool_id="t1")
+    _sweep(held, where="list_held_files (BLOCKED)")
+    entry = held.observation["entries"][0]
+    assert entry["blocked_by"] == "secret_scan" and "secret_scan.allow" in entry["unblock"]
+    assert "approve" not in entry["unblock"]
+    assert held.cards[0]["unblock"] == entry["unblock"], "the card says the same thing to the person"
+
+    for verdict, error, cause in [("TOO_LARGE", "2400 lines exceeds complexity_block_threshold of 2000", "too_large"),
+                                  ("GUARDRAIL_INTERVENED", None, "guardrail"),
+                                  (None, "Cannot read file: [Errno 13] Permission denied", "unreadable"),
+                                  ("NONE", "touches a vendor API the pack cannot migrate", "preflight_check"),
+                                  (None, None, "unknown")]:
+        obs = cards.entry_obs({"status": "BLOCKED", "guardrail_pre_verdict": verdict, "error": error})
+        assert obs["blocked_by"] == cause and obs["unblock"], cause
+    assert "blocked_by" not in cards.entry_obs({"status": "HELD", "guardrail_pre_verdict": "NONE"})
+    assert cards.review_file_card({"status": "HELD"})["unblock"] is None
+
+
+def test_the_leader_prompt_never_offers_to_approve_a_blocked_file():
+    from forge.leader.agent import _SYSTEM
+
+    rule = _SYSTEM[_SYSTEM.index("A BLOCKED file"):]
+    assert "nothing to approve" in rule and "never offer" in rule
+    assert "blocked_by" in rule and "unblock" in rule and "secret_scan.allow" in rule
+
+
 def test_a_dry_run_preview_is_not_a_file_waiting_on_a_human(ctx):
     """A dry run queues every unit it would have transformed, DONE ones
     included. Turning those into review cards would offer an approve button

@@ -73,6 +73,48 @@ def guardrail_obs(findings: Any) -> Dict[str, Any]:
     return {"count": len(kinds), "kinds": kinds}
 
 
+# Why a BLOCKED unit was refused, read from the verdict `guardrails_pre`
+# recorded, and what the user can change about it. A closed vocabulary of
+# platform sentences: the leader names the cause without being shown what
+# caused it, and has nothing to invent — a BLOCKED unit has no transform, so
+# "approve it" is never one of the answers.
+_BLOCKED_CAUSES = {
+    "secret_scan": ("the local secret scan found a credential-shaped value before anything was sent "
+                    "(guardrail_findings has the kind and line). Remove it from the file, e.g. into an "
+                    "environment variable or a ${placeholder}; or, if it is not a real secret, add a "
+                    "regex for that line to secret_scan.allow in agents.yaml. Then retry the file."),
+    "too_large": ("the file is longer than complexity_block_threshold in agents.yaml. Split the file "
+                  "or raise the threshold, then retry the file."),
+    "guardrail": ("the Bedrock guardrail refused the file as input (guardrail_findings has the policy "
+                  "kind). Remove the sensitive value from the file, then retry the file."),
+    "unreadable": "FORGE could not read the file. Check that it exists and is readable, then retry it.",
+    "preflight_check": ("the optional pre-flight model check (preflight_model_check in agents.yaml) "
+                        "refused it. Change the file or turn that check off, then retry the file."),
+    "unknown": "the cause was not recorded. Retry the file, or reject it to leave it unmigrated.",
+}
+
+
+def blocked_cause(entry: dict) -> str:
+    """One word for why ``guardrails_pre`` refused a unit, from its recorded verdict."""
+    verdict = str(entry.get("guardrail_pre_verdict") or "")
+    if verdict == "SECRET_BLOCKED_LOCALLY":
+        return "secret_scan"
+    if verdict == "TOO_LARGE":
+        return "too_large"
+    if verdict == "GUARDRAIL_INTERVENED":
+        return "guardrail"
+    error = str(entry.get("error") or "")
+    if error.startswith("Cannot read file"):
+        return "unreadable"
+    if error.startswith("Local secret scan"):
+        return "secret_scan"
+    if verdict and error:
+        # The guardrail let it through and the only step after it that blocks
+        # is the optional model check, whose reason lands in `error`.
+        return "preflight_check"
+    return "unknown"
+
+
 def entry_obs(entry: dict) -> Dict[str, Any]:
     """One review-queue entry as metadata: paths, verdicts, scores. No text."""
     if not isinstance(entry, dict):
@@ -98,6 +140,10 @@ def entry_obs(entry: dict) -> Dict[str, Any]:
     if build_verdict == "FAIL":
         # The one case where "feedback" is compiler output, which echoes source.
         obs["feedback_kind"] = "build"
+    if entry.get("status") == "BLOCKED":
+        cause = blocked_cause(entry)
+        obs["blocked_by"] = cause
+        obs["unblock"] = _BLOCKED_CAUSES[cause]
     return obs
 
 
@@ -235,6 +281,7 @@ def review_file_card(entry: dict, *, run: str = "") -> dict:
         # /api/chat serves, and a matched secret has no business there either.
         "guardrail_findings": guardrail_kinds(entry.get("guardrail_findings")),
         "error": entry.get("error"),
+        "unblock": _BLOCKED_CAUSES[blocked_cause(entry)] if entry.get("status") == "BLOCKED" else None,
         "generate": bool(entry.get("generate")),
         "diff": diff,
         "diff_truncated": diff_truncated,
