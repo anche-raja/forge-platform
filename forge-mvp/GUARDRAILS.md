@@ -120,7 +120,12 @@ everything else to `java_upgrade`.
 | — | collect output | local | Did the transform produce any files at all? | `MANUAL_REVIEW` |
 | 4 | `ApplyGuardrail` | AWS policy | The same policy over the transformed bytes, `source = OUTPUT`. `PROMPT_ATTACK` is set to `NONE` on output. | `MANUAL_REVIEW` |
 | 5 | `javax.*` check | local | Rule 1: zero Jakarta-EE `javax.*` imports remain. [forge/utils/java_checks.py](forge/utils/java_checks.py) | `MANUAL_REVIEW` |
-| 6 | post-check ask | Opus 4.8 | Deprecated patterns left behind, a security regression introduced, business logic or null checks destroyed. | `MANUAL_REVIEW` |
+| 6 | post-check ask | transform model | Deprecated patterns left behind, a security regression introduced, business logic or null checks destroyed. | Finding only (`post_model_check: advisory`, the default). `block` restores `MANUAL_REVIEW`; `off` skips the call |
+
+Checks 4 and 5 always escalate: an intervention and a leftover `javax.*` import are facts, not
+opinions. Check 6 is an opinion, and the reviewer is already the judge of correctness, so by default
+it cannot overrule a passing review score. It used to, and held `javax-to-jakarta` files the reviewer
+scored 100 because they still used `java.util.Date`, which that pack is told to leave alone.
 
 Clean output leaves the status untouched. `route_post` then decides between `manual_queue`,
 `hold_for_review` (risk above `decisions.risk_ceiling`) and `write_file`.

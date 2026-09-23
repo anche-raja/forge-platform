@@ -12,6 +12,23 @@ from forge.utils.telemetry import get_logger
 
 _log = get_logger(__name__)
 
+# What the step-3 model check may do. The reviewer is the judge of whether a
+# transform is correct: a file it scores at or above pass_threshold is written.
+# This check used to be able to overrule that, and in practice it did so on
+# files outside its question -- it held javax-to-jakarta files at review 100 for
+# still using java.util.Date, which that pack is told to leave alone.
+#   advisory  run it, keep its findings in the report, never change the status
+#   block     the old behaviour: a BLOCK verdict sends the file to MANUAL_REVIEW
+#   off       skip the call entirely (one model call per file cheaper)
+POST_CHECK_MODES = ("advisory", "block", "off")
+DEFAULT_POST_CHECK = "advisory"
+
+
+def post_check_mode(config) -> str:
+    raw = str((config.get("post_model_check") if config is not None else None) or DEFAULT_POST_CHECK)
+    mode = raw.strip().lower()
+    return mode if mode in POST_CHECK_MODES else DEFAULT_POST_CHECK
+
 # Package scope is deliberately NOT part of this prompt. Scope is a pre-flight
 # concern (guardrails_pre), and treating it as a post-transform blocker caused
 # every out-of-scope file to be escalated to manual review even after a passing
@@ -78,6 +95,13 @@ class GuardrailsPostAgent(BaseAgent):
             return {**state, "current_file": file_status}
 
         # Step 3: Qualitative check — regressions and introduced security issues.
+        # Steps 1 and 2 above are not opinions (a guardrail intervention, a
+        # mechanical javax.* hit) and always escalate. This one is a model's
+        # opinion, and by default it only advises: see POST_CHECK_MODES.
+        mode = post_check_mode(self.config)
+        if mode == "off":
+            return {**state, "current_file": file_status}
+
         messages = [
             SystemMessage(content=_SYSTEM),
             HumanMessage(content=f"```java\n{all_content}\n```"),
@@ -96,9 +120,13 @@ class GuardrailsPostAgent(BaseAgent):
         if findings:
             file_status["guardrail_findings"] = list(file_status.get("guardrail_findings", [])) + findings
 
-        if verdict == "BLOCK":
+        file_status["post_check_verdict"] = verdict
+        if verdict == "BLOCK" and mode == "block":
             file_status["status"] = "MANUAL_REVIEW"
             file_status["error"] = result.get("reason", "Blocked by post-transform check")
+        elif verdict == "BLOCK":
+            _log.info("Post-check advised against %s (advisory, not held): %s",
+                      file_status["file_path"], result.get("reason", ""))
         # status otherwise stays as-is (REVIEWING → set to DONE by write_file)
 
         return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}

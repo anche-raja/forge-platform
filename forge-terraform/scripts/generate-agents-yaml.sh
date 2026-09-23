@@ -251,6 +251,16 @@ secret_scan:
     min_bits: 4.0
   allow: []
 
+# ─── Post-transform model check ──────────────────────────────────────────────
+# A third model call after a passing review, asking about regressions and
+# security. The reviewer decides whether a transform is correct; this only
+# advises unless told otherwise. The guardrail and the javax.* check always
+# escalate regardless -- they are facts, not opinions.
+#   advisory -> findings go in the report, a passing file is still written
+#   block    -> a BLOCK verdict sends the file to manual review
+#   off      -> skip the call: one model call per file cheaper
+post_model_check: advisory
+
 # ─── Optional qualitative pre-flight ─────────────────────────────────────────
 # OFF: sending source to a model to look for secrets is the disclosure a secret
 # policy forbids, and every other question the check used to ask is now answered

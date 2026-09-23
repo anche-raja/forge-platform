@@ -169,3 +169,47 @@ def test_cost_accrues_across_the_run(tmp_path, java_file):
     expected = 2 * (0.005 + 0.5 * 0.025) + (0.0008 + 0.5 * 0.0032)
     assert result["bedrock_calls"] == 3
     assert result["estimated_cost_usd"] == pytest.approx(expected, rel=1e-6)
+
+
+# ─── The reviewer's pass is final ─────────────────────────────────────────────
+
+
+
+def _run_with_post_block(tmp_path, java_file, **config_overrides):
+    import contextlib
+
+    config = write_config(tmp_path, **config_overrides)
+    with contextlib.ExitStack() as stack:
+        _graph_mocks(stack, java_file, review_score=100, post_verdict="BLOCK",
+                     post_findings=["Use of deprecated java.util.Date"])
+        from forge.graph import build_graph
+
+        result = build_graph(config).invoke(
+            make_state(java_file, tmp_path),
+            config={"configurable": {"thread_id": java_file}},
+        )
+    return result
+
+
+def test_post_check_block_is_advisory_by_default(tmp_path, java_file):
+    """Reviewer PASS 100 + post-check BLOCK: written, the finding kept for the report."""
+    result = _run_with_post_block(tmp_path, java_file)
+    fs = result["current_file"]
+    assert fs["status"] == "DONE"
+    assert fs["post_check_verdict"] == "BLOCK"
+    assert any("java.util.Date" in f for f in fs["guardrail_findings"])
+    assert result["files_manual"] == 0
+
+
+def test_post_check_block_mode_restores_the_hold(tmp_path, java_file):
+    result = _run_with_post_block(tmp_path, java_file, post_model_check="block")
+    assert result["current_file"]["status"] == "MANUAL_REVIEW"
+
+
+def test_post_check_off_skips_the_model_call(tmp_path, java_file):
+    """off: two model calls on the happy path (transform + review), not three."""
+    result = _run_with_post_block(tmp_path, java_file, post_model_check="off")
+    fs = result["current_file"]
+    assert fs["status"] == "DONE"
+    assert "post_check_verdict" not in fs
+    assert result["bedrock_calls"] == 2
