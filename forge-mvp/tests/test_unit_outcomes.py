@@ -2,7 +2,8 @@
 
 Every case here was a unit in the first full ten-pack AMS run (2026-09-23)
 that reached a human for a reason other than a bad migration: a broken JSON
-envelope from the transform (#20), a file the model said needs no change (#17).
+envelope from the transform (#20), a file the model said needs no change (#17),
+an unreadable reviewer reply (#19).
 """
 
 import contextlib
@@ -170,6 +171,37 @@ def test_an_empty_answer_after_an_unreadable_one_is_unchanged(tmp_path, java_fil
     fs = result["current_file"]
     assert fs["status"] == "DONE" and fs["unchanged"] is True and not fs.get("error")
     assert review.call_count == 0
+
+
+# ─── #19: an unreadable review is asked for again once ───────────────────────
+
+_BAD_REVIEW = '{"score": 90, "verdict": "PASS", feedback: ""}'
+
+
+def test_an_unreadable_review_is_asked_again_and_the_second_answer_counts(tmp_path, java_file):
+    result, upgrade, review = _run(tmp_path, java_file, [_files(java_file)], reviews=[_BAD_REVIEW, _PASS])
+    fs = result["current_file"]
+    assert fs["status"] == "DONE" and fs["review_score"] == 95 and not fs.get("error")
+    assert fs["retry_count"] == 0 and upgrade.call_count == 1
+    assert review.call_count == 2
+    second = review.call_args_list[1][0][0][1].content
+    assert "could not be read" in second and "Review this transformed code" in second
+    # transform + two reviews + post-check; both reviews are charged.
+    assert result["bedrock_calls"] == 4
+
+
+def test_unreadable_twice_goes_to_manual_review_with_the_reason(tmp_path, java_file):
+    result, upgrade, review = _run(tmp_path, java_file, [_files(java_file)], reviews=[_BAD_REVIEW])
+    fs = result["current_file"]
+    assert fs["status"] == "MANUAL_REVIEW" and fs["review_score"] == 0
+    assert fs["error"].startswith("Failed to parse reviewer response after 2 attempts")
+    assert review.call_count == 2 and upgrade.call_count == 1
+
+
+def test_a_score_that_is_not_a_number_is_unreadable_not_a_crash(tmp_path, java_file):
+    odd = {"score": "ninety", "verdict": "PASS", "feedback": "", "checks": {}}
+    result, _, review = _run(tmp_path, java_file, [_files(java_file)], reviews=[odd, _PASS])
+    assert result["current_file"]["status"] == "DONE" and review.call_count == 2
 
 
 def test_a_generated_unit_must_produce_its_file(tmp_path):
