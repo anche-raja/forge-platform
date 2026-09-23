@@ -462,3 +462,44 @@ def test_the_chat_can_take_a_project_from_a_sentence_and_land_it_without_a_form(
             if i.get("role") == "card" and i["card"]["kind"] == "land"]
     assert len(card) == 1 and card[0]["push_command"] == "git push -u origin forge/jakarta"
     assert card[0]["files_changed"] == 1
+
+
+# ─── the "Trial run" box ─────────────────────────────────────────────────────
+
+def _captured_turn(client, body):
+    """POST one turn with the leader replaced, and return (leader config, run ctx)."""
+    seen = {}
+
+    class Leader:
+        def __init__(self, config):
+            seen["leader_config"] = config
+
+        def run_turn(self, convo, ctx, **kwargs):
+            seen["ctx"] = ctx
+            return {"conversation_id": convo.id}
+
+    with patch("forge.leader.agent.LeaderAgent", Leader):
+        r = client.post("/api/chat", json=body)
+        assert r.status_code == 202, r.text
+        _finish(client, r.json()["job_id"])
+    return seen["leader_config"], seen["ctx"]
+
+
+def test_trial_swaps_the_transform_model_for_runs_and_leaves_the_leader_alone(tmp_path, project, monkeypatch):
+    write_config(tmp_path, trial_transform_model="us.anthropic.claude-sonnet-5")
+    monkeypatch.setattr(app_module, "KEEPALIVE_SECONDS", 0.05)
+    app = create_app(JobRegistry())
+    with TestClient(app) as c:
+        c.registry, c.cfg = app.state.registry, str(tmp_path / "agents.yaml")
+        leader_cfg, ctx = _captured_turn(c, _body(project, tmp_path, c, trial=True))
+        assert ctx.config.transform_model == "us.anthropic.claude-sonnet-5"
+        assert leader_cfg.transform_model != "us.anthropic.claude-sonnet-5", (
+            "the leader falls back to transform_model; the box is about run cost, not the chat")
+
+        _, ctx = _captured_turn(c, _body(project, tmp_path, c))
+        assert ctx.config.transform_model == leader_cfg.transform_model, "unticked means the normal model"
+
+
+def test_trial_with_no_trial_model_configured_is_refused_not_run_on_the_expensive_one(client, project, tmp_path):
+    r = client.post("/api/chat", json=_body(project, tmp_path, client, trial=True))
+    assert r.status_code == 400 and "trial_transform_model" in r.json()["detail"]

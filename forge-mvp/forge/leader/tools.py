@@ -146,18 +146,13 @@ TOOL_DEFS: List[dict] = [
     {
         "name": "run_pack",
         "description": (
-            "Run one migration pack over the project. This SPENDS MONEY and writes files. "
-            "A dry run costs exactly the same as a real one — it still calls the models — so it "
-            "is a preview, never a cheaper option. One pack at a time, in dependency order."
+            "Run one migration pack over the project for real: it calls the models and writes "
+            "files. There is no dry run. One pack at a time, in dependency order."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "pack": {"type": "string", "description": "A pack id from the plan."},
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "Transform and review but write nothing. Costs the same as a real run.",
-                },
                 "acceptance": {
                     "type": "boolean",
                     "description": "Run the pack's acceptance checks over the merged tree afterwards.",
@@ -401,6 +396,7 @@ class Toolbox:
         self.settings = settings
         self._emit = emit if callable(emit) else (lambda event: None)
         self.cancel = cancel
+        self._relayed_usd: Dict[str, float] = {}
 
     # ── config ───────────────────────────────────────────────────────────────
 
@@ -554,7 +550,7 @@ class Toolbox:
         if name == "run_pack":
             units = self._pack_units(str(args.get("pack") or ""))
             count = units[0] if units else 0
-            label = "Dry-run" if args.get("dry_run") else "Run"
+            label = "Run"
             title = f"{label} {args.get('pack')} over {count} file(s) — about ${est:.2f}"
             return self._park(name, args, est, title, units=count)
         count = self._test_targets()
@@ -589,7 +585,23 @@ class Toolbox:
             if not isinstance(event, dict) or event.get("type") in ("done", "error"):
                 return
             self._emit({**event, "via": "tool", "tool_id": tool_id})
+            # Spend lands per unit, as it is incurred. Accruing only from the
+            # final summary left "pipeline $0.000" in the rail for the whole
+            # run, and for good when a run died part-way — after it had paid
+            # for every unit before the one that failed.
+            if event.get("type") in ("file", "testgen_unit") and event.get("cost_usd"):
+                usd = float(event.get("cost_usd") or 0.0)
+                self._relayed_usd[tool_id] = self._relayed_usd.get(tool_id, 0.0) + usd
+                self.convo.accrue_pipeline(usd)
+                self._emit({"type": "usage", "spend_usd": round(self.convo.spend_usd, 6),
+                            "leader_cost_usd": round(self.convo.leader_cost_usd, 6)})
         return on_event
+
+    def _accrue_rest(self, tool_id: str, total_usd) -> None:
+        """Whatever the run's total holds that the per-unit events did not."""
+        rest = float(total_usd or 0.0) - self._relayed_usd.pop(tool_id, 0.0)
+        if rest > 1e-9:
+            self.convo.accrue_pipeline(rest)
 
     def _store_discovery(self, result: dict) -> None:
         """Keep the plan whole, and record what it SELECTED.
@@ -853,7 +865,9 @@ class Toolbox:
         from forge import service
 
         pack = str(args.get("pack") or "")
-        dry_run = bool(args.get("dry_run", False))
+        # Always a real run: the owner removed dry runs from the chat. A model
+        # that still sends dry_run from an old transcript is ignored, not obeyed.
+        dry_run = False
         problem = self._check_pack(pack)
         if problem:
             return self._fail(problem)
@@ -869,9 +883,11 @@ class Toolbox:
         written = run_manifest.load(self.ctx.output_dir)
         chain = bool(written) and any(owner != pack for owner in written.values())
 
+        config = self.effective_config()
+        model = str(config.get("transform_model") or "")
         try:
             result = service.run_migration(
-                self.ctx.source_dir, pack, self.ctx.output_dir, self.effective_config(),
+                self.ctx.source_dir, pack, self.ctx.output_dir, config,
                 dry_run=dry_run, run_acceptance=bool(args.get("acceptance", False)),
                 chain=chain,
                 on_event=self._relay(tool_id), cancel=self.cancel,
@@ -896,12 +912,13 @@ class Toolbox:
         acceptance = summary.get("acceptance")
         observation = {
             "status": status, "pack": pack, "dry_run": dry_run, "totals": totals,
+            "transform_model": model,
             "bedrock_calls": totals.get("bedrock_calls", 0),
             "cost_usd": totals.get("cost_usd", 0.0),
             "queue_count": summary.get("queue_count", 0),
             "acceptance": cards.acceptance_obs(acceptance) if acceptance else None,
         }
-        self.convo.accrue_pipeline(totals.get("cost_usd") or 0.0)
+        self._accrue_rest(tool_id, totals.get("cost_usd"))
         if status == "done" and not dry_run:
             with self.convo.lock:
                 if pack not in self.convo.completed:
@@ -918,6 +935,10 @@ class Toolbox:
         if status == "cancelled":
             parts.append("stopped")
         parts.append(f"${float(totals.get('cost_usd') or 0.0):.4f}")
+        if model:
+            # "us.anthropic.claude-sonnet-5" -> "claude-sonnet-5": which model
+            # did the work is the one thing a trial run must never hide.
+            parts.append(model.split(".", 2)[-1] if model.count(".") >= 2 else model)
         if card_error:
             parts.append(f"card_error: {card_error}")
         return ToolOutcome(True, observation, built, " · ".join(parts))
@@ -1049,7 +1070,7 @@ class Toolbox:
             "totals": totals, "skipped": data.get("skipped", 0),
             "dependencies": list(data.get("dependencies") or []),
         }
-        self.convo.accrue_pipeline(totals.get("cost_usd") or 0.0)
+        self._accrue_rest(tool_id, totals.get("cost_usd"))
         card = cards.tests_card(totals, data.get("dependencies"),
                                 cards.file_href(self.ctx.output_dir, "test-generation-report.md"))
         return ToolOutcome(True, observation, [card],
@@ -1200,7 +1221,7 @@ def tool_title(name: str, args: Any) -> str:
     """A one-line label for the tool row the browser draws."""
     args = args if isinstance(args, dict) else {}
     if name == "run_pack":
-        return f"{'Dry-run' if args.get('dry_run') else 'Run'} {args.get('pack') or '?'}"
+        return f"Run {args.get('pack') or '?'}"
     if name == "estimate_pack":
         return f"Estimate {args.get('pack') or '?'}"
     if name == "check_acceptance":

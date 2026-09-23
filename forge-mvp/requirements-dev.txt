@@ -1,0 +1,5 @@
+# Test and development dependencies.
+# Runtime dependencies live in requirements.txt and are pulled in below.
+-r requirements.txt
+
+pytest>=8.0

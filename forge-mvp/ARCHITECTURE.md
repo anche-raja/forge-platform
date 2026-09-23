@@ -282,7 +282,7 @@ and turns its events into the lines above. The web UI calls the same functions.
 2. The Phase 0 infrastructure applied from `forge-terraform/` — two DynamoDB tables, the
    guardrail and its published version, the execution role, the log group and alarms.
 3. `agents.yaml` generated from the Terraform outputs
-   (`forge-terraform/scripts/generate-agents-yaml.sh dev > agents.yaml`). The checked-in
+   (`forge-terraform/scripts/generate-agents-yaml.sh dev --out agents.yaml`). The checked-in
    `agents.yaml.example` carries a `REPLACE_WITH_GUARDRAIL_ID` placeholder and is not runnable.
    Regenerate after any Terraform change: a guardrail edit publishes a new version number.
 4. AWS credentials (`AWS_PROFILE` or env vars) that can call Bedrock, DynamoDB and CloudWatch —

@@ -181,6 +181,8 @@
     $('c-send').hidden = C.busy;
     $('c-stop').hidden = !C.busy;
     $('c-stop').disabled = false;
+    // The model is fixed for the turn it was sent with; a click mid-run would only mislead.
+    $('c-trial').disabled = C.busy;
     sendable();
     var acts = document.querySelectorAll('#c-items .c-act');
     for (var i = 0; i < acts.length; i++) acts[i].disabled = C.busy || acts[i].getAttribute('data-done') === '1';
@@ -245,6 +247,12 @@
     };
     $('c-apply').onclick = applyClick;
     $('c-clear').onclick = clearClick;
+    $('c-all').onchange = approveAllChange;
+    // A per-viewer convenience: remembered in this browser only, sent with every turn.
+    try { $('c-trial').checked = localStorage.getItem('forge.trial') === '1'; } catch (e) { /* storage blocked */ }
+    $('c-trial').onchange = function () {
+      try { localStorage.setItem('forge.trial', $('c-trial').checked ? '1' : '0'); } catch (e) { /* storage blocked */ }
+    };
     $('c-stop').onclick = stop;
     $('c-jump').onclick = function () { fit(true); $('c-input').focus(); };
     $('c-transcript').onscroll = function () {
@@ -375,6 +383,7 @@
   async function post(extra, restore) {
     var body = Object.assign({}, extra || {});
     if (C.id) body.conversation_id = C.id;
+    body.trial = !!$('c-trial').checked;
     setBusy(true);
     notice('');
     try {
@@ -727,7 +736,7 @@
     if (!t) return;
     if (type === 'start') { t.total = d.total || 0; t.done = 0; t.dry = !!d.dry_run; paintBar(t); }
     else if (type === 'testgen_start') { t.total = d.targets || 0; t.done = 0; note(t, d.targets + ' class(es) to write tests for, ' + d.skipped + ' skipped'); paintBar(t); }
-    else if (type === 'file' || type === 'testgen_unit') { t.total = d.total || t.total; t.done = d.index || t.done; logLine(t, d); paintBar(t); }
+    else if (type === 'file' || type === 'testgen_unit') { t.total = d.total || t.total; t.done = d.index || t.done; t.spent = (t.spent || 0) + (Number(d.cost_usd) || 0); logLine(t, d); paintBar(t); }
     else if (type === 'skipped') { note(t, d.count + ' file(s) outside the scope prefix'); }
     else if (type === 'queue') { note(t, d.count + ' file(s) staged for review'); }
     else if (type === 'nothing') { note(t, str(d.message)); }
@@ -766,10 +775,10 @@
       if (totals.tests_failed !== undefined) bits.push(cell(totals.tests_failed, 'tests failed'));
       if (totals.bedrock_calls !== undefined) bits.push(cell(totals.bedrock_calls, 'Bedrock calls'));
     }
-    // Until the run reports, the only honest number is the per-unit average the
-    // estimate was quoted at — labelled as an estimate, and replaced by the real
-    // figure the moment `summary` arrives.
+    // Each finished unit reports what it actually cost, so the running figure is
+    // real, not the per-unit estimate; `summary` replaces it with the run total.
     if (t.cost != null) bits.push(cell('$' + num(t.cost, 3), 'cost'));
+    else if (t.spent) bits.push(cell('$' + num(t.spent, 3), 'spent so far'));
     else if (C.unitCost && t.done) bits.push(cell('$' + num(t.done * C.unitCost, 2), 'spent so far (est.)'));
     html(t.counts, bits.join(''));
   }
@@ -1169,6 +1178,12 @@
       wrap.hidden = !(picked === 'reject' || picked === 'retry');
     }
     seg.reset = function () { noteEl.value = ''; ruleEl.value = ''; paintSeg(''); };
+    // Approve all sets the same state a click would; it still posts nothing.
+    seg.pick = function (v) {
+      if (!v) delete C.decisions[id];
+      else C.decisions[id] = { decision: v, note: noteEl.value.trim(), rule: ruleEl.value.trim() };
+      paintSeg(v);
+    };
 
     seg.onclick = function (ev) {
       var b = ev.target.closest('.c-segbtn');
@@ -1509,23 +1524,81 @@
     return { run: C.queue.run, rows: rows };
   }
 
+  // ─── approve all ──────────────────────────────────────────────────────────
+  // Every file still waiting on a human: the live cards on the current queue,
+  // and the rows of any expanded queue frame. The box only SELECTS approve on
+  // them — Apply is still the one click that writes anything.
+  function waitingCards() {
+    return Object.keys(C.cards).filter(function (id) { return applicable(C.cards[id].card); });
+  }
+
+  function frameSets() {
+    var out = [], frames = document.querySelectorAll('#c-items iframe.c-moreframe');
+    for (var i = 0; i < frames.length; i++) {
+      var doc = frameDoc(frames[i]);
+      if (!doc) continue;
+      var sets = doc.querySelectorAll('fieldset.decision');
+      for (var j = 0; j < sets.length; j++) {
+        var f = sets[j], section = f.closest('section.entry');
+        // A row hidden because it already has a card is that card's file, not a second one.
+        if (section && section.hidden) continue;
+        if (C.queue.keys[str(f.getAttribute('data-file')) + '|' + str(f.getAttribute('data-pack'))] !== true) continue;
+        out.push(f);
+      }
+    }
+    return out;
+  }
+
+  function radioIn(set, value) { return set.querySelector('input[type=radio][value="' + value + '"]'); }
+
+  function approveAllChange() {
+    var on = $('c-all').checked;
+    waitingCards().forEach(function (id) {
+      var seg = C.cards[id].el.querySelector('.c-seg');
+      if (!seg || !seg.pick) return;
+      var cur = C.decisions[id] ? C.decisions[id].decision : '';
+      if (on) seg.pick('approve');
+      else if (cur === 'approve') seg.pick('');   // leave a reject or retry alone
+    });
+    frameSets().forEach(function (set) {
+      var approve = radioIn(set, 'approve'), skip = radioIn(set, 'skip');
+      if (on && approve) approve.checked = true;
+      else if (!on && approve && approve.checked && skip) skip.checked = true;
+    });
+    applyBar();
+  }
+
+  function paintAll() {
+    var box = $('c-all');
+    if (!box) return 0;
+    var cards = waitingCards(), sets = frameSets(), total = cards.length + sets.length;
+    var all = total > 0
+      && cards.every(function (id) { return C.decisions[id] && C.decisions[id].decision === 'approve'; })
+      && sets.every(function (set) { var a = radioIn(set, 'approve'); return !a || a.checked; });
+    box.checked = all;
+    box.disabled = !total || C.busy;
+    $('c-all-label').textContent = 'Approve all ' + total + ' file' + (total === 1 ? '' : 's') + ' waiting';
+    return total;
+  }
+
   function applyBar() {
     var bar = $('c-applybar');
     if (!bar) return;
     var pick = chosen();
     var n = pick.rows.length;
+    var waiting = paintAll();
     $('c-apply-n').textContent = n + ' decision' + (n === 1 ? '' : 's') + ' ready';
     $('c-apply').disabled = !n || C.busy;
     $('c-clear').disabled = !n || C.busy;
     $('c-apply-hint').textContent = n
       ? 'run ' + pick.run + ' — approve writes the staged file, reject discards it, retry re-runs it with your note.'
       : '';
-    bar.hidden = !n;
+    bar.hidden = !n && !waiting;
     // chat.css fades the last 22px of the transcript into the composer. The bar
     // is opaque and sits in exactly that strip, so the fade comes off while it
     // is up rather than dimming the button that applies the decisions.
     var pane = document.querySelector('.c-pane');
-    if (pane) pane.classList.toggle('c-hasbar', !!n);
+    if (pane) pane.classList.toggle('c-hasbar', !bar.hidden);
   }
 
   function applyClick() {

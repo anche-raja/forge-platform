@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from forge import service
-from forge.config import ForgeConfig
+from forge.config import ConfigError, ForgeConfig
 from forge.ui.jobs import JobBusy, JobRegistry
 
 STATIC = Path(__file__).parent / "static"
@@ -108,12 +108,17 @@ class ChatRequest(Project):
     a first message before anyone has named a folder, because asking for the
     folder is the leader's job and it cannot ask from behind a 400. ``config``
     stays required — a leader with no model is not a leader.
+
+    ``trial`` is the chat's "Trial run" box: this turn's runs transform with
+    ``trial_transform_model`` instead of ``transform_model``. Per turn, from a
+    click — never something the leader can set.
     """
 
     source_dir: Optional[str] = None
     conversation_id: Optional[str] = None
     message: Optional[str] = None
     action: Optional[Dict[str, Any]] = None
+    trial: bool = False
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
@@ -123,7 +128,14 @@ def _config(path: Optional[str], decisions: Optional[Dict[str, str]]) -> ForgeCo
     path = path or os.environ.get("FORGE_AGENTS_YAML", "agents.yaml")
     if not Path(path).is_file():
         raise HTTPException(400, f"config not found: {path}")
-    config = ForgeConfig(path)
+    try:
+        config = ForgeConfig(path)
+    except ConfigError as e:
+        # migrate.py catches these, prints them and exits 2; the browser needs
+        # the same words. Uncaught, FastAPI renders a bare "Internal Server
+        # Error" and the one message that says how to repair the config only
+        # ever reaches the server's terminal.
+        raise HTTPException(400, str(e)) from e
     if decisions:
         bad = {k: v for k, v in decisions.items() if k in DECISION_OPTIONS and v not in DECISION_OPTIONS[k]}
         if bad:
@@ -378,7 +390,17 @@ def create_app(registry: Optional[JobRegistry] = None) -> FastAPI:
             # set_project binds the conversation from inside a turn, so this is
             # where a chat that named its folder in prose picks it up again.
             source, output_dir = convo.source_dir, convo.output_dir
-        ctx = ProjectContext(source_dir=source, output_dir=output_dir, config=config,
+        # The trial model reaches the runs only. The leader keeps `config`: it
+        # falls back to transform_model when leader.model is unset, and the
+        # chat's own behaviour must not change with a box about run cost.
+        run_config = config
+        if body.trial:
+            trial_model = str(config.get("trial_transform_model") or "").strip()
+            if not trial_model:
+                raise HTTPException(400, "Trial run is on, but agents.yaml has no trial_transform_model "
+                                         "— add one (e.g. us.anthropic.claude-sonnet-5) or turn the box off")
+            run_config = config.with_overrides({"transform_model": trial_model})
+        ctx = ProjectContext(source_dir=source, output_dir=output_dir, config=run_config,
                              base_config=base_config, bound=bool(source))
 
         def target(job, emit):

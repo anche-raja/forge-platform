@@ -33,6 +33,9 @@
     </button>
   </div>
   <div class="c-railfoot">
+    <label class="c-trial" title="Runs this turn transform with the cheaper trial_transform_model from agents.yaml (Sonnet 5), about 40% of Opus per file. The run row names the model that did the work.">
+      <input type="checkbox" id="c-trial"> <span>Trial run — cheaper model</span>
+    </label>
     <div class="c-spend" id="c-spend" hidden></div>
     <div class="c-packs" id="c-packs" hidden></div>
     <div id="jobbar" class="jobbar" hidden></div>
@@ -65,6 +68,7 @@
              conversation and still never covers the composer. -->
         <div id="c-applybar" class="applybar" hidden>
           <div class="c-barcol">
+            <label class="c-allwrap"><input type="checkbox" id="c-all"> <span id="c-all-label">Approve all</span></label>
             <span class="c-applyn" id="c-apply-n">0 decisions ready</span>
             <button id="c-apply" class="primary" type="button">Apply</button>
             <button id="c-clear" type="button">Clear</button>

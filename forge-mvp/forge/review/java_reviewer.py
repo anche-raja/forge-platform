@@ -1,7 +1,7 @@
 from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from forge.config import ForgeConfig
+from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
 from forge.context.inject import context_block_for
 from forge.phases import get_phase
 from forge.review.base_reviewer import BaseReviewer
@@ -20,6 +20,8 @@ class JavaReviewer(BaseReviewer):
         self.llm = ChatBedrockConverse(
             model=config.review_model,
             region_name=config.aws_region,
+            max_tokens=model_max_tokens(config, config.review_model),
+            config=bedrock_client_config(config),
         )
 
     def review(self, state: ForgeState) -> ForgeState:

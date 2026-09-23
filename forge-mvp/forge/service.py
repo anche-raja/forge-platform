@@ -207,7 +207,8 @@ def run_file(app, config, state_manager, metrics, file_path: str, index: int, to
     label = f"{Path(file_path).name} (generated)" if generate else Path(file_path).name
     emit(on_event, {"type": "file", "index": index, "total": total, "file": file_path, "label": label,
                     "status": fs.get("status", "UNKNOWN"), "score": fs.get("review_score"), "generated": generate,
-                    "risk_tier": fs.get("risk_tier"), "retry_count": fs.get("retry_count")})
+                    "risk_tier": fs.get("risk_tier"), "retry_count": fs.get("retry_count"),
+                    "cost_usd": round(final.get("estimated_cost_usd", 0.0) or 0.0, 6)})
 
     if not dry_run:
         state_manager.put_file_status(fs)
@@ -651,6 +652,7 @@ def generate_tests(source_dir: str, output_dir: str, config: ForgeConfig, *, dry
                     "status": unit.get("status"), "score": unit.get("review_score"),
                     "test_verdict": unit.get("test_verdict"), "retry_count": unit.get("retry_count"),
                     "reason": unit.get("hold_reason") or unit.get("error"),
+                    "cost_usd": round(final.get("estimated_cost_usd", 0.0) or 0.0, 6),
                 })
                 if not dry_run:
                     metrics.emit({"bedrock_calls": final.get("bedrock_calls", 0),

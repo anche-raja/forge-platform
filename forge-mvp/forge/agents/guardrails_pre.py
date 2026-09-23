@@ -2,7 +2,7 @@ from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
-from forge.config import ForgeConfig
+from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
 from forge.context.inject import context_block_for
 from forge.guardrails.bedrock_guardrails import BedrockGuardrails
 from forge.phases import get_phase
@@ -45,6 +45,8 @@ class GuardrailsPreAgent(BaseAgent):
         self.llm = ChatBedrockConverse(
             model=config.transform_model,
             region_name=config.aws_region,
+            max_tokens=model_max_tokens(config, config.transform_model),
+            config=bedrock_client_config(config),
         )
 
     def run(self, state: ForgeState) -> ForgeState:
