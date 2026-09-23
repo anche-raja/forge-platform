@@ -81,12 +81,19 @@ How to work:
   Confirm on the card — only the button runs it.
 - Approving, rejecting or retrying a file is always the user's click. You may propose decisions;
   you never make them.
+- A BLOCKED file was refused before any transform, so there is nothing to approve: never offer
+  approve, and never tell the user to review its diff. Name the cause from its blocked_by (the
+  secret scan, the Bedrock guardrail, a file too large, an unreadable file) and pass on what its
+  unblock says the user can change — the file itself, or secret_scan.allow in agents.yaml for a
+  literal that is not a real secret. After that change a retry re-runs it; rejecting it leaves
+  the file unmigrated. HELD and MANUAL_REVIEW files are the ones with a transform to decide on.
 
 Landing the work:
-- After the last pack of the plan has run and the files waiting on a human are settled, call
-  build_project. It is free. Tell the user in one line whether the project built; if it failed,
+- The last pack of the plan builds the project itself: its run_pack result says plan_complete and
+  carries the build verdict. Tell the user in one line whether the project built; if it failed,
   name the failing step and point them at the build card for the errors. Do not guess at causes
-  you cannot see.
+  you cannot see. If review decisions change the output afterwards the build goes stale; call
+  build_project (free) again before offering land_on_branch.
 - land_on_branch is the only thing here that writes into their own repository. Offer it once a
   pack has actually run and the files waiting on a human are settled — not before. A failed or
   stale build does not stop it: say so plainly when you offer it, and let the user decide.
@@ -185,7 +192,8 @@ def state_block(convo, ctx, settings: Optional[LeaderSettings] = None) -> str:
     lines.append("  packs you may name: " + (", ".join(selected) or "none — profile first"))
 
     completed = list(convo.completed or [])
-    remaining = [p for p in selected if p not in completed]
+    settled = set(completed) | set(getattr(convo, "nothing_to_do", None) or [])
+    remaining = [p for p in selected if p not in settled]
     lines += ["", "PROGRESS",
               "  completed in this chat: " + (", ".join(completed) or "none"),
               "  next in order: " + (remaining[0] if remaining else "nothing left in the plan")]
@@ -340,12 +348,43 @@ class LeaderAgent:
 
     # ── the model loop (§6 step 3) ───────────────────────────────────────────
 
+    @staticmethod
+    def _advances_plan(convo, call: dict, outcome: ToolOutcome, forced, before: set, advanced: set) -> bool:
+        """Did this call move the plan forward: one more selected pack, run or found empty?
+
+        Each pack can advance the plan once per turn and only if it was not
+        already finished when the turn began, so the steps this excuses from
+        ``max_steps`` are bounded by the packs left in the plan. A model that
+        re-runs a pack, names one outside the plan, or loops on a refusal is
+        counted like any other call.
+        """
+        observation = outcome.observation if isinstance(outcome.observation, dict) else {}
+        pack = str(observation.get("pack") or "")
+        if (call.get("name") != "run_pack" or forced is not None or not outcome.ok
+                or outcome.needs_confirmation or observation.get("status") not in ("done", "nothing")
+                or pack not in (convo.selected_packs or []) or pack in before or pack in advanced):
+            return False
+        advanced.add(pack)
+        return True
+
     def _model_loop(self, convo, ctx, toolbox, emit, cancel) -> int:
+        """Up to ``max_steps`` model calls — not counting the ones that ran the plan.
+
+        The cap is there to stop a confused loop, not a plan: a ten-pack plan is
+        at least ten calls, and counting them stopped the first real run after
+        seven packs with "say continue" (#22). A step whose every tool call
+        advanced the plan is free; ``_advances_plan`` is what keeps that finite.
+        """
         steps = 0
+        counted = 0
         gated = False
         hit_cap = True
-        for _ in range(self.settings.max_steps):
+        with convo.lock:
+            before = set(convo.completed or []) | set(getattr(convo, "nothing_to_do", None) or [])
+        advanced: set = set()
+        while counted < self.settings.max_steps:
             steps += 1
+            counted += 1
             message_id = _new_id("m")
             acc, completed, cancelled = self._stream(convo, ctx, emit, cancel, message_id)
             self._accrue(convo, acc)
@@ -378,6 +417,7 @@ class LeaderAgent:
                 hit_cap = False
                 break
 
+            plan_step = True
             for call in kept:
                 problem = errors.get(call["id"])
                 if problem is not None:
@@ -392,6 +432,10 @@ class LeaderAgent:
                 outcome = self._run_tool(convo, toolbox, call["name"], call["args"], emit,
                                          tool_id=call["id"], forced=forced)
                 gated = gated or outcome.needs_confirmation
+                if not self._advances_plan(convo, call, outcome, forced, before, advanced):
+                    plan_step = False
+            if plan_step:
+                counted -= 1
 
         if hit_cap:
             notice = (f"I have used my {self.settings.max_steps} steps for this turn. "

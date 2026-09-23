@@ -102,9 +102,10 @@ intent:
 # run. Applying review decisions is confirmed whatever this says: an approval is
 # your signature on someone else's code.
 #
-# max_steps caps the tool calls in one turn, so a confused loop costs a turn
-# rather than a budget; history_messages caps what is re-sent on every call,
-# which is the other half of the same bill.
+# max_steps caps the model steps in one turn, so a confused loop costs a turn
+# rather than a budget — a step that only ran the plan's next pack is not
+# counted, so a long plan runs through. history_messages caps what is re-sent
+# on every call, which is the other half of the same bill.
 leader:
   model: ""
   max_steps: 8

@@ -147,7 +147,9 @@ TOOL_DEFS: List[dict] = [
         "name": "run_pack",
         "description": (
             "Run one migration pack over the project for real: it calls the models and writes "
-            "files. There is no dry run. One pack at a time, in dependency order."
+            "files. There is no dry run. One pack at a time, in dependency order. After the last "
+            "pack of the plan it also builds the project, and its result says plan_complete and "
+            "carries the build verdict."
         ),
         "parameters": {
             "type": "object",
@@ -255,9 +257,10 @@ TOOL_DEFS: List[dict] = [
         "description": (
             "Compile the migrated project with its own build (its Maven reactors in order, or the "
             "configured command), source with the output laid over it. No model call and no cost; "
-            "it can take minutes. Run it after the last pack of the plan, before offering "
-            "land_on_branch. The result is pass, fail or skip; the failing lines go to the user's "
-            "card, not to you."
+            "it can take minutes. run_pack already runs it after the last pack of the plan; call it "
+            "again when review decisions have changed the output since (the build is then stale), "
+            "or when the user asks. The result is pass, fail or skip; the failing lines go to the "
+            "user's card, not to you."
         ),
         "parameters": dict(_EMPTY_SCHEMA),
     },
@@ -919,8 +922,14 @@ class Toolbox:
                 on_event=self._relay(tool_id), cancel=self.cancel,
             )
         except service.NoEligibleFiles as e:
-            return ToolOutcome(True, {"status": "nothing", "pack": pack, "message": cards.cap(e)},
-                               [], f"{pack}: nothing to do")
+            with self.convo.lock:
+                if pack not in self.convo.nothing_to_do:
+                    self.convo.nothing_to_do.append(pack)
+            observation: Dict[str, Any] = {"status": "nothing", "pack": pack, "message": cards.cap(e)}
+            nothing_cards: List[dict] = []
+            nothing_parts = [f"{pack}: nothing to do"]
+            self._finish_plan(tool_id, observation, nothing_cards, nothing_parts)
+            return ToolOutcome(True, observation, nothing_cards, " · ".join(nothing_parts))
         except service.PackOverlap as e:
             # ok:false, so the leader reports it and asks rather than retrying:
             # the fix is a combined phase or a chained output dir, and both are
@@ -967,7 +976,49 @@ class Toolbox:
             parts.append(model.split(".", 2)[-1] if model.count(".") >= 2 else model)
         if card_error:
             parts.append(f"card_error: {card_error}")
+        if status == "done":
+            self._finish_plan(tool_id, observation, built, parts)
         return ToolOutcome(True, observation, built, " · ".join(parts))
+
+    def _plan_remaining(self) -> List[str]:
+        """The plan's packs this chat has not settled yet, in plan order.
+
+        A selected pack that is not runnable today can never run, so it never
+        holds the plan open; nor does one that found nothing to do.
+        """
+        from forge.utils.file_scanner import runnable_phases
+
+        runnable = set(runnable_phases())
+        with self.convo.lock:
+            settled = set(self.convo.completed) | set(self.convo.nothing_to_do)
+            selected = list(self.convo.selected_packs or [])
+        return [p for p in selected if p in runnable and p not in settled]
+
+    def _finish_plan(self, tool_id: str, observation: dict, built: List[dict], parts: List[str]) -> None:
+        """After the last pack of the plan, build the project: in code, not in the prompt.
+
+        The prompt used to be the only thing that said so, and the first full
+        ten-pack run went from the last pack straight to the review queue and
+        offered landing unbuilt (#21). The build is free and ungated, so running
+        it here takes nothing from the user. The verdict goes through the same
+        reducer ``build_project`` uses — never compiler output — and a build
+        that dies is reported beside the paid run, never instead of it.
+        """
+        remaining = self._plan_remaining()
+        observation["plan_complete"] = not remaining
+        if remaining or not self.convo.completed:
+            return
+        if self.cancel is not None and self.cancel.is_set():
+            return
+        try:
+            record = self._build(tool_id)
+        except Exception as e:  # noqa: BLE001 — R6: the run above is paid for and stands
+            observation["build_error"] = cards.cap(f"{type(e).__name__}: {e}")
+            parts.append("build: error")
+            return
+        observation["build"] = cards.build_status_obs(record)
+        built.append(cards.build_card(record))
+        parts.append(f"build: {record.get('outcome')}")
 
     def _check_acceptance(self, args: dict, tool_id: str) -> ToolOutcome:
         from forge import service
@@ -1178,13 +1229,17 @@ class Toolbox:
 
     def _build_project(self, args: dict, tool_id: str) -> ToolOutcome:
         """The project's own build over source + output. Free, local, never gated."""
-        from forge import service
-
-        record = service.build_project(self.ctx.source_dir, self.ctx.output_dir, self.effective_config(),
-                                       on_event=self._relay(tool_id))
+        record = self._build(tool_id)
         observation = cards.build_status_obs(record)
         return ToolOutcome(True, observation, [cards.build_card(record)],
                            f"build: {record['outcome']} — {cards.cap(record['detail'])}")
+
+    def _build(self, tool_id: str) -> dict:
+        """The one path to the project build: ``build_project``, and the end of a plan."""
+        from forge import service
+
+        return service.build_project(self.ctx.source_dir, self.ctx.output_dir, self.effective_config(),
+                                     on_event=self._relay(tool_id))
 
     def _land_on_branch(self, args: dict, tool_id: str) -> ToolOutcome:
         """The one write into the user's own repository. Confirmed, and refusing.

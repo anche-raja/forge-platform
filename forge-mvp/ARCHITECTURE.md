@@ -715,6 +715,13 @@ POST /api/chat {message}
    └─ emit usage {leader_calls, leader_cost_usd, spend_usd}
 ```
 
+**The step cap stops a loop, not a plan.** A step whose every call was a `run_pack` that settled
+one more pack of the plan — a selected pack not already finished when the turn began, run to
+`done` or found empty, once per pack per turn — does not count toward `leader.max_steps`. A
+ten-pack plan used to stop after seven packs with "say continue". Those free steps can never
+outnumber the packs left in the plan, so a model re-running a pack, naming one outside the plan
+or calling anything else is still capped.
+
 **Why the gate is an allow-list and not a deny-list.** `parse_partial_json` silently *repairs*
 truncated tool arguments: `{"pack":"javax-to-jakarta","dry_r` accumulates into a valid-looking
 `{"pack":"javax-to-jakarta"}` — with `dry_run` gone. Pressing Stop on a proposed dry run could
@@ -737,7 +744,10 @@ dependency order, into an isolated local repository (`~/.forge/m2`), on the JDK
 `/usr/libexec/java_home` reports for `target_java_version`. It writes `project-build.json`;
 `land_on_branch`'s confirmation card shows that verdict — passed, failed, not run, or **stale**
 when the migrated files changed after the build — and never refuses on it. The leader sees the
-verdict and the failing step, never the compiler output, which goes to the card only.
+verdict and the failing step, never the compiler output, which goes to the card only. The build
+after the last pack is not left to the prompt: when `run_pack` settles the last runnable pack of
+the plan (`selected_packs` minus `completed` and the packs that found nothing to do), it runs the
+same build itself and returns `plan_complete: true` with the verdict.
 
 Every one is a wrapper over `forge/service.py` — "add behaviour to the service, never to a route or
 a CLI branch" applies to a tool too. None of them raises: a failure is an `ok: false` observation,
@@ -772,6 +782,12 @@ Same rule as [GUARDRAILS.md](GUARDRAILS.md) §7, one layer up: *a model is never
 decides what a model may see.* One test plants a marker in every field that carries file bytes and
 asserts it reaches no observation, no `ToolMessage` and not the state block — while the browser's
 card still carries it.
+
+A BLOCKED entry has no transform to decide on, so its observation says why instead: `blocked_by`
+(`secret_scan`, `guardrail`, `too_large`, `unreadable`, `preflight_check`), read from the
+`guardrail_pre_verdict` the pre-flight node recorded, and `unblock`, a fixed platform sentence on
+what the user can change (the file, `secret_scan.allow`, the threshold). The leader names the cause
+without being shown what matched.
 
 ### Review cards carry a run stamp
 

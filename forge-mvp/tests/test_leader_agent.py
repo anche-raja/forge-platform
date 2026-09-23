@@ -272,6 +272,67 @@ def test_the_step_cap_ends_the_turn_with_a_notice_rather_than_looping(ctx, tmp_p
     assert [e["type"] for e in events][-2:] == ["assistant_message", "usage"]
 
 
+PLAN = ["java8-to-java21", "javax-to-jakarta", "spring-to-spring6", "junit4-to-junit5"]
+
+
+def _planned(convo, packs):
+    convo.discovery = {"order": list(packs), "decisions": {"risk_ceiling": "review-high"},
+                       "activations": [{"pack": p, "complete": True, "runnable": True} for p in packs]}
+    convo.selected_packs = list(packs)
+    return convo
+
+
+def test_running_the_plan_does_not_spend_the_step_cap(ctx, tmp_path):
+    """The first ten-pack run stopped after seven packs with "say continue":
+    every pack was one step of eight. The cap is for a confused loop, not a plan."""
+    config = write_config(tmp_path, leader={"max_steps": 2, "confirm_above_usd": 0})
+    ctx = replace(ctx, config=config, base_config=config)
+    convo = _planned(Conversation(), PLAN)
+    script = [tool_turn({"name": "run_pack", "args": {"pack": p}}) for p in PLAN]
+    script.append(text_turn("All four packs ran and the project built."))
+    with scripted(ctx.config, script) as (agent, fake), \
+         patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch("forge.service.build_project", return_value={"outcome": "pass", "detail": "built"}):
+        result = agent.run_turn(convo, ctx, message="migrate it", job_id="j1")
+
+    assert convo.completed == PLAN and len(fake.calls) == 5 and result["steps"] == 5
+    assert "continue" not in convo.history[-1].content
+    assert convo.history[-1].content == "All four packs ran and the project built."
+
+
+def test_a_pack_run_over_and_over_is_still_stopped_by_the_cap(ctx, tmp_path):
+    """Only a pack that moves the plan forward is free, once per turn — so the
+    free steps can never outnumber the packs left, and a loop still ends."""
+    config = write_config(tmp_path, leader={"max_steps": 2, "confirm_above_usd": 0})
+    ctx = replace(ctx, config=config, base_config=config)
+    convo = _planned(Conversation(), PLAN)
+    again = {"name": "run_pack", "args": {"pack": "javax-to-jakarta"}}
+    script = [tool_turn(dict(again)) for _ in range(6)]
+    with scripted(ctx.config, script) as (agent, fake), \
+         patch("forge.service.run_migration", return_value=_run_result(ctx)) as run:
+        result = agent.run_turn(convo, ctx, message="keep going", job_id="j1")
+
+    # One free step for the first run, then the two counted ones.
+    assert result["steps"] == 3 and len(fake.calls) == 3 and run.call_count == 3
+    assert "2 steps" in convo.history[-1].content and "continue" in convo.history[-1].content
+
+
+def test_a_pack_outside_the_plan_or_already_done_counts_toward_the_cap(ctx, tmp_path):
+    config = write_config(tmp_path, leader={"max_steps": 2, "confirm_above_usd": 0})
+    ctx = replace(ctx, config=config, base_config=config)
+    convo = _planned(Conversation(), PLAN)
+    convo.completed = ["java8-to-java21"]
+    script = [tool_turn({"name": "run_pack", "args": {"pack": "java8-to-java21"}}),
+              tool_turn({"name": "run_pack", "args": {"pack": "struts2-modernize"}}),
+              text_turn("never reached")]
+    with scripted(ctx.config, script) as (agent, fake), \
+         patch("forge.service.run_migration", return_value=_run_result(ctx)) as run:
+        result = agent.run_turn(convo, ctx, message="go", job_id="j1")
+
+    assert run.call_count == 1, "the pack outside the plan is refused before the service"
+    assert result["steps"] == 2 and "continue" in convo.history[-1].content
+
+
 def test_a_trimmed_history_never_splits_a_tool_call_from_its_answer(ctx):
     """Bedrock rejects a ``toolResult`` with no matching ``toolUse``, so the
     window moves back to a user turn rather than slicing mid-exchange — even

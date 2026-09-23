@@ -738,6 +738,10 @@
     else if (type === 'testgen_start') { t.total = d.targets || 0; t.done = 0; note(t, d.targets + ' class(es) to write tests for, ' + d.skipped + ' skipped'); paintBar(t); }
     else if (type === 'file' || type === 'testgen_unit') { t.total = d.total || t.total; t.done = d.index || t.done; t.spent = (t.spent || 0) + (Number(d.cost_usd) || 0); logLine(t, d); paintBar(t); }
     else if (type === 'skipped') { note(t, d.count + ' file(s) outside the scope prefix'); }
+    // The last pack of a plan builds the project in the same row, and a build
+    // can take minutes after the bar has already reached the end.
+    else if (type === 'build_start') { note(t, 'building the project'); }
+    else if (type === 'build') { note(t, 'build ' + str(d.outcome)); }
     else if (type === 'queue') { note(t, d.count + ' file(s) staged for review'); }
     else if (type === 'nothing') { note(t, str(d.message)); }
     else if (type === 'cancelled' || type === 'testgen_cancelled') { note(t, 'cancelled after ' + d.done + ' of ' + d.total); }
@@ -1100,7 +1104,7 @@
         + '<pre class="c-diff c-diffrest" hidden></pre>'
         + '<button type="button" class="c-diffmore" hidden></button></div>'
         + (card.diff_truncated ? '<p class="hint">The diff itself was truncated before it reached this page.</p>' : '')
-        : '<p class="hint">No diff: ' + (str(card.status) === 'BLOCKED' ? 'this unit was blocked before it was transformed.' : 'nothing was transformed for this unit.') + '</p>')
+        : '<p class="hint">No diff: ' + esc(str(card.status) === 'BLOCKED' ? 'this unit was blocked before it was transformed' + (card.unblock ? ': ' + str(card.unblock) : '.') : 'nothing was transformed for this unit.') + '</p>')
       + block('Also transformed', card.also_transformed)
       + block('Superseded files', card.deleted_files)
       + '<div class="c-decide" data-card="' + esc(id) + '" hidden>'
