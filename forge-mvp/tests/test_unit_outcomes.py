@@ -297,6 +297,28 @@ def test_the_ams_case_a_perfect_score_stopped_by_the_output_guardrail(tmp_path, 
     assert "hunter2" not in fs["error"]
 
 
+def test_the_output_guardrail_is_never_shown_the_file_path(tmp_path, java_file):
+    """java8-to-java21 on AMS (2026-09-23): every changed file held at review 85-100 with
+    CREDIT_DEBIT_CARD_NUMBER. The match was the Windows SID in the "// FILE:" header's absolute
+    path, never the code. Scripted as the real policy behaved: it intervenes on the path."""
+    seen = []
+
+    def evaluate(self, text, source):
+        seen.append((source, text))
+        hit = java_file in text
+        return {"action": "GUARDRAIL_INTERVENED" if hit else "NONE", "intervened": hit,
+                "findings": ["sensitiveInformationPolicy: CREDIT_DEBIT_CARD_NUMBER BLOCKED"] if hit else []}
+
+    result, _, _ = _run(tmp_path, java_file, [_files(java_file)], reviews=[_PERFECT],
+                        patches=[("forge.guardrails.bedrock_guardrails.BedrockGuardrails.evaluate",
+                                  {"autospec": True, "side_effect": evaluate})])
+    fs = result["current_file"]
+    assert fs["status"] == "DONE" and not fs.get("error")
+    assert fs["guardrail_post_verdict"] == "NONE"
+    outputs = [text for source, text in seen if source == "OUTPUT"]
+    assert outputs == [CLEAN_JAVA]
+
+
 def test_a_path_with_no_reason_is_still_given_one(tmp_path, java_file):
     """The backstop: a node that stops a unit and forgets to say why."""
     def forgetful(self, state):

@@ -93,10 +93,8 @@ class GuardrailsPostAgent(BaseAgent):
         transform_output = file_status.get("transform_output") or {}
 
         # Combine all transformed file contents for evaluation
-        all_content = "\n\n".join(
-            f"// FILE: {path}\n{content}"
-            for path, content in transform_output.get("files", {}).items()
-        )
+        files = transform_output.get("files", {})
+        all_content = "\n\n".join(f"// FILE: {path}\n{content}" for path, content in files.items())
 
         if not all_content:
             file_status["status"] = "MANUAL_REVIEW"
@@ -104,7 +102,11 @@ class GuardrailsPostAgent(BaseAgent):
             return {**state, "current_file": file_status}
 
         # Step 1: Bedrock Guardrails (OUTPUT)
-        gr_result = self.guardrails.evaluate(all_content, "OUTPUT")
+        # The contents only, as guardrails_pre sends the source: the "// FILE:" headers are absolute
+        # paths, and a path is not output. On Windows one carries the user's SID
+        # (S-1-5-21-1010238134-1704489833-...), which the PII policy reads as CREDIT_DEBIT_CARD_NUMBER
+        # -- every changed file of a java8-to-java21 run on AMS was held at review 85-100 for its path.
+        gr_result = self.guardrails.evaluate("\n\n".join(files.values()), "OUTPUT")
         file_status["guardrail_post_verdict"] = gr_result["action"]
         if gr_result["findings"]:
             file_status["guardrail_findings"] = list(file_status.get("guardrail_findings", [])) + gr_result["findings"]
