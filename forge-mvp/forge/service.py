@@ -434,6 +434,24 @@ def _run_units(numbered, one, workers: int, cancel: Optional[threading.Event]):
     return results, cancelled
 
 
+def _tree_rel(path: str, tree: str) -> str:
+    """A ``deleted_files`` entry as a path relative to the tree the run read.
+
+    The model names a retired file the way it saw its target: absolute, under
+    the source (or the chained copy of it). The manifest, the merged view and
+    landing all key on the relative path, so an absolute entry left as-is
+    would retire nothing. An entry outside the tree, or already relative, is
+    kept as given -- landing bounds it to the repository either way.
+    """
+    p = Path(str(path))
+    if not p.is_absolute():
+        return p.as_posix()
+    try:
+        return p.resolve().relative_to(Path(tree).resolve()).as_posix()
+    except (ValueError, OSError):
+        return p.as_posix()
+
+
 def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeConfig, *, dry_run: bool = False,
                   single_file: Optional[str] = None, resume: bool = False, no_metrics: bool = False,
                   run_acceptance: bool = False, acceptance_build: bool = False, with_tests: bool = False,
@@ -586,7 +604,8 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     if not dry_run:
         run_manifest.record(str(output_root), phase,
                             [p for fs in all_statuses for p in (fs.get("written_paths") or [])],
-                            deleted=[d for fs in all_statuses for d in (fs.get("deleted_files") or [])])
+                            deleted=[_tree_rel(d, source_dir) for fs in all_statuses
+                                     for d in (fs.get("deleted_files") or [])])
 
     # The full extracted context, for the reviewer of last resort and for the
     # acceptance checks that diff pre- against post-migration facts. Written in

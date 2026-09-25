@@ -763,7 +763,12 @@ the branch and the base. An already-open PR for the branch is returned, not an e
 ([forge/verify/project_build.py](forge/verify/project_build.py)): `project_build.command` if set,
 otherwise every Maven reactor — a pom no other pom lists as a module — with `mvn install` in
 dependency order, into an isolated local repository (`~/.forge/m2`), on the JDK
-`/usr/libexec/java_home` reports for `target_java_version`. It writes `project-build.json`;
+`/usr/libexec/java_home` reports for `target_java_version`. The command can be the project's own
+build script: a relative executable found in the tree runs from the tree (the build is a temporary
+copy, not the repository), `{maven_repo}` in it becomes that isolated repository, and
+`project_build.env` passes variables the script reads — AMS's `build-jdk21.sh` takes
+`AMS_BUILD_DRIVE` so the copy is built on a drive of its own rather than the everyday `X:`. On
+Windows the command is split without treating `\` as an escape. It writes `project-build.json`;
 `land_on_branch`'s confirmation card shows that verdict — passed, failed, not run, or **stale**
 when the migrated files changed after the build — and never refuses on it. The leader sees the
 verdict and the failing step, never the compiler output, which goes to the card only. The build

@@ -230,6 +230,16 @@ def test_decision_equals_does_not_fire_when_the_decision_differs(repo, packs):
     assert "liberty-server-config" not in acts
 
 
+def test_the_tomcat_target_swaps_the_liberty_pack_for_the_tomcat_one(repo, packs):
+    on_tomcat = {a.pack_id: a for a in resolve_packs(
+        build_profile(str(repo), decisions={**DEFAULT_DECISIONS, "container": "tomcat"}), packs)}
+    assert "tomcat-context-config" in on_tomcat and "liberty-server-config" not in on_tomcat
+    assert "decision container=tomcat" in on_tomcat["tomcat-context-config"].evidence
+
+    on_liberty = {a.pack_id for a in resolve_packs(build_profile(str(repo), decisions=DEFAULT_DECISIONS), packs)}
+    assert "liberty-server-config" in on_liberty and "tomcat-context-config" not in on_liberty
+
+
 # ─── outputs and CLI ──────────────────────────────────────────────────────────
 
 def test_write_outputs_produces_profile_yaml_with_packs_evidence_and_decisions(repo, packs, tmp_path):

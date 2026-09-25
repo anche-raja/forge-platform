@@ -2,7 +2,7 @@ from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
-from forge.context.inject import context_block_for
+from forge.context.inject import context_block_for, decisions_block
 from forge.phases import get_phase
 from forge.review.base_reviewer import BaseReviewer
 from forge.state import ForgeState
@@ -49,6 +49,11 @@ class JavaReviewer(BaseReviewer):
         block, _ = context_block_for(state, self.config)
         if block:
             human += "\n\nThe descriptors the transform was given (check nothing was dropped):\n" + block
+        # Graded against the same decisions the transform was told, or a
+        # Tomcat-correct answer is scored as a Liberty-incomplete one.
+        decisions = decisions_block(state, self.config)
+        if decisions:
+            human += "\n\n" + decisions
         # A reply that cannot be read says nothing about the migration, so it is
         # asked for again before it counts against the file (issue #19): one
         # unquoted key sent a correctly migrated test class to a human at

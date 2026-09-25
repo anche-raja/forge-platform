@@ -38,6 +38,31 @@ def context_available(name: str) -> bool:
     return name != "none" and get_extractor(name) is not None
 
 
+def decisions_block(state: ForgeState, config: ForgeConfig) -> Optional[str]:
+    """The project decisions the running pack declares, as its transform and review read them.
+
+    Packs branch on decisions -- "per the `container` decision", "only on a
+    bare servlet container (tomcat, jetty)" -- and until this block existed
+    the value never reached the prompt: setting ``container: tomcat`` switched
+    the Liberty pack off at discovery and changed nothing any model wrote. The
+    values are the ones discovery resolves: agents.yaml (with a chat's intent
+    overrides) over the platform defaults. A pack that declares no decisions,
+    and every built-in phase, gets no block.
+    """
+    from forge.discover.emit import DEFAULT_DECISIONS
+
+    fs = state["current_file"]
+    names = tuple(getattr(get_phase(state.get("phase") or fs.get("phase") or "java21"), "decisions", ()) or ())
+    if not names:
+        return None
+    values = {**DEFAULT_DECISIONS, **dict(config.get("decisions") or {})}
+    lines = [f"- {name}: {values[name]}" for name in names if values.get(name)]
+    if not lines:
+        return None
+    return ("PROJECT DECISIONS (fixed for this project; a rule that depends on one of these means this value):\n"
+            + "\n".join(lines))
+
+
 def context_block_for(state: ForgeState, config: ForgeConfig) -> Tuple[Optional[str], Optional[str]]:
     """``(rendered block, digest)``, or ``(None, None)`` when the unit carries no context.
 

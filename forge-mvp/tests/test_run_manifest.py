@@ -35,6 +35,39 @@ def _unit(src, rel):
     return str(p)
 
 
+SERVER_XML = "web/src/main/liberty/config/server.xml"
+
+
+def test_a_file_a_later_pack_retires_is_no_longer_a_write(out):
+    """Or landing would copy the Liberty server.xml straight back in after the
+    Tomcat pack retired it."""
+    run_manifest.record(out, "liberty-server-config", [SERVER_XML])
+    run_manifest.record(out, "tomcat-context-config", [], deleted=[SERVER_XML])
+    assert SERVER_XML not in run_manifest.load(out)
+    assert run_manifest.deleted_paths(out) == [SERVER_XML]
+
+    run_manifest.record(out, "liberty-server-config", [SERVER_XML])
+    assert run_manifest.load(out)[SERVER_XML] == "liberty-server-config"
+    assert run_manifest.deleted_paths(out) == [], "writing it again brings it back"
+
+
+def test_a_retired_file_is_not_landed_even_if_it_was_approved(out):
+    from forge.leader.landing import recorded_files
+
+    run_manifest.record(out, "liberty-server-config", [SERVER_XML, "web/pom.xml"])
+    run_manifest.record(out, "tomcat-context-config", [], deleted=[SERVER_XML])
+    assert recorded_files(out) == {"web/pom.xml"}
+
+
+def test_an_absolute_deleted_path_is_recorded_relative_to_the_tree_the_run_read(src):
+    from forge.service import _tree_rel
+
+    assert _tree_rel(str(Path(src) / SERVER_XML), src) == SERVER_XML
+    assert _tree_rel(SERVER_XML, src) == SERVER_XML
+    outside = str(Path(src).parent / "elsewhere/server.xml")
+    assert _tree_rel(outside, src) == Path(outside).as_posix(), "outside the tree: kept, landing bounds it"
+
+
 def test_an_empty_directory_has_no_conflicts(out, src):
     unit = _unit(src, "src/main/java/com/corp/A.java")
     assert run_manifest.conflicts(out, "java8-to-java21", src, [unit]) == []

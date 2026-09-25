@@ -71,7 +71,9 @@ def test_context_block_is_appended_after_the_source_for_a_pack_with_context(tmp_
     human, fs = _transform(tmp_path, web_xml, WEBAPP)
 
     assert human.startswith(LEGACY_HEADER), "the CLI tests split on this header"
-    assert BEGIN.format(name="web_bootstrap") in human and human.rstrip().endswith(END)
+    assert BEGIN.format(name="web_bootstrap") in human and END in human
+    # The pack declares decisions, so their block is the last thing in the message.
+    assert human.rstrip().endswith("- container: liberty") or "PROJECT DECISIONS" in human.split(END)[-1]
     assert human.index("```") < human.index(BEGIN.format(name="web_bootstrap")), "source first, context after"
     assert "## filter_chain" in human and "springSecurityFilterChain" in human
     assert "LoggingFilter" in human, "resolved servlet components are part of the context"
@@ -93,6 +95,22 @@ def test_no_context_for_the_builtin_phases(tmp_path, module):
     java = str(module / "src/main/java/com/acme/orders/web/LoggingFilter.java")
     human, _ = _transform(tmp_path, java, "java21")
     assert "CONTEXT" not in human
+    assert "PROJECT DECISIONS" not in human, "a built-in phase declares no decisions"
+
+
+def test_the_decisions_a_pack_declares_reach_its_prompt_with_their_values(tmp_path, module):
+    """The packs branch on `container`; until this block the model never saw its value."""
+    from forge.context.inject import decisions_block
+
+    web_xml = str(module / "src/main/webapp/WEB-INF/web.xml")
+    human, _ = _transform(tmp_path, web_xml, WEBAPP)
+    assert "PROJECT DECISIONS" in human and "- container: liberty" in human, "the platform default"
+    assert human.index(END) < human.index("PROJECT DECISIONS"), "after the context block"
+
+    state = make_state(web_xml, tmp_path, phase=WEBAPP)
+    block = decisions_block(state, write_config(tmp_path, decisions={"container": "tomcat"}))
+    assert "- container: tomcat" in block and "- runtime: war-xml-bootstrap" in block
+    assert "risk_ceiling" not in block, "only the decisions the pack declares"
 
 
 def test_generated_unit_gets_the_context_instead_of_a_source_file(tmp_path, module):

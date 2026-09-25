@@ -230,6 +230,11 @@ leader:
   # from \`estimated_cost_usd\`, accrued per real call.
   unit_cost_usd: 0.07
   history_messages: 40
+  # true: when the plan's build passes, land it on <branch_prefix>-<timestamp>
+  # and open the pull request with no click (same refusals as the confirmed
+  # tools). false: both wait for a click on their card.
+  auto_publish: false
+  branch_prefix: "forge/migration"
 
 # ─── The secret gate ──────────────────────────────────────────────────────────
 # Local, deterministic, and ahead of EVERY remote call — ApplyGuardrail included.
@@ -265,15 +270,21 @@ syntax_check: true
 # auto-detect: every Maven reactor (a pom.xml no other pom lists as a module),
 # built with `mvn install` in dependency order, on the JDK that
 # /usr/libexec/java_home reports for target_java_version.
-#   command     run this verbatim at the project root instead (Gradle, build.sh ...)
+#   command     run this verbatim at the project root instead (Gradle, build.sh ...).
+#               A relative script that exists in the project runs from the
+#               project; {maven_repo} becomes the isolated repository below.
+#               e.g. '"C:/Program Files/Git/bin/bash.exe" build-jdk21.sh install
+#                     -DskipTests -Dmaven.repo.local={maven_repo}'
 #   java_home   pin the JDK
 #   maven_repo  isolated local repository, so migrated snapshots never replace
 #               the original project's artifacts in ~/.m2 (default ~/.forge/m2)
+#   env         extra environment variables for the build, e.g. AMS_BUILD_DRIVE: "Y:"
 project_build:
   command: ""
   java_home: ""
   maven_repo: ""
   timeout_seconds: 1200
+  env: {}
 
 # ─── Throughput ──────────────────────────────────────────────────────────────
 # Files of one pack migrated at the same time. Each file is its own graph run,

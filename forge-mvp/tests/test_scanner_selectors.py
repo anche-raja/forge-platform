@@ -73,6 +73,31 @@ def test_liberty_scan_edits_an_existing_server_xml_in_place(tmp_path):
     assert scan.generated == ()
 
 
+TOMCAT = "tomcat-context-config"
+
+
+def test_tomcat_scan_generates_one_context_xml_per_module_and_takes_liberty_images(tmp_path):
+    a = make_module(tmp_path, name="a")
+    b = make_module(tmp_path, name="b")
+    (a / "Dockerfile").write_text("FROM websphere-liberty:26.0.0.8-full-java8-ibmjava\n", encoding="utf-8")
+    (b / "Dockerfile").write_text("FROM eclipse-temurin:21-jre\n", encoding="utf-8")
+    scan = scan_java_files(str(tmp_path), TOMCAT)
+    assert scan.generated == tuple(sorted(str(m / "src/main/webapp/META-INF/context.xml") for m in (a, b)))
+    assert [Path(f).resolve() for f in scan.files] == [(a / "Dockerfile").resolve()], \
+        "only the image built on Liberty"
+
+
+def test_a_named_file_the_pack_would_create_is_generated_only_for_its_own_selector():
+    from forge.extract.selectors import is_generated_target
+    from forge.phases import get_phase
+
+    context_xml, server_xml = "/absent/src/main/webapp/META-INF/context.xml", "/absent/src/main/liberty/config/server.xml"
+    assert is_generated_target(get_phase(TOMCAT), context_xml)
+    assert not is_generated_target(get_phase(TOMCAT), server_xml)
+    assert is_generated_target(get_phase(LIBERTY), server_xml)
+    assert not is_generated_target(get_phase(LIBERTY), context_xml)
+
+
 def test_selector_files_respect_scope_prefix_and_test_source_exclusion(tmp_path):
     mod = make_module(tmp_path, java=("LoggingFilter.java", "StartupListener.java"))
     test_src = mod / "src/test/java/com/acme/orders/web"

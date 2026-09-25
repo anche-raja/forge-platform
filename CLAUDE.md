@@ -82,7 +82,7 @@ Original spec in `forge-mvp/PHASE0-SPEC.md`. Key design points:
 - **Parallel files**: `max_parallel_files` (8 in the generated agents.yaml, 1 when absent) runs that many files of a pack at once; results stay in scan order, cancel starts nothing new, Maven build verification stays sequential. See ARCHITECTURE §8.
 - **Packs select by content**: javax-to-jakarta, struts2, spring6 and java21 take only Java files matching what they change (`content_match`), not `**/*.java`. A `content_match` hit is HIGH risk only when the entry says `risk: high`.
 - **Unit tests by default**: with `test_generation.after_plan: true` (the generated config), the chat writes tests when the last pack of the plan finishes, before the build — through the same spend gate as `generate_tests` (over `confirm_above_usd` it builds first and parks a confirm card; confirming writes the tests and rebuilds). `forge/leader/tools.py` `_finish_plan`.
-- **Project build before landing**: `build_project` (chat) / `--build-project` (CLI) compiles source + output with the project's own build — Maven reactors in order into `~/.forge/m2`, or `project_build.command` — and writes `project-build.json`. Landing shows the verdict (passed / failed / not run / stale) and never refuses on it. The leader sees the verdict, never compiler output.
+- **Project build before landing**: `build_project` (chat) / `--build-project` (CLI) compiles source + output with the project's own build — Maven reactors in order into `~/.forge/m2`, or `project_build.command` (the repo's own script works: it runs from the build copy, `{maven_repo}` points it at the isolated repo, `project_build.env` passes its variables) — and writes `project-build.json`. Landing shows the verdict (passed / failed / not run / stale) and never refuses on it. The leader sees the verdict, never compiler output.
 - **javax-to-jakarta is a complement**: it selects and checks any `javax.` not in `STAYS_JAVAX_PREFIXES` (`forge/utils/java_checks.py`: JDK + JSR-305, JCache, JDO ...). Tests hold the pack pattern and that tuple together.
 - **Retry loop**: reviewer score 50–79 routes back to `java_upgrade` with feedback injected into prompt; max 2 retries. A failed build reuses the same loop and the same budget.
 - **Bedrock Guardrails** called as a standalone `ApplyGuardrail` API call — not inline with model invocation. Used both pre (INPUT) and post (OUTPUT).
@@ -203,6 +203,16 @@ depending on the target and `summary` never omitted. `context_block_for` appends
 the extractor name and a sha256 of the block. The full context is written to
 `migration-context.json` beside the report, in dry-run too.
 
+**Decisions reach the prompts through `decisions_block`** (`forge/context/inject.py`): the
+decisions a pack declares, with their values (agents.yaml over `DEFAULT_DECISIONS`), are appended
+to its transform and its review. Before it, "per the `container` decision" was a branch no model
+could resolve — `container: tomcat` switched the Liberty pack off and changed nothing written.
+`tomcat-context-config` is the Tomcat 10.1 counterpart of `liberty-server-config`: gated on
+`container: tomcat`, it generates one `META-INF/context.xml` per web module (`tomcat_context`
+selector) and retires the module's `src/main/liberty/config/*` through `deleted_files`. A retired
+path leaves the manifest's writes (`run_manifest.record`, latest pack wins), so landing removes
+it rather than copying an earlier pack's copy back in.
+
 Two idioms that have already bitten: never `a or b` on `ElementTree` elements (an element with no
 children is falsy — use `is not None`), and never write a regex in a double-quoted YAML scalar
 (`"\."` is an invalid escape — single-quote it).
@@ -291,7 +301,12 @@ the repository contains. The split is enforced in code, not in the prompt:
   confirmed, whatever the estimate. FORGE pushes only through `open_pull_request`, only on the
   user's click: the branch this chat landed, to `origin`, never forced, then `gh pr create` into
   the branch landing started from, with a body FORGE builds from its own records (no source,
-  diffs or compiler output).
+  diffs or compiler output). **`leader.auto_publish` is the owner's opt-in exception** (off in the
+  generated config; the owner turned it on for AMS): when the plan's own build passes and is
+  current, `_finish_plan` lands on `<branch_prefix>-<timestamp>` and opens the PR with no click,
+  by calling the same two handlers — so every refusal (dirty tree, existing branch, no `gh`)
+  still stands. A failed, skipped or stale build publishes nothing; tests parked for a click hold
+  the publish until that click. It is decided in code, never by the leader.
 - **`risk_ceiling` never comes from a prompt.** The toolbox overwrites it with the config's value
   after every `resolve_intent`, because a model-authored intent sentence outranking config would
   disable the hold gate.

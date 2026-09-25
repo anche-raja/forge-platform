@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from forge.extract import Extractor, register
-from forge.extract.selectors import server_config, servlet_components
+from forge.extract.selectors import server_config, servlet_components, tomcat_context
 from forge.utils.fs import is_test_path, prune_dirs
 from forge.utils.java_checks import declared_package
 from forge.utils.telemetry import get_logger
@@ -1107,7 +1107,8 @@ def run(source_dir: str, module_dir: Optional[str] = None) -> dict:
 EXTRACTOR = register(Extractor(
     name=NAME,
     run=run,
-    selectors={"servlet_components": servlet_components, "server_config": server_config},
+    selectors={"servlet_components": servlet_components, "server_config": server_config,
+               "tomcat_context": tomcat_context},
     find_modules=find_modules,
     module_for=module_for,
 ))
