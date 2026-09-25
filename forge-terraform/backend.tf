@@ -18,7 +18,6 @@ terraform {
     key            = "forge/dev/terraform.tfstate"
     region         = "us-east-1"
     encrypt        = true
-    sse_algorithm  = "AES256"
     dynamodb_table = "forge-terraform-lock"
   }
 }
