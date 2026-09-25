@@ -90,10 +90,16 @@ managed connection pools and security registries, so **the application code does
 - `<resource-ref>` JNDI names must match the `jndiName` the Liberty `server.xml` declares. The
   `liberty-server-config` pack produces that file; list every name you rely on so the two agree.
 - The same holds for `container: wildfly`.
-- Only on a bare servlet container (`tomcat`, `jetty`) does this change: there is no JTA manager
-  and no managed pool, so every `<resource-ref>` must be flagged with what will now supply it.
-  Never silently substitute a pool — pool sizing is an operational decision and guessing it wrong
-  takes production down under load.
+- On `tomcat` the code still does not change: keep every `<resource-ref>` and every JNDI lookup.
+  Tomcat provides JNDI and a pool per `<Resource>` in the WAR's `META-INF/context.xml`, which the
+  `tomcat-context-config` pack generates with the same names — list every name you rely on so
+  the two agree. Tomcat has no JTA manager: a JTA or `UserTransaction` use must be flagged.
+  A comment that says a resource is configured in the Liberty `server.xml` now names
+  `META-INF/context.xml`.
+- Only on `jetty` does this change: there is no JTA manager and no managed pool, so every
+  `<resource-ref>` must be flagged with what will now supply it. Never silently substitute a
+  pool — pool sizing is an operational decision and guessing it wrong takes production down
+  under load.
 
 Rule 5 — `<security-constraint>` / `<login-config>` → Spring Security rules, preserving the exact
 path patterns, HTTP methods and role names. Container-managed `BASIC` / `FORM` / `CLIENT-CERT`

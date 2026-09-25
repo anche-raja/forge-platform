@@ -11,6 +11,11 @@ the leader spends without asking, which is a deliberate choice and not the
 default — one ambiguous sentence should not be able to start a $100 run.
 Applying review decisions is confirmed whatever this says, because an approval
 is the human's signature on someone else's code.
+
+``auto_publish`` is the same kind of dial for the end of a plan. Off, landing
+and the pull request each wait for a click. On, a plan whose build passed is
+landed on ``<branch_prefix>-<timestamp>`` and its pull request opened with no
+click -- through the same handlers and the same refusals.
 """
 
 from dataclasses import dataclass
@@ -24,6 +29,14 @@ DEFAULT_HISTORY_MESSAGES = 40
 # to estimate before a run, never to report what one actually cost — that
 # number comes from `estimated_cost_usd`, accrued per real call.
 DEFAULT_UNIT_COST_USD = 0.07
+DEFAULT_BRANCH_PREFIX = "forge/migration"
+
+
+def _bool(value) -> bool:
+    """YAML ``true``, or a string that plainly means it -- never "false" read as truthy."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "on", "1")
+    return value is True
 
 
 def _float(value, default: float) -> float:
@@ -50,6 +63,8 @@ class LeaderSettings:
     confirm_above_usd: float = DEFAULT_CONFIRM_ABOVE_USD
     unit_cost_usd: float = DEFAULT_UNIT_COST_USD
     history_messages: int = DEFAULT_HISTORY_MESSAGES
+    auto_publish: bool = False
+    branch_prefix: str = DEFAULT_BRANCH_PREFIX
 
     @classmethod
     def from_config(cls, config) -> "LeaderSettings":
@@ -65,4 +80,6 @@ class LeaderSettings:
             confirm_above_usd=_float(block.get("confirm_above_usd"), DEFAULT_CONFIRM_ABOVE_USD),
             unit_cost_usd=_float(block.get("unit_cost_usd"), DEFAULT_UNIT_COST_USD) or DEFAULT_UNIT_COST_USD,
             history_messages=_int(block.get("history_messages"), DEFAULT_HISTORY_MESSAGES, minimum=4),
+            auto_publish=_bool(block.get("auto_publish")),
+            branch_prefix=str(block.get("branch_prefix") or "").strip().strip("/-") or DEFAULT_BRANCH_PREFIX,
         )

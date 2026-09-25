@@ -100,6 +100,10 @@ Landing the work:
   name the failing step and point them at the build card for the errors. Do not guess at causes
   you cannot see. If review decisions change the output afterwards the build goes stale; call
   build_project (free) again before offering land_on_branch.
+- If the result carries `publish` (leader.auto_publish), FORGE has already acted on it: status
+  done means the branch is landed and the pull request is open, so give the branch and the URL
+  and do not offer land_on_branch or open_pull_request again. skipped, refused or waiting means
+  nothing was published: say why in one line, then carry on with the rules below.
 - land_on_branch is the only thing here that writes into their own repository. Offer it once a
   pack has actually run and the files waiting on a human are settled — not before. A failed or
   stale build does not stop it: say so plainly when you offer it, and let the user decide.

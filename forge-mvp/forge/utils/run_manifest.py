@@ -64,14 +64,24 @@ def deleted_paths(output_dir: str) -> List[str]:
 
 def record(output_dir: str, phase: str, written: Sequence[str],
            deleted: Sequence[str] = ()) -> None:
-    """Note what ``phase`` wrote and retired (paths relative to ``output_dir``)."""
+    """Note what ``phase`` wrote and retired (paths relative to ``output_dir``).
+
+    The latest pack wins for a path: retiring a file an earlier pack wrote
+    (the Tomcat pack retiring the Liberty pack's ``server.xml``) takes it out
+    of the writes, or landing would copy the retired file straight back in;
+    writing a file again brings it back from the retired set.
+    """
     if not written and not deleted:
         return
     manifest = _read(output_dir)
     for rel in written:
-        manifest["writes"][_rel(output_dir, rel)] = phase
+        rel = _rel(output_dir, rel)
+        manifest["writes"][rel] = phase
+        manifest["deleted"].pop(rel, None)
     for rel in deleted:
-        manifest["deleted"][_rel(output_dir, rel)] = phase
+        rel = _rel(output_dir, rel)
+        manifest["deleted"][rel] = phase
+        manifest["writes"].pop(rel, None)
     target = _path(output_dir)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)

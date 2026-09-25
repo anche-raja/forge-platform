@@ -49,6 +49,7 @@ import json
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -1109,6 +1110,7 @@ class Toolbox:
                                         **{k: gated.observation.get(k) for k in ("est_usd", "title")}}
                 parts.append("tests: waiting for your click")
 
+        record: Optional[dict] = None
         try:
             record = self._build(tool_id)
         except Exception as e:  # noqa: BLE001 — R6: the run above is paid for and stands
@@ -1121,7 +1123,45 @@ class Toolbox:
         if pending is not None:
             # Parked last, so the card the user must click sits below the build.
             built.extend(gated.cards)
+            if self.settings.auto_publish:
+                # Confirming the tests finishes the plan and publishes then.
+                observation["publish"] = {"status": "waiting", "reason": "unit tests are waiting for a click"}
+        elif self.settings.auto_publish:
+            self._auto_publish(tool_id, observation, built, parts, record)
         return pending
+
+    def _auto_publish(self, tool_id: str, observation: dict, built: List[dict], parts: List[str],
+                      record: Optional[dict]) -> None:
+        """``leader.auto_publish``: land the plan and open its pull request, with no click.
+
+        The owner's dial, in the same spirit as ``confirm_above_usd: 0``: off by
+        default, and when on it changes who presses the button, nothing else.
+        It calls the very handlers the confirmed tools run, so every refusal
+        stands -- a dirty work tree, an existing branch, no origin, no ``gh`` --
+        and still lands only this chat's recorded files, never pushes anything
+        but the branch it just made, and never forces. It publishes only a plan
+        whose build passed and is current; a failed, skipped or stale build
+        leaves landing to the user, where the card shows why.
+        """
+        outcome = (record or {}).get("outcome")
+        if outcome != "pass" or (record or {}).get("stale"):
+            why = f"the build did not pass ({outcome or 'error'})" if outcome != "pass" else "the build is stale"
+            observation["publish"] = {"status": "skipped", "reason": why}
+            parts.append(f"publish: skipped, {why}")
+            return
+        branch = f"{self.settings.branch_prefix}-{datetime.now():%Y%m%d-%H%M%S}"
+        landed = self._land_on_branch({"branch": branch}, tool_id)
+        built.extend(landed.cards)
+        if not landed.ok:
+            observation["publish"] = {"status": "refused", "step": "land_on_branch", **landed.observation}
+            parts.append("publish: landing refused")
+            return
+        pr = self._open_pull_request({}, tool_id)
+        built.extend(pr.cards)
+        observation["publish"] = {"status": "done" if pr.ok else "refused",
+                                  "landing": landed.observation, "pull_request": pr.observation}
+        parts.append(f"landed on {branch}")
+        parts.append(f"pull request: {pr.observation.get('url')}" if pr.ok else "pull request refused")
 
     def _check_acceptance(self, args: dict, tool_id: str) -> ToolOutcome:
         from forge import service
@@ -1263,11 +1303,13 @@ class Toolbox:
                                 cards.file_href(self.ctx.output_dir, "test-generation-report.md"))
         built = [card]
         summary = f"{totals.get('generated', 0)} test(s) generated, {totals.get('held', 0)} held"
+        plan_done = (bool(self.convo.completed) and not self._plan_remaining()
+                     and not (self.cancel is not None and self.cancel.is_set()))
+        record: Optional[dict] = None
         # New tests change the output, so a build of the finished plan is now
         # stale. Rebuild -- free, and it compiles the tests too (mvn install
         # -DskipTests still compiles test sources).
-        if (rebuild and totals.get("generated") and self.convo.completed and not self._plan_remaining()
-                and not (self.cancel is not None and self.cancel.is_set())):
+        if rebuild and totals.get("generated") and plan_done:
             try:
                 record = self._build(tool_id)
                 observation["build"] = cards.build_status_obs(record)
@@ -1275,6 +1317,16 @@ class Toolbox:
                 summary += f" · build: {record.get('outcome')}"
             except Exception as e:  # noqa: BLE001 — the tests are written and paid for
                 observation["build_error"] = cards.cap(f"{type(e).__name__}: {e}")
+        # Confirming the tests the plan parked is the plan's real end, so it is
+        # where an automatic publish happens (the plan itself skipped it while
+        # the tests waited). No rebuild: the plan's own build still stands.
+        if rebuild and plan_done and self.settings.auto_publish and "build_error" not in observation:
+            if record is None:
+                from forge import service
+                record = service.build_status(self.ctx.source_dir, self.ctx.output_dir)
+            parts = [summary]
+            self._auto_publish(tool_id, observation, built, parts, record)
+            summary = " · ".join(parts)
         return ToolOutcome(True, observation, built, summary)
 
     def _pack_feedback(self, args: dict, tool_id: str) -> ToolOutcome:
@@ -1326,23 +1378,24 @@ class Toolbox:
                            f"{len(rows)} artifact(s) in {out}")
 
     def _superseded_paths(self) -> List[str]:
-        """Paths the migration retired, from the queue on disk. Never raises.
+        """Paths the migration retired: the run manifest's, then the queue's. Never raises.
 
-        The review queue is the only durable record of a ``deleted_files`` entry
-        once the run's process is gone — ``RunResult`` is not persisted and the
-        conversation does not carry it — so a file superseded by a unit that
-        went through cleanly in an earlier session is not in here. Landing
-        copies files in either way; the worst case is an XML config left beside
-        the Java config that replaced it, which the migration report already
-        lists for the user under "XML configs replaced by Java configuration".
+        The manifest records every unit's ``deleted_files`` as it runs, so a
+        file retired by a unit that went straight through -- never queued, as
+        every unit is under ``risk_ceiling: auto`` -- is still removed when the
+        branch lands. The queue adds entries from runs older than that record.
         """
         from forge.review_queue import load_queue
+        from forge.utils import run_manifest
 
+        try:
+            found: List[str] = list(run_manifest.deleted_paths(self.ctx.output_dir))
+        except Exception:  # noqa: BLE001 — no manifest is the normal state before a run
+            found = []
         try:
             queue = load_queue(self.ctx.output_dir)
         except Exception:  # noqa: BLE001 — no queue is the normal state before a run
-            return []
-        found: List[str] = []
+            return found
         for entry in queue.get("entries") or []:
             if not isinstance(entry, dict):
                 continue

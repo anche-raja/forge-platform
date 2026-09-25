@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
-from forge.context.inject import context_block_for, declared_context
+from forge.context.inject import context_block_for, decisions_block, declared_context
 from forge.phases import get_phase
 from forge.state import ForgeState
 from forge.utils.cost import accrue
@@ -12,6 +12,22 @@ from forge.utils.telemetry import get_logger
 
 _log = get_logger(__name__)
 
+
+def _echoes(files: dict, source_code: str) -> bool:
+    """The model returned the file exactly as it was: the same answer as ``"files": {}``.
+
+    Models often say "nothing to change" by echoing the whole file rather than
+    returning an empty map. Read literally, that is a transform: it paid for a
+    review and, on a HIGH-risk unit, parked an identical file for a human to
+    approve -- 15 of the 75 AMS approvals were exactly that. Only a single
+    file whose text matches the source byte for byte (line endings aside)
+    counts; any real edit, or a second file, is a transform.
+    """
+    if len(files) != 1:
+        return False
+    content = next(iter(files.values()))
+    norm = lambda s: s.replace("\r\n", "\n")  # noqa: E731
+    return isinstance(content, str) and norm(content) == norm(source_code)
 
 
 class JavaUpgradeAgent(BaseAgent):
@@ -28,6 +44,7 @@ class JavaUpgradeAgent(BaseAgent):
         file_status = dict(state["current_file"])
         file_path = file_status["file_path"]
         retry_count = file_status.get("retry_count", 0)
+        source_code = None
 
         if file_status.get("generate"):
             # The pack creates this file; the descriptors in the context block
@@ -60,6 +77,9 @@ class JavaUpgradeAgent(BaseAgent):
             file_status["context_digest"] = digest
         elif declared != "none":
             file_status["context_missing"] = True
+        decisions = decisions_block(state, self.config)
+        if decisions:
+            user_content += "\n\n" + decisions
 
         # A human's note is its own block, not a value in review_feedback: that
         # field is only rendered on retries and a build failure overwrites it.
@@ -106,11 +126,13 @@ class JavaUpgradeAgent(BaseAgent):
                 # Absent is not empty: only an explicit {} is read as "unchanged".
                 raise TransformShapeError("no 'files' key; a file that needs no change is \"files\": {}")
             result = {**result, "files": normalize_files(result.get("files"))}
-            unchanged = not result["files"] and not result.get("deleted_files")
+            unchanged = not result.get("deleted_files") and (
+                not result["files"] or (source_code is not None and _echoes(result["files"], source_code)))
             if unchanged and file_status.get("generate"):
                 raise TransformShapeError("'files' is empty, but this unit is generated and must be written")
             if unchanged and changes_demanded:
-                raise TransformShapeError("'files' is empty, but this retry was asked to change the file")
+                raise TransformShapeError("'files' is empty or repeats the file unchanged, "
+                                          "but this retry was asked to change the file")
         except TransformShapeError as e:
             # One malformed answer is one file retried, never the end of the run.
             _log.warning("Transform output for %s has the wrong shape: %s", file_path, e)

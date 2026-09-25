@@ -1072,3 +1072,97 @@ def test_without_after_plan_the_plan_writes_no_tests(project, tmp_path):
         last = _box(ctx, convo, confirm_above_usd=0.0).execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
     gen.assert_not_called()
     assert "tests" not in last.observation
+
+
+# ─── leader.auto_publish: land and open the PR at the end, with no click ─────
+
+def _publish_fakes(land_ok=True):
+    """The confirmed handlers, faked: auto_publish must call exactly these."""
+    from forge.leader.tools import ToolOutcome
+
+    calls = []
+
+    def land(self, args, tool_id):
+        calls.append(("land", dict(args)))
+        if not land_ok:
+            return ToolOutcome(False, {"error": "the work tree has 2 uncommitted change(s)"}, [], "refused")
+        return ToolOutcome(True, {"branch": args["branch"], "base_branch": "main", "commit": "abc1234"},
+                           [{"kind": "land"}], "landed")
+
+    def pr(self, args, tool_id):
+        calls.append(("pr", dict(args)))
+        return ToolOutcome(True, {"url": "https://github.com/o/r/pull/7", "branch": "b", "base": "main"},
+                           [{"kind": "pull_request"}], "opened")
+
+    return calls, patch.object(Toolbox, "_land_on_branch", land), patch.object(Toolbox, "_open_pull_request", pr)
+
+
+def _finish(ctx, build_outcome="pass", **settings):
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    with patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch("forge.service.build_project", return_value=_build_record(build_outcome)):
+        return _box(ctx, convo, confirm_above_usd=0.0, **settings).execute(
+            "run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+
+
+def test_auto_publish_lands_then_opens_the_pr_when_the_plan_builds(ctx):
+    calls, land, pr = _publish_fakes()
+    with land, pr:
+        last = _finish(ctx, auto_publish=True)
+    assert [c[0] for c in calls] == ["land", "pr"], "the landing first, then the PR for that branch"
+    assert calls[0][1]["branch"].startswith("forge/migration-")
+    assert last.needs_confirmation is False, "nothing waits for a click"
+    assert last.observation["publish"]["status"] == "done"
+    assert last.observation["publish"]["pull_request"]["url"] == "https://github.com/o/r/pull/7"
+    assert [c["kind"] for c in last.cards][-3:] == ["build", "land", "pull_request"]
+    assert "pull request: https://github.com/o/r/pull/7" in last.summary
+
+
+@pytest.mark.parametrize("outcome", ["fail", "skip"])
+def test_auto_publish_never_lands_a_plan_that_did_not_build(ctx, outcome):
+    calls, land, pr = _publish_fakes()
+    with land, pr:
+        last = _finish(ctx, outcome, auto_publish=True)
+    assert calls == []
+    assert last.observation["publish"] == {"status": "skipped",
+                                           "reason": f"the build did not pass ({outcome})"}
+
+
+def test_a_refused_landing_opens_no_pull_request(ctx):
+    calls, land, pr = _publish_fakes(land_ok=False)
+    with land, pr:
+        last = _finish(ctx, auto_publish=True)
+    assert [c[0] for c in calls] == ["land"]
+    assert last.observation["publish"]["status"] == "refused"
+    assert "uncommitted" in last.observation["publish"]["error"]
+
+
+def test_without_auto_publish_landing_still_waits_for_the_user(ctx):
+    calls, land, pr = _publish_fakes()
+    with land, pr:
+        last = _finish(ctx)
+    assert calls == [] and "publish" not in last.observation
+
+
+def test_parked_tests_hold_the_publish_until_their_click(project, tmp_path):
+    ctx = _tests_ctx(project, tmp_path)
+    convo = _seed(Conversation(), ["javax-to-jakarta"])
+    calls, land, pr = _publish_fakes()
+    with land, pr, patch("forge.service.run_migration", return_value=_run_result(ctx)), \
+         patch.object(Toolbox, "_test_targets", return_value=100), \
+         patch("forge.service.generate_tests", return_value=_TestGenResult()), \
+         patch("forge.service.build_project", return_value=_build_record("pass")):
+        box = _box(ctx, convo, confirm_above_usd=1.0, auto_publish=True)
+        last = box.execute("run_pack", {"pack": "javax-to-jakarta"}, tool_id="t1")
+        assert calls == [] and last.observation["publish"]["status"] == "waiting"
+
+        confirmed = box.execute("generate_tests", {}, tool_id="t2", confirmed=True)
+    assert [c[0] for c in calls] == ["land", "pr"], "the click on the tests is the plan's end"
+    assert confirmed.observation["publish"]["status"] == "done"
+
+
+def test_auto_publish_reads_only_a_real_yes():
+    assert LeaderSettings.from_config({"leader": {"auto_publish": True}}).auto_publish is True
+    assert LeaderSettings.from_config({"leader": {"auto_publish": "false"}}).auto_publish is False
+    assert LeaderSettings.from_config({}).auto_publish is False
+    assert LeaderSettings.from_config({"leader": {"branch_prefix": "mig/"}}).branch_prefix == "mig"

@@ -158,6 +158,28 @@ def test_a_changed_file_is_not_marked_unchanged(tmp_path, java_file):
     assert result["current_file"]["unchanged"] is False
 
 
+def test_a_file_echoed_back_as_it_was_is_unchanged_not_reviewed_or_held(tmp_path, java_file):
+    """The other way models say "nothing to change": the whole file, returned verbatim.
+
+    Read as a transform it paid for a review and parked an identical file for a
+    human -- 15 of the 75 approvals on the AMS run.
+    """
+    source = open(java_file, encoding="utf-8").read()
+    echo = source.replace("\n", "\r\n")          # line endings are not a change
+    result, upgrade, review = _run(tmp_path, java_file, [_files(java_file, echo)], dry_run=False,
+                                   decisions={"risk_ceiling": "review-all"})
+    fs = result["current_file"]
+    assert fs["status"] == "DONE" and fs["unchanged"] is True
+    assert fs["written_paths"] == [] and not fs.get("held_paths")
+    assert upgrade.call_count == 1 and review.call_count == 0
+
+
+def test_a_one_character_edit_is_a_transform_not_an_echo(tmp_path, java_file):
+    source = open(java_file, encoding="utf-8").read()
+    result, _, review = _run(tmp_path, java_file, [_files(java_file, source + " ")])
+    assert result["current_file"]["unchanged"] is False and review.call_count == 1
+
+
 def test_a_reply_with_no_files_key_is_malformed_not_unchanged(tmp_path, java_file):
     """Only an explicit {} says "nothing to change"; an absent key says nothing."""
     result, upgrade, _ = _run(tmp_path, java_file, [{"manual_flags": []}, _files(java_file)])

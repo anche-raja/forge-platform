@@ -151,7 +151,9 @@ def recorded_files(output_dir: str) -> set:
     from forge.decisions import approved_files
 
     root = str(Path(output_dir).expanduser())
-    return set(run_manifest.load(root)) | approved_files(root)
+    # A file a later pack retired is not landed, even though an earlier pack
+    # wrote it or a human approved it then: the retirement is the newer fact.
+    return (set(run_manifest.load(root)) | approved_files(root)) - set(run_manifest.deleted_paths(root))
 
 
 def _scan(output_dir: str):

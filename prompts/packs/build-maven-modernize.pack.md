@@ -16,6 +16,9 @@ acceptance:
   - build: "mvn -q -DskipTests package"
   - no_match: 'org\.springframework\.boot'
     scope: "**/pom.xml"
+  - no_match: 'liberty-maven-plugin|io\.openliberty|openliberty-runtime'
+    scope: "**/pom.xml"
+    when: {container: "tomcat"}
 ---
 
 ## transform
@@ -107,9 +110,26 @@ stays `ear`; the module list is preserved. What changes is the container the WAR
   implementation must not be bundled.
 - **`wildfly`** — uplift `wildfly-maven-plugin` to an EE 10 capable version; keep the deployment
   configuration as-is.
-- **`tomcat` / `jetty`** — servlet container only. Anything the old app server provided (JNDI
-  DataSource, JTA manager, connection pool, mail session) becomes the application's
-  responsibility. Flag each `resource-ref`; do not invent a replacement in the pom.
+- **`tomcat`** — Apache Tomcat **10.1**, the Servlet 6 / Jakarta EE 10 line (Tomcat 9 and earlier
+  are `javax.*` and cannot run this WAR). A servlet container only, so:
+  - **Remove everything that exists only to run Liberty or WebSphere:** `liberty-maven-plugin`
+    (plugins and `pluginManagement`), `io.openliberty` / `com.ibm.websphere.appserver.runtime`
+    runtime artifacts, `liberty.*` / `openliberty.*` properties, and any profile whose only job
+    is running Liberty. A profile that also carries other settings keeps them; only its Liberty
+    parts go. This overrides Rule 8's "preserve profiles" for those parts, and every removal is
+    named in `manual_flags`. Do not add a Tomcat Maven plugin in their place.
+  - **Tomcat does not ship JSTL.** In the WAR module, bundle
+    `jakarta.servlet.jsp.jstl:jakarta.servlet.jsp.jstl-api` and
+    `org.glassfish.web:jakarta.servlet.jsp.jstl` (3.0.x) at compile scope. Servlet, JSP and EL
+    APIs stay `provided`: Tomcat supplies those.
+  - **The JNDI DataSource comes from the WAR's `META-INF/context.xml`** (the
+    `tomcat-context-config` pack writes it), and Tomcat loads the JDBC driver from
+    `$CATALINA_BASE/lib`, so the driver stays `provided` — flag that it must be installed there.
+  - Tomcat has no JTA manager and no CDI container: if the build carries either, flag it.
+  - A comment that says the application deploys to Liberty or WebSphere now says Tomcat 10.1.
+- **`jetty`** — servlet container only. Anything the old app server provided (JNDI DataSource,
+  JTA manager, connection pool, mail session) becomes the application's responsibility. Flag
+  each `resource-ref`; do not invent a replacement in the pom.
 
 Scope discipline, which decides whether the WAR starts at all: servlet, JSP, JSTL, annotation,
 CDI, persistence and transaction APIs stay `<scope>provided</scope>`, and the **JDBC driver
@@ -156,8 +176,11 @@ Check 5 — Packaging and scopes preserved (15 pts):
 Packaging type is unchanged (`war` stays `war`, `ear` stays `ear`), the module list and its order
 are intact, and every container-supplied API — servlet, JSP, JSTL, annotation, CDI, persistence,
 transaction, plus the JDBC driver where the container owns the DataSource — remains `provided`.
-A bundled container API scores 0: it deploys and then fails with `LinkageError`. Coordinates, profiles, repositories,
-unrelated dependency versions and existing comments preserved.
+A bundled container API scores 0: it deploys and then fails with `LinkageError`. "Container-supplied"
+follows the `container` decision: Tomcat does not supply JSTL, so on `tomcat` a bundled JSTL is
+correct and a `provided` one is the error. Coordinates, profiles, repositories, unrelated dependency
+versions and existing comments preserved — except the Liberty-only parts Rule 7 removes on `tomcat`,
+whose removal is correct when each is named in `manual_flags`.
 
 Checks that do not apply: a check that does not apply to this file earns its full points. A check
 applies when the file contains what it is about, or when this file is where the transform had to
