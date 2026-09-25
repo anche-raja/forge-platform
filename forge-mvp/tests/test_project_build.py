@@ -82,6 +82,50 @@ def test_maven_steps_install_into_an_isolated_repository(reactors, tmp_path):
     assert all(f"-Dmaven.repo.local={tmp_path / 'm2'}" in s.argv and "install" in s.argv for s in steps)
 
 
+# ─── the project's own build script ───────────────────────────────────────────
+
+def test_a_windows_command_keeps_its_backslashes_and_quoted_paths():
+    # POSIX splitting reads a backslash as an escape: C:\tools\x.cmd -> C:toolsx.cmd.
+    argv = project_build.split_command(r'"C:\Program Files\Git\bin\bash.exe" build.sh -Dx=C:\m2', posix=False)
+    assert argv == [r"C:\Program Files\Git\bin\bash.exe", "build.sh", r"-Dx=C:\m2"]
+    assert project_build.split_command("./build.sh 'a b'", posix=True) == ["./build.sh", "a b"]
+
+
+def test_a_script_in_the_project_runs_from_the_project(reactors, tmp_path, monkeypatch):
+    """Not from wherever FORGE was started -- and so it is found even off PATH."""
+    (reactors / "build.cmd").write_text("@echo off\n", encoding="utf-8")
+    steps = project_build.plan(str(reactors), _cfg(tmp_path, command="build.cmd install"))
+    assert steps[0].argv == [str(reactors.resolve() / "build.cmd"), "install"]
+
+    monkeypatch.setattr(project_build.shutil, "which", lambda tool: None)
+    result = project_build.run(str(reactors), _cfg(tmp_path, command="build.cmd install", java_home="/jdk"),
+                               runner=lambda argv, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    assert result.outcome == "pass"
+
+
+def test_a_build_script_can_be_pointed_at_the_isolated_repository(reactors, tmp_path):
+    """A script that installs into the everyday ~/.m2 would replace the original's snapshots."""
+    steps = project_build.plan(str(reactors), _cfg(
+        tmp_path, command="bash build-jdk21.sh install -Dmaven.repo.local={maven_repo}",
+        maven_repo=str(tmp_path / "m2")))
+    assert steps[0].argv[-1] == f"-Dmaven.repo.local={tmp_path / 'm2'}"
+
+
+def test_configured_variables_reach_the_build_and_win(reactors, tmp_path, monkeypatch):
+    monkeypatch.setattr(project_build.shutil, "which", lambda tool: "/usr/bin/" + tool)
+    seen = {}
+
+    def runner(argv, **kw):
+        seen.update(kw["env"])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    config = _cfg(tmp_path, command="bash build.sh", java_home="/jdk",
+                  env={"AMS_BUILD_DRIVE": "Y:", "JAVA_HOME": "/script/jdk"})
+    assert project_build.run(str(reactors), config, runner=runner).outcome == "pass"
+    assert seen["AMS_BUILD_DRIVE"] == "Y:"
+    assert seen["JAVA_HOME"] == "/script/jdk", "an explicit variable outranks the resolved JDK"
+
+
 # ─── which JDK ────────────────────────────────────────────────────────────────
 
 def test_java_home_prefers_config_then_the_target_version_then_the_environment(tmp_path, monkeypatch):

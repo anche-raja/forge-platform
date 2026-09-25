@@ -8,7 +8,11 @@ is three (a parent BOM, a shared library, the application) and has no root
 pom at all. This module works out the project's own build instead:
 
 - ``project_build.command`` in agents.yaml, when set, is run verbatim at the
-  tree root. That covers Gradle, a ``build.sh``, anything custom.
+  tree root. That covers Gradle, a ``build.sh``, anything custom -- including
+  the project's own build script: a relative executable that exists in the
+  tree is run from the tree, ``{maven_repo}`` in the command becomes the
+  isolated repository below, and ``project_build.env`` adds variables the
+  script reads.
 - Otherwise every Maven reactor -- a ``pom.xml`` that is not a ``<module>`` of
   another pom -- is built with ``mvn install``, a reactor after any reactor
   whose artifacts it inherits from or depends on.
@@ -72,12 +76,28 @@ def settings(config) -> dict:
         timeout = int(raw.get("timeout_seconds") or DEFAULT_TIMEOUT)
     except (TypeError, ValueError):
         timeout = DEFAULT_TIMEOUT
+    env = raw.get("env") or {}
     return {
         "command": str(raw.get("command") or "").strip(),
         "java_home": str(raw.get("java_home") or "").strip(),
         "maven_repo": str(raw.get("maven_repo") or DEFAULT_MAVEN_REPO).strip(),
         "timeout": max(60, timeout),
+        "env": {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {},
     }
+
+
+def split_command(command: str, *, posix: Optional[bool] = None) -> List[str]:
+    """``project_build.command`` as argv.
+
+    Shell quoting everywhere, but on Windows a backslash is a path separator,
+    not an escape: POSIX splitting turns ``C:\\tools\\build.cmd`` into
+    ``C:toolsbuild.cmd``. Quotes still group a path with spaces on both.
+    """
+    posix = os.name != "nt" if posix is None else posix
+    argv = shlex.split(command, posix=posix)
+    if not posix:
+        argv = [a[1:-1] if len(a) >= 2 and a[0] == a[-1] and a[0] in "\"'" else a for a in argv]
+    return argv
 
 
 def resolve_java_home(config, *, run=subprocess.run) -> Optional[str]:
@@ -201,11 +221,16 @@ def plan(root: str, config) -> List[Step]:
     """The steps that build the tree at ``root``; empty when nothing is buildable."""
     s = settings(config)
     base = Path(root).resolve()
-    if s["command"]:
-        return [Step(label=s["command"], argv=shlex.split(s["command"]), cwd=str(base))]
     repo = str(Path(s["maven_repo"]).expanduser())
+    if s["command"]:
+        argv = [a.replace("{maven_repo}", repo) for a in split_command(s["command"])]
+        # The project's own script (build.cmd, bin/build.sh) lives in the tree
+        # being built, not wherever FORGE was started from.
+        if argv and not Path(argv[0]).is_absolute() and (base / argv[0]).is_file():
+            argv[0] = str(base / argv[0])
+        return [Step(label=s["command"], argv=argv, cwd=str(base))]
     return [
-        Step(label=str(pom.relative_to(base)),
+        Step(label=pom.relative_to(base).as_posix(),
              argv=["mvn", "-q", "-B", "-DskipTests", f"-Dmaven.repo.local={repo}", "install", "-f", str(pom)],
              cwd=str(base))
         for pom in find_reactors(str(base))
@@ -230,6 +255,7 @@ def run(root: str, config, *, runner=subprocess.run) -> BuildResult:
     if java_home:
         env["JAVA_HOME"] = java_home
         env["PATH"] = f"{java_home}/bin{os.pathsep}{env.get('PATH', '')}"
+    env.update(s["env"])
 
     started = time.monotonic()
     for step in steps:
