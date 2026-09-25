@@ -61,6 +61,10 @@ class Conversation:
     # the branch landing started from. `last_landed` is its default.
     landings: Dict[str, dict] = field(default_factory=dict)
     last_landed: str = ""
+    # leader.migrate_on_branch: the branch this chat created before its first
+    # pack, which every pack commits onto. Also recorded in `landings`, so
+    # open_pull_request publishes it like any other branch the chat made.
+    work_branch: str = ""
     # branch -> pull request URL, once open_pull_request has opened (or found) one.
     pull_requests: Dict[str, str] = field(default_factory=dict)
     # The job currently writing this conversation, stamped onto every item it

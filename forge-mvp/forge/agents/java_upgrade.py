@@ -3,7 +3,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.agents.base import BaseAgent
 from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
-from forge.context.inject import context_block_for, decisions_block, declared_context
+from forge.context.inject import context_block_for, coordinates_block, decisions_block, declared_context
 from forge.phases import get_phase
 from forge.state import ForgeState
 from forge.utils.cost import accrue
@@ -80,6 +80,9 @@ class JavaUpgradeAgent(BaseAgent):
         decisions = decisions_block(state, self.config)
         if decisions:
             user_content += "\n\n" + decisions
+        coordinates = coordinates_block(state, self.config)
+        if coordinates:
+            user_content += "\n\n" + coordinates
 
         # A human's note is its own block, not a value in review_feedback: that
         # field is only rendered on retries and a build failure overwrites it.

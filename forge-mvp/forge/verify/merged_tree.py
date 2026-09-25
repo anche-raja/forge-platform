@@ -81,7 +81,8 @@ class MergedTree:
             return True
         return rel in ("migration-report.md", "migration-context.json", "migration-acceptance.json",
                        "manual-review-queue.json", "migration-review.html", "pack-feedback.md",
-                       "decisions-applied.jsonl", "project-build.json", ".forge-writes.json")
+                       "decisions-applied.jsonl", "project-build.json", ".forge-writes.json",
+                       ".forge-synced.json")
 
     def resolve(self, rel: str) -> Optional[Path]:
         """The file backing ``rel`` in the merged view — output wins over source."""

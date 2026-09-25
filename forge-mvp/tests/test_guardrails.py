@@ -119,6 +119,60 @@ def test_guardrail_intervened_terminates_at_blocked_node(config, java_file):
         assert result["current_file"]["transform_output"] is None
 
 
+def _state(java_file, **fields):
+    fs = make_file_status(java_file, "java21")
+    fs.update(fields)
+    return {
+        "current_file": fs, "phase": "java21", "dry_run": False,
+        "source_dir": str(Path(java_file).parent), "output_dir": "./migrated",
+        "target_java_version": "21", "target_spring_version": "3",
+        "files_processed": 0, "files_passed": 0, "files_retried": 0,
+        "files_manual": 0, "files_blocked": 0,
+        "bedrock_calls": 0, "estimated_cost_usd": 0.0, "messages": [],
+    }
+
+
+INTERVENED = {
+    "action": "GUARDRAIL_INTERVENED",
+    "assessments": [{"sensitiveInformationPolicy": {"piiEntities": [
+        {"type": "CREDIT_DEBIT_CARD_NUMBER", "action": "BLOCKED"}]}}],
+}
+
+
+def test_guardrail_action_warn_migrates_the_file_and_keeps_the_finding(tmp_path, java_file):
+    """The owner's dial: an intervention on the source is recorded, and the file is not held."""
+    (tmp_path / "agents.yaml").write_text(
+        "transform_model: m\nreview_model: r\naws_region: us-east-1\n"
+        "guardrail_id: g\nguardrail_version: '1'\nguardrail_action: warn\n")
+    config = ForgeConfig(str(tmp_path / "agents.yaml"))
+    with patch("forge.guardrails.bedrock_guardrails.boto3") as mock_boto3:
+        mock_client = MagicMock()
+        mock_client.apply_guardrail.return_value = INTERVENED
+        mock_boto3.client.return_value = mock_client
+        from forge.agents.guardrails_pre import GuardrailsPreAgent
+        result = GuardrailsPreAgent(config).run(_state(java_file))
+    fs = result["current_file"]
+    assert fs["status"] != "BLOCKED" and not fs.get("error")
+    assert any("CREDIT_DEBIT_CARD_NUMBER" in f for f in fs["guardrail_findings"])
+
+
+def test_guardrail_action_warn_does_not_send_flagged_output_to_manual_review(tmp_path, java_file):
+    (tmp_path / "agents.yaml").write_text(
+        "transform_model: m\nreview_model: r\naws_region: us-east-1\n"
+        "guardrail_id: g\nguardrail_version: '1'\nguardrail_action: warn\npost_model_check: 'off'\n")
+    config = ForgeConfig(str(tmp_path / "agents.yaml"))
+    output = {"files": {java_file: "package com.corp;\npublic class Secrets {}\n"}}
+    with patch("forge.guardrails.bedrock_guardrails.boto3") as mock_boto3:
+        mock_client = MagicMock()
+        mock_client.apply_guardrail.return_value = INTERVENED
+        mock_boto3.client.return_value = mock_client
+        from forge.agents.guardrails_post import GuardrailsPostAgent
+        result = GuardrailsPostAgent(config).run(_state(java_file, transform_output=output))
+    fs = result["current_file"]
+    assert fs["status"] != "MANUAL_REVIEW"
+    assert any("CREDIT_DEBIT_CARD_NUMBER" in f for f in fs["guardrail_findings"])
+
+
 def test_guardrail_findings_never_carry_the_matched_text():
     """A PII hit's `match` is the secret itself; findings name the kind only."""
     from unittest.mock import MagicMock, patch

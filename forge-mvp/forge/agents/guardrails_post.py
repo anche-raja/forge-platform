@@ -111,13 +111,18 @@ class GuardrailsPostAgent(BaseAgent):
         if gr_result["findings"]:
             file_status["guardrail_findings"] = list(file_status.get("guardrail_findings", [])) + gr_result["findings"]
 
+        # `guardrail_action: warn`: the findings are recorded, and the output goes
+        # on through the same deterministic checks as any other.
         if gr_result["intervened"]:
-            _log.info("Guardrail intervened on output for %s", file_status["file_path"])
-            file_status["status"] = "MANUAL_REVIEW"
-            # This return skips steps 2 and 3, so without a reason here the unit
-            # reads as "review 100, no error, no post-check verdict" (issue #26).
-            file_status["error"] = intervention_reason(gr_result, "OUTPUT")
-            return {**state, "current_file": file_status}
+            if str(self.config.get("guardrail_action", "block") or "block").lower() == "warn":
+                _log.info("Guardrail intervened on output for %s; warn only", file_status["file_path"])
+            else:
+                _log.info("Guardrail intervened on output for %s", file_status["file_path"])
+                file_status["status"] = "MANUAL_REVIEW"
+                # This return skips steps 2 and 3, so without a reason here the unit
+                # reads as "review 100, no error, no post-check verdict" (issue #26).
+                file_status["error"] = intervention_reason(gr_result, "OUTPUT")
+                return {**state, "current_file": file_status}
 
         # Step 2: Deterministic Rule 1 enforcement. "Zero javax.* in output" is a
         # mechanical invariant — check it in code rather than asking the model.

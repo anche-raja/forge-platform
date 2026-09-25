@@ -98,6 +98,9 @@ ADD_BATCH = 200
 # so there is nothing to inject — but there is no reason for it to be a novel.
 MESSAGE_CAP = 4000
 STDERR_CAP = 200
+# migrate_on_branch: what each synced file looked like when FORGE last copied it
+# into the work tree, so a later sync copies only what FORGE changed since.
+SYNC_NAME = ".forge-synced.json"
 
 
 class GitUnavailable(RuntimeError):
@@ -124,7 +127,8 @@ def is_artifact(rel: str) -> bool:
     if rel.startswith("decisions") and rel.endswith(".json"):
         return True
     # The run manifest: FORGE's bookkeeping, and it once landed as an added file.
-    if rel == run_manifest.MANIFEST_NAME:
+    # The sync record is the same kind of bookkeeping (migrate_on_branch).
+    if rel in (run_manifest.MANIFEST_NAME, SYNC_NAME):
         return True
     # One report and one acceptance record per pack, and the plan summary.
     from forge.utils.report import is_report_artifact
@@ -252,7 +256,8 @@ def preconditions(source_dir: str, output_dir: str, branch: str) -> Optional[str
     return _preconditions(source_dir, output_dir, branch, {})
 
 
-def _preconditions(source_dir: str, output_dir: str, branch: str, notes: Dict[str, Any]) -> Optional[str]:
+def _preconditions(source_dir: str, output_dir: str, branch: str, notes: Dict[str, Any], *,
+                   need_output: bool = True) -> Optional[str]:
     source = str(source_dir or "")
     if not source or not Path(source).is_dir():
         return f"no project set yet, or {source or '(none)'} is not a directory"
@@ -292,19 +297,21 @@ def _preconditions(source_dir: str, output_dir: str, branch: str, notes: Dict[st
 
     # 3. something to land. A missing output directory and an output directory
     #    holding only artifacts are different mistakes, so they read differently.
-    out = Path(output_dir or "").expanduser()
-    if not output_dir or not out.is_dir():
-        return f"no output directory at {output_dir or '(none)'} — run a pack first, there is nothing migrated to land"
-    landable, unrecorded = _scan(output_dir)
-    if not landable:
-        extra = ""
-        if unrecorded:
-            shown = ", ".join(unrecorded[:5]) + (f" and {len(unrecorded) - 5} more" if len(unrecorded) > 5 else "")
-            extra = (f" It does hold {len(unrecorded)} file(s) no FORGE run recorded ({shown}); "
-                     "those are never landed.")
-        return (f"{output_dir} holds no migrated files — only FORGE's own artifacts, and held "
-                "units that are still waiting on a human. Run a pack, or settle the held files first."
-                + extra)
+    #    A branch started before the first pack (start_branch) has nothing yet.
+    if need_output:
+        out = Path(output_dir or "").expanduser()
+        if not output_dir or not out.is_dir():
+            return f"no output directory at {output_dir or '(none)'} — run a pack first, there is nothing migrated to land"
+        landable, unrecorded = _scan(output_dir)
+        if not landable:
+            extra = ""
+            if unrecorded:
+                shown = ", ".join(unrecorded[:5]) + (f" and {len(unrecorded) - 5} more" if len(unrecorded) > 5 else "")
+                extra = (f" It does hold {len(unrecorded)} file(s) no FORGE run recorded ({shown}); "
+                         "those are never landed.")
+            return (f"{output_dir} holds no migrated files — only FORGE's own artifacts, and held "
+                    "units that are still waiting on a human. Run a pack, or settle the held files first."
+                    + extra)
 
     try:
         # 4. FORGE's own output out of `git status`. The chat writes into the
@@ -549,6 +556,183 @@ def land(source_dir: str, output_dir: str, branch: str, *, message: Optional[str
         }
     except GitUnavailable as e:
         return _fail(str(e), f"the repository may be on branch '{branch}'; check with `git status`")
+
+
+# ─── migrate_on_branch: the branch first, then one commit per pack ───────────
+
+def start_branch(source_dir: str, output_dir: str, branch: str) -> Dict[str, Any]:
+    """Create ``branch`` before the first pack runs, and switch the repository to it.
+
+    The same refusals as :func:`land` -- no repository, an existing branch, a
+    dirty work tree -- minus "nothing to land", since nothing has run yet. The
+    sync record is cleared: files an earlier session delivered to some other
+    branch are not in this one, so the first sync copies them again.
+
+    Returns ``{"ok": False, "error", "state"?}`` or ``{"ok": True, "branch",
+    "base_branch", "source_dir", "excluded", "exclude_added"}``.
+    """
+    branch = str(branch or "").strip()
+    notes: Dict[str, Any] = {}
+    refusal = _preconditions(source_dir, output_dir, branch, notes, need_output=False)
+    if refusal:
+        return _fail(refusal)
+    source = str(Path(source_dir).expanduser().resolve())
+    was_on = _current_branch(source)
+    try:
+        made = _git(source, "checkout", "-b", branch)
+    except GitUnavailable as e:
+        return _fail(str(e), f"the repository may be on branch '{branch}'; check with `git status`")
+    if made.returncode != 0:
+        return _fail(f"could not create branch '{branch}': {_stderr(made)}",
+                     f"no branch was created; the repository is still on {was_on}")
+    try:
+        (Path(output_dir).expanduser() / SYNC_NAME).unlink()
+    except OSError:
+        pass
+    return {"ok": True, "branch": branch, "base_branch": "" if was_on in ("HEAD", "?") else was_on,
+            "source_dir": source, "excluded": notes.get("excluded"),
+            "exclude_added": bool(notes.get("exclude_added"))}
+
+
+def _digest(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _load_synced(output_dir: str) -> Dict[str, str]:
+    import json
+
+    try:
+        data = json.loads((Path(output_dir).expanduser() / SYNC_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+
+def _save_synced(output_dir: str, synced: Dict[str, str]) -> None:
+    import json
+
+    (Path(output_dir).expanduser() / SYNC_NAME).write_text(json.dumps(synced, indent=1, sort_keys=True),
+                                                           encoding="utf-8")
+
+
+def _dirty(source: str, files: Sequence[str]) -> set:
+    """The paths among ``files`` that are modified and uncommitted, or untracked.
+
+    ``ls-files`` rather than ``status --porcelain``: porcelain paths are always
+    relative to the repository root, and the project may be a folder inside it.
+    """
+    found: set = set()
+    for start in range(0, len(files), ADD_BATCH):
+        proc = _git(source, "ls-files", "-z", "-m", "-o", "--exclude-standard", "--",
+                    *files[start:start + ADD_BATCH])
+        if proc.returncode != 0:
+            raise RuntimeError(f"git could not read the work tree: {_stderr(proc)}")
+        found |= {p for p in (proc.stdout or "").split("\0") if p}
+    return found
+
+
+def sync_to_branch(source_dir: str, output_dir: str, branch: str, message: str,
+                   deleted: Iterable[str] = ()) -> Dict[str, Any]:
+    """Copy what FORGE wrote since the last sync into the work tree, and commit it on ``branch``.
+
+    Called after every pack (one commit each), after tests and review decisions,
+    and before publishing. Only a file whose output changed since FORGE last
+    copied it is copied, so an edit the user made in the work tree to a file
+    FORGE has not touched again survives. The rules are :func:`land`'s:
+
+    - the repository must still be on ``branch`` -- a commit on whatever the
+      user switched to would be FORGE committing into their branch;
+    - nothing may already be staged, or the commit would carry it;
+    - a file the user changed and not committed is refused, never overwritten,
+      unless it already holds exactly what FORGE is copying (an earlier sync
+      that copied it and then failed to commit);
+    - only tracked files inside the tree are deleted, and FORGE's artifacts and
+      held units are never copied.
+
+    Returns ``{"ok": False, "error", "state"?}`` or ``{"ok": True, "commit",
+    "files_changed", "deleted", "files", "skipped_count", "ignored"}``;
+    ``commit`` is ``""`` when nothing changed.
+    """
+    source = str(Path(source_dir).expanduser().resolve())
+    out_root = Path(output_dir).expanduser()
+    on = _current_branch(source)
+    if on != branch:
+        return _fail(f"the repository is on '{on}', not on the migration branch '{branch}' — switch back "
+                     f"(`git switch {branch}`) and ask again. FORGE commits only on the branch it made.",
+                     "nothing was copied or committed")
+    files, unrecorded = _scan(output_dir)
+    out_resolved = out_root.resolve()
+    files = [f for f in files if not (Path(source) / f).resolve().is_relative_to(out_resolved)]
+    synced = _load_synced(output_dir)
+    digests = {f: _digest(out_root / f) for f in files}
+    todo = [f for f in files if synced.get(f) != digests[f]]
+    try:
+        staged = _git(source, "diff", "--cached", "--name-only")
+        if staged.returncode == 0 and (staged.stdout or "").strip():
+            return _fail("changes are already staged in the repository, and FORGE's commit would carry "
+                         "them — commit or unstage them yourself first", "nothing was copied or committed")
+        ignored = _ignored(source, todo) if todo else set()
+        todo = [f for f in todo if f not in ignored]
+        clobber = sorted(f for f in _dirty(source, todo)
+                         if f in digests and (Path(source) / f).is_file()
+                         and _digest(Path(source) / f) != digests[f])
+    except RuntimeError as e:     # GitUnavailable included
+        return _fail(str(e), "nothing was copied or committed")
+    if clobber:
+        shown = ", ".join(clobber[:5]) + (f" and {len(clobber) - 5} more" if len(clobber) > 5 else "")
+        return _fail(f"{len(clobber)} file(s) FORGE needs to update have uncommitted changes of yours: "
+                     f"{shown}. Commit or discard them yourself first — FORGE will not overwrite them.",
+                     "nothing was copied or committed")
+
+    copied: List[str] = []
+    rel = ""
+    try:
+        for rel in todo:
+            target = Path(source) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(out_root / rel, target)
+            copied.append(rel)
+    except OSError as e:
+        return _fail(f"could not copy {rel}: {e}",
+                     f"{len(copied)} of {len(todo)} file(s) copied into the work tree; nothing committed")
+    try:
+        removed = _remove_superseded(source, deleted, keep_out=str(out_resolved))
+        paths = copied + removed
+        for start in range(0, len(paths), ADD_BATCH):
+            added = _git(source, "add", "--", *paths[start:start + ADD_BATCH])
+            if added.returncode != 0:
+                return _fail(f"git add failed: {_stderr(added)}",
+                             "the files are copied into the work tree and partially staged; nothing committed")
+        count = _staged_count(source) if paths else 0
+        sha = ""
+        if count != 0:
+            text = message[:MESSAGE_CAP].rstrip()
+            if CO_AUTHOR_LINE not in text:
+                text += "\n\n" + CO_AUTHOR_LINE
+            committed = _git(source, "commit", "-m", text)
+            if committed.returncode != 0:
+                return _fail(f"git commit failed: {_stderr(committed)}",
+                             f"{len(paths)} path(s) are staged on '{branch}' and not committed")
+            head = _git(source, "rev-parse", "--short", "HEAD")
+            sha = (head.stdout or "").strip() if head.returncode == 0 else ""
+    except GitUnavailable as e:
+        return _fail(str(e), f"check the state of '{branch}' with `git status`")
+    synced.update({f: digests[f] for f in copied})
+    try:
+        _save_synced(output_dir, synced)
+    except OSError:
+        pass    # the next sync copies these again, finds them identical, and commits nothing
+    # What git staged, less the removals: a copy that left a file byte-identical
+    # is not a change. -1 is git declining to say (an unborn HEAD).
+    if count < 0:
+        changed = len(copied)
+    else:
+        changed = max(count - len(removed), 0)
+    return {"ok": True, "branch": branch, "commit": sha, "files_changed": changed,
+            "deleted": len(removed), "files": copied, "deleted_files": removed,
+            "skipped_count": len(unrecorded), "ignored": sorted(ignored)[:SKIPPED_CAP]}
 
 
 def _ignored(source: str, files: Sequence[str]) -> set:

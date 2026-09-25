@@ -164,11 +164,15 @@ def build_line(build: Optional[dict]) -> str:
 
 
 def pr_body(*, branch: str, base: str, commit: str = "", packs: Sequence[str] = (),
-            rows: Sequence[dict] = (), awaiting: int = 0, build: Optional[dict] = None) -> str:
+            rows: Sequence[dict] = (), awaiting: int = 0, build: Optional[dict] = None,
+            draft: bool = False) -> str:
     """The pull request description: deterministic markdown from FORGE's own records."""
     lines = ["## FORGE migration", "",
              f"This pull request brings `{_cell(branch)}` into `{_cell(base)}`"
              + (f" (commit `{_cell(commit)}`)" if commit else "") + ".", ""]
+    if draft:
+        lines += ["**Opened as a draft: the project build did not pass** (see *Project build* below). "
+                  "Fix it on this branch, then mark the pull request ready.", ""]
     landed = [str(p) for p in packs if p]
     if landed:
         lines += ["**Packs landed**, in the order they ran:", ""] + [f"1. `{_cell(p)}`" for p in landed] + [""]
@@ -283,11 +287,13 @@ def _existing_pr(run: Runner, source: str, branch: str, repo_args: List[str]) ->
 
 
 def open_pull_request(source_dir: str, branch: str, base: str, *, title: str, body: str,
-                      landed: Sequence[str], runner: Optional[Runner] = None) -> Dict[str, Any]:
+                      landed: Sequence[str], runner: Optional[Runner] = None,
+                      draft: bool = False) -> Dict[str, Any]:
     """Push ``branch`` to origin and open a PR into ``base``. Returns a JSON-safe dict.
 
     ``{"ok": False, "error", "state"}`` or ``{"ok": True, "url", "branch", "base",
-    "existing"}``. Nothing here raises: the caller is a tool (R6).
+    "existing", "draft"}``. ``draft`` opens it as a draft (migrate_on_branch does,
+    for a plan whose build did not pass). Nothing here raises: the caller is a tool (R6).
     """
     run = runner or default_runner
     branch, base = str(branch or "").strip(), str(base or "").strip()
@@ -313,7 +319,7 @@ def open_pull_request(source_dir: str, branch: str, base: str, *, title: str, bo
             body_file = fh.name
         try:
             made = run(["gh", "pr", "create", *repo_args, "--base", base, "--head", branch,
-                        "--title", title, "--body-file", body_file], source)
+                        "--title", title, "--body-file", body_file, *(["--draft"] if draft else [])], source)
         finally:
             try:
                 os.unlink(body_file)
@@ -326,10 +332,11 @@ def open_pull_request(source_dir: str, branch: str, base: str, *, title: str, bo
     if made.returncode == 0:
         match = _URL_RE.search(made.stdout or "")
         if match:
-            return {"ok": True, "url": match.group(0), "branch": branch, "base": base, "existing": False}
+            return {"ok": True, "url": match.group(0), "branch": branch, "base": base, "existing": False,
+                    "draft": draft}
     existing = _existing_pr(run, source, branch, repo_args)
     if existing:
-        return {"ok": True, "url": existing, "branch": branch, "base": base, "existing": True}
+        return {"ok": True, "url": existing, "branch": branch, "base": base, "existing": True, "draft": draft}
     if made.returncode == 0:
         return _fail("gh created something but printed no pull request URL", pushed_state)
     return _fail(f"gh pr create failed: {_err(made)}", pushed_state)

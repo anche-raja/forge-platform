@@ -487,7 +487,10 @@ class Toolbox:
 
         decisions = dict(discovery.get("decisions") or {})
         decisions["risk_ceiling"] = ceiling
-        overrides: Dict[str, Any] = {"decisions": decisions}
+        # The plan's packs, so the build pack is told the coordinates exactly
+        # these packs need changed (forge/context/inject.py coordinates_block).
+        overrides: Dict[str, Any] = {"decisions": decisions,
+                                     "plan_packs": [str(p) for p in (self.convo.selected_packs or [])]}
 
         plan = discovery.get("intent")
         if isinstance(plan, dict):
@@ -980,13 +983,30 @@ class Toolbox:
         written = run_manifest.load(self.ctx.output_dir)
         chain = bool(written) and any(owner != pack for owner in written.values())
 
+        # migrate_on_branch: the branch before anything is spent, and the work
+        # tree brought up to date with the output (an earlier session's packs,
+        # an approval) before this pack reads it -- it reads the tree in place.
+        in_place = self.settings.migrate_on_branch
+        if in_place:
+            refusal = self._start_branch()
+            if refusal:
+                # Landing's cap, not TEXT_CAP: the remedy is at the end of the
+                # sentence, after a path that can be most of 200 characters.
+                error = cards.cap(refusal, LANDING_ERROR_CAP)
+                return ToolOutcome(False, {"pack": pack, "error": error}, [], f"{pack}: not run — {error}")
+            caught_up = self._sync("Bring in FORGE output from earlier runs")
+            if caught_up.get("error"):
+                return ToolOutcome(False, {"pack": pack, "error": caught_up["error"],
+                                           **({"state": caught_up["state"]} if caught_up.get("state") else {})},
+                                   [], f"{pack}: not run — {caught_up['error']}")
+
         config = self.effective_config()
         model = str(config.get("transform_model") or "")
         try:
             result = service.run_migration(
                 self.ctx.source_dir, pack, self.ctx.output_dir, config,
                 dry_run=dry_run, run_acceptance=bool(args.get("acceptance", False)),
-                chain=chain,
+                chain=chain and not in_place, in_place=in_place,
                 on_event=self._relay(tool_id), cancel=self.cancel,
             )
         except service.NoEligibleFiles as e:
@@ -1045,6 +1065,15 @@ class Toolbox:
             parts.append(model.split(".", 2)[-1] if model.count(".") >= 2 else model)
         if card_error:
             parts.append(f"card_error: {card_error}")
+        if self._on_branch():
+            # One commit per pack -- a stopped run's files too, so the tree the
+            # next pack reads is the output this one wrote.
+            stopped = " (stopped part-way)" if status == "cancelled" else ""
+            observation["commit"] = self._sync(
+                f"Migrate with FORGE pack {pack}{stopped}\n\n"
+                f"{totals.get('passed', 0)} file(s) passed review; {totals.get('manual', 0)} manual review, "
+                f"{totals.get('blocked', 0)} blocked and {totals.get('held', 0)} held are not in this commit.")
+            parts.append(self._sync_part(observation["commit"]))
         pending = self._finish_plan(tool_id, observation, built, parts) if status == "done" else None
         return ToolOutcome(True, observation, built, " · ".join(parts),
                            needs_confirmation=pending is not None, pending_id=pending)
@@ -1071,6 +1100,68 @@ class Toolbox:
         """
         tg = (self.effective_config().get("test_generation") or {})
         return bool(tg.get("enabled", True)) and bool(tg.get("after_plan", False))
+
+    # ── leader.migrate_on_branch: the branch first, one commit per pack ──────
+
+    def _on_branch(self) -> bool:
+        """True once this chat has its migration branch and commits onto it."""
+        return self.settings.migrate_on_branch and bool(self.convo.work_branch)
+
+    def _start_branch(self) -> Optional[str]:
+        """Create ``<branch_prefix>-<timestamp>`` before the chat's first pack. The refusal, or None.
+
+        In code, not in the prompt, like the build at the end of a plan. The
+        refusals are landing's: a dirty work tree, an existing branch, a folder
+        that is not a repository -- each stops the pack before anything is spent.
+        """
+        from forge.leader import landing
+
+        if not self.settings.migrate_on_branch or self.convo.work_branch:
+            return None
+        branch = f"{self.settings.branch_prefix}-{datetime.now():%Y%m%d-%H%M%S}"
+        started = landing.start_branch(self.ctx.source_dir, self.ctx.output_dir, branch)
+        if not started.get("ok"):
+            state = f" ({started['state']})" if started.get("state") else ""
+            return f"could not start the migration branch: {started.get('error')}{state}"
+        with self.convo.lock:
+            self.convo.work_branch = branch
+        self.convo.record_landing(branch, str(started.get("base_branch") or ""), "",
+                                  str(started.get("source_dir") or self.ctx.source_dir))
+        return None
+
+    def _sync(self, message: str) -> Dict[str, Any]:
+        """Commit what FORGE wrote since the last sync onto the chat's branch. An observation.
+
+        ``{"branch", "commit", "files_changed", "deleted"}`` -- ``commit`` empty
+        when nothing changed -- or ``{"error", "state"?}``. Never raises: every
+        caller has already spent money or written files, and that stands (R6).
+        """
+        from forge.leader import landing
+
+        branch = self.convo.work_branch
+        try:
+            result = landing.sync_to_branch(self.ctx.source_dir, self.ctx.output_dir, branch, message,
+                                            deleted=self._superseded_paths())
+        except Exception as e:  # noqa: BLE001
+            return {"error": cards.cap(f"{type(e).__name__}: {e}", LANDING_ERROR_CAP)}
+        if not result.get("ok"):
+            observation = {"error": cards.cap(result.get("error"), LANDING_ERROR_CAP) or "the commit was refused"}
+            if result.get("state"):
+                observation["state"] = cards.cap(result.get("state"), LANDING_ERROR_CAP)
+            return observation
+        if result.get("commit"):
+            landed = (self.convo.landings or {}).get(branch) or {}
+            self.convo.record_landing(branch, str(landed.get("base_branch") or ""), str(result["commit"]),
+                                      str(landed.get("source_dir") or self.ctx.source_dir))
+        return {k: result.get(k) for k in ("branch", "commit", "files_changed", "deleted")}
+
+    @staticmethod
+    def _sync_part(synced: Dict[str, Any]) -> str:
+        if synced.get("error"):
+            return "commit: refused"
+        if not synced.get("commit"):
+            return "commit: nothing changed"
+        return f"committed {synced.get('files_changed', 0)} file(s) on {synced.get('branch')} ({synced['commit']})"
 
     def _finish_plan(self, tool_id: str, observation: dict, built: List[dict],
                      parts: List[str]) -> Optional[str]:
@@ -1142,7 +1233,22 @@ class Toolbox:
         but the branch it just made, and never forces. It publishes only a plan
         whose build passed and is current; a failed, skipped or stale build
         leaves landing to the user, where the card shows why.
+
+        Under ``migrate_on_branch`` there is nothing to land -- every pack is
+        already committed on the chat's branch -- and the pull request opens
+        whatever the build said: as a draft, saying so, when it did not pass.
         """
+        if self._on_branch():
+            pr = self._open_pull_request({}, tool_id)
+            built.extend(pr.cards)
+            observation["publish"] = {"status": "done" if pr.ok else "refused",
+                                      "branch": self.convo.work_branch, "pull_request": pr.observation}
+            if pr.ok:
+                draft = " (draft: the build did not pass)" if pr.observation.get("draft") else ""
+                parts.append(f"pull request: {pr.observation.get('url')}{draft}")
+            else:
+                parts.append("pull request refused")
+            return
         outcome = (record or {}).get("outcome")
         if outcome != "pass" or (record or {}).get("stale"):
             why = f"the build did not pass ({outcome or 'error'})" if outcome != "pass" else "the build is stale"
@@ -1281,8 +1387,11 @@ class Toolbox:
             "rejected": rejected,
         }
         applied = sum(1 for o in observation["outcomes"] if o.get("applied"))
-        return ToolOutcome(True, observation, [],
-                           f"{applied} of {len(decided)} applied, {observation['remaining']} left")
+        summary = f"{applied} of {len(decided)} applied, {observation['remaining']} left"
+        if self._on_branch() and applied:
+            observation["commit"] = self._sync(f"Apply {applied} review decision(s) in FORGE")
+            summary += f" · {self._sync_part(observation['commit'])}"
+        return ToolOutcome(True, observation, [], summary)
 
     def _generate_tests(self, args: dict, tool_id: str, *, rebuild: bool = True) -> ToolOutcome:
         from forge import service
@@ -1303,6 +1412,9 @@ class Toolbox:
                                 cards.file_href(self.ctx.output_dir, "test-generation-report.md"))
         built = [card]
         summary = f"{totals.get('generated', 0)} test(s) generated, {totals.get('held', 0)} held"
+        if self._on_branch() and totals.get("generated"):
+            observation["commit"] = self._sync(f"Add {totals.get('generated', 0)} unit test(s) generated by FORGE")
+            summary += f" · {self._sync_part(observation['commit'])}"
         plan_done = (bool(self.convo.completed) and not self._plan_remaining()
                      and not (self.cancel is not None and self.cancel.is_set()))
         record: Optional[dict] = None
@@ -1412,9 +1524,16 @@ class Toolbox:
                            f"build: {record['outcome']} — {cards.cap(record['detail'])}")
 
     def _build(self, tool_id: str) -> dict:
-        """The one path to the project build: ``build_project``, and the end of a plan."""
+        """The one path to the project build: ``build_project``, and the end of a plan.
+
+        On the chat's migration branch the repository itself is built: the
+        migration is committed there, and so is any fix the user made on it.
+        """
         from forge import service
 
+        if self._on_branch():
+            return service.build_project(self.ctx.source_dir, self.ctx.output_dir, self.effective_config(),
+                                         overlay=False, on_event=self._relay(tool_id))
         return service.build_project(self.ctx.source_dir, self.ctx.output_dir, self.effective_config(),
                                      on_event=self._relay(tool_id))
 
@@ -1430,9 +1549,22 @@ class Toolbox:
         """
         from forge.leader import landing
 
-        branch = str(args.get("branch") or "").strip()
         message = args.get("message")
         message = str(message).strip() if isinstance(message, str) and message.strip() else None
+        if self._on_branch():
+            # The chat already works on its own branch: landing is committing
+            # whatever has not been committed yet, there -- never a second branch.
+            synced = self._sync(message or "Bring in FORGE output")
+            if synced.get("error"):
+                return ToolOutcome(False, synced, [], synced["error"])
+            landed = (self.convo.landings or {}).get(self.convo.work_branch) or {}
+            card = cards.land_card({**synced, "base_branch": landed.get("base_branch"),
+                                    "source_dir": self.ctx.source_dir,
+                                    "packs": list(self.convo.completed or [])})
+            return ToolOutcome(True, {**synced, "pushed": False}, [card],
+                               f"already on {self.convo.work_branch}; {self._sync_part(synced)}")
+
+        branch = str(args.get("branch") or "").strip()
         # The packs this chat actually finished, in the order it ran them. A
         # commit message is a record, so it names what was done, not what was
         # planned.
@@ -1490,7 +1622,7 @@ class Toolbox:
         base = str(args.get("base") or "").strip() or str(landing.get("base_branch") or "")
         return branch, base
 
-    def _pr_body(self, branch: str, base: str, build: dict) -> str:
+    def _pr_body(self, branch: str, base: str, build: dict, *, draft: bool = False) -> str:
         from forge.leader import pull_request
 
         landing = (self.convo.landings or {}).get(branch) or {}
@@ -1498,7 +1630,7 @@ class Toolbox:
             branch=branch, base=base, commit=str(landing.get("commit") or ""),
             packs=[str(p) for p in (self.convo.completed or [])],
             rows=pull_request.pack_rows(self.ctx.output_dir),
-            awaiting=pull_request.awaiting_review(self.ctx.output_dir), build=build)
+            awaiting=pull_request.awaiting_review(self.ctx.output_dir), build=build, draft=draft)
 
     def _open_pull_request(self, args: dict, tool_id: str) -> ToolOutcome:
         """Push the landed branch and open a PR. Confirmed, refusing, and never forced.
@@ -1512,15 +1644,26 @@ class Toolbox:
         from forge.leader import pull_request
 
         branch, base = self._pr_target(args)
+        draft = False
+        if self._on_branch() and branch == self.convo.work_branch:
+            # Whatever FORGE wrote since the last commit goes in first, so the
+            # branch pushed is the migration as it stands.
+            synced = self._sync("Bring in FORGE output")
+            if synced.get("error"):
+                return ToolOutcome(False, synced, [], synced["error"])
         try:
             build = service.build_status(self.ctx.source_dir, self.ctx.output_dir)
         except Exception:  # noqa: BLE001 — no record is "not run", which the body says plainly
             build = {"outcome": "not_run", "stale": False}
+        if self._on_branch() and branch == self.convo.work_branch:
+            # The owner's call: a branch that does not build still gets its
+            # pull request, as a draft, so the fix happens in review.
+            draft = build.get("outcome") != "pass" or bool(build.get("stale"))
         title = str(args.get("title") or "").strip() or pull_request.default_title(self.convo.completed or [])
-        body = self._pr_body(branch, base, build) if branch else ""
+        body = self._pr_body(branch, base, build, draft=draft) if branch else ""
         result = pull_request.open_pull_request(
             self.ctx.source_dir, branch, base, title=title, body=body,
-            landed=list((self.convo.landings or {}).keys()), runner=PR_RUNNER)
+            landed=list((self.convo.landings or {}).keys()), runner=PR_RUNNER, draft=draft)
         if not result.get("ok"):
             observation = {"error": cards.cap(result.get("error"), LANDING_ERROR_CAP)
                            or "the pull request was refused"}
@@ -1532,6 +1675,8 @@ class Toolbox:
         with self.convo.lock:
             self.convo.pull_requests[result["branch"]] = result["url"]
         observation = {"url": result["url"], "branch": result["branch"], "base": result["base"]}
+        if draft:
+            observation["draft"] = True
         card = cards.pull_request_card({**result, "title": title, "build": build})
         said = "already open" if result.get("existing") else "opened"
         return ToolOutcome(True, observation, [card],

@@ -103,7 +103,12 @@ Landing the work:
 - If the result carries `publish` (leader.auto_publish), FORGE has already acted on it: status
   done means the branch is landed and the pull request is open, so give the branch and the URL
   and do not offer land_on_branch or open_pull_request again. skipped, refused or waiting means
-  nothing was published: say why in one line, then carry on with the rules below.
+  nothing was published: say why in one line, then carry on with the rules below. A pull request
+  marked draft was opened that way because the build did not pass: say so in the same line.
+- If PROGRESS says "migrating on branch", FORGE made that branch before the first pack and commits
+  every pack onto it (run_pack's `commit`). The user's repository already holds the migration;
+  there is no separate landing to offer, and nothing to name. If a `commit` carries an error, pass
+  it on in its words: the files are written but not committed until the user resolves it.
 - land_on_branch is the only thing here that writes into their own repository. Offer it once a
   pack has actually run and the files waiting on a human are settled — not before. A failed or
   stale build does not stop it: say so plainly when you offer it, and let the user decide.
@@ -225,10 +230,12 @@ def state_block(convo, ctx, settings: Optional[LeaderSettings] = None) -> str:
               "  next in order: " + (remaining[0] if remaining else "nothing left in the plan")]
     landings = dict(getattr(convo, "landings", None) or {})
     prs = dict(getattr(convo, "pull_requests", None) or {})
+    work_branch = str(getattr(convo, "work_branch", "") or "")
     for branch, landing in landings.items():
         base = (landing or {}).get("base_branch") or "a detached HEAD"
         pr = prs.get(branch)
-        lines.append(f"  landed: {branch} (from {base}) — "
+        what = "migrating on branch" if branch == work_branch else "landed"
+        lines.append(f"  {what}: {branch} (from {base}) — "
                      + (f"pull request {pr}" if pr else "not pushed; open_pull_request can publish it"))
 
     lines += ["", "FILES WAITING ON A HUMAN", _queue_line(ctx.output_dir)]

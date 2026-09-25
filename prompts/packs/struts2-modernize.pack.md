@@ -68,6 +68,13 @@ Rule 1 — Package relocation. `com.opensymphony.*` is gone; everything moved un
     `ResourceBundleTextProvider` → `org.apache.struts2.text.*`
   - locale classes — `LocaleProvider`, `LocaleProviderFactory`, `DefaultLocaleProvider` →
     `org.apache.struts2.locale.*`
+  - the injection interfaces — `org.apache.struts2.interceptor.ServletRequestAware`,
+    `ServletResponseAware`, `SessionAware`, `ApplicationAware` and `ParameterAware` were
+    deprecated in Struts 6 and are **removed** in 7. Implement the `org.apache.struts2.action.*`
+    interface of the same name (`ParametersAware` for `ParameterAware`) and rename the method to
+    its `with` form: `setServletRequest` → `withServletRequest`, `setServletResponse` →
+    `withServletResponse`, `setSession` → `withSession`, `setApplication` → `withApplication`,
+    `setParameters` → `withParameters`. Rename every caller too: tests call these directly.
 - `com.opensymphony.xwork2.interceptor.*`, `.validator.*`, `.conversion.*`, `.util.*`,
   `.config.*`, `.inject.*` all follow the general rule into `org.apache.struts2.*`
 - `ActionSupport`, `ActionContext`, `ModelDriven`, `Preparable`, `ValidationAware` follow the

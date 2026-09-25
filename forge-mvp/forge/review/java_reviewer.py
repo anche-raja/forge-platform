@@ -2,7 +2,7 @@ from langchain_aws import ChatBedrockConverse
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from forge.config import ForgeConfig, bedrock_client_config, model_max_tokens
-from forge.context.inject import context_block_for, decisions_block
+from forge.context.inject import context_block_for, coordinates_block, decisions_block
 from forge.phases import get_phase
 from forge.review.base_reviewer import BaseReviewer
 from forge.state import ForgeState
@@ -54,6 +54,10 @@ class JavaReviewer(BaseReviewer):
         decisions = decisions_block(state, self.config)
         if decisions:
             human += "\n\n" + decisions
+        # Check 4 grades "exactly the supplied lists": the reviewer needs the lists.
+        coordinates = coordinates_block(state, self.config)
+        if coordinates:
+            human += "\n\n" + coordinates
         # A reply that cannot be read says nothing about the migration, so it is
         # asked for again before it counts against the file (issue #19): one
         # unquoted key sent a correctly migrated test class to a human at

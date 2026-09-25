@@ -47,6 +47,9 @@ dynamodb_checkpoint_table: "forge-langgraph-checkpoints-dev"
 #   ./forge-terraform/scripts/generate-agents-yaml.sh dev > forge-mvp/agents.yaml
 guardrail_id: "REPLACE_WITH_GUARDRAIL_ID"
 guardrail_version: "1"
+# block: an intervention on the source BLOCKS the file, one on the output holds
+# it for review. warn: the finding is recorded and the file is migrated anyway.
+guardrail_action: block
 
 # ─── CloudWatch ───────────────────────────────────────────────────────────────
 cloudwatch_namespace: "FORGE/Migration"

@@ -115,11 +115,16 @@ class GuardrailsPreAgent(BaseAgent):
         if gr_result["findings"]:
             file_status["guardrail_findings"] = list(file_status.get("guardrail_findings", [])) + gr_result["findings"]
 
+        # `guardrail_action: warn` is the owner's dial, like secret_scan.action:
+        # the findings stay on the unit and in the report, and the file is migrated.
         if gr_result["intervened"]:
-            _log.info("Guardrail intervened on input for %s", file_path)
-            file_status["status"] = "BLOCKED"
-            file_status["error"] = intervention_reason(gr_result, "INPUT")
-            return {**state, "current_file": file_status}
+            if str(self.config.get("guardrail_action", "block") or "block").lower() == "warn":
+                _log.info("Guardrail intervened on input for %s; warn only, migrating it", file_path)
+            else:
+                _log.info("Guardrail intervened on input for %s", file_path)
+                file_status["status"] = "BLOCKED"
+                file_status["error"] = intervention_reason(gr_result, "INPUT")
+                return {**state, "current_file": file_status}
 
         # Step 4: optional qualitative model check. OFF by default: every
         # question it used to answer is now answered locally, and sending source

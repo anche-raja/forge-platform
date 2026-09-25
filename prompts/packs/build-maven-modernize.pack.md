@@ -55,14 +55,34 @@ these in the order above and keep any project-specific overrides *before* them i
 genuinely intended.
 
 **Remove every hand-pinned version a BOM now manages** — `spring.version`,
-`spring-security.version`, `jackson.version`, `junit.version`, `mockito.version`. A pinned
-version alongside its BOM silently overrides it and reintroduces exactly the version skew the
-upgrade was meant to remove. Keep hand-pinned versions for anything no BOM manages: JDBC
-drivers, internal artifacts, niche libraries.
+`spring-security.version`, `jackson.version`, `junit.version`. A pinned version alongside its BOM
+silently overrides it and reintroduces exactly the version skew the upgrade was meant to remove.
+Keep hand-pinned versions for anything no BOM manages: Mockito, JDBC drivers, internal artifacts,
+niche libraries.
+
+**Never leave a `<dependencyManagement>` entry without a `<version>`.** An explicit entry there
+replaces the imported BOM's entry for that artifact outright — its version too — wherever it sits
+in the list, so a versionless one leaves the artifact with no version at all and Maven refuses the
+pom ("'dependencies.dependency.version' ... is missing"). For each explicit entry of an artifact a
+BOM now manages: delete the whole entry when it carries nothing but coordinates, or, when it carries
+a `<scope>`, `<exclusions>` or a `<classifier>` worth keeping, set its version to the BOM's own
+property (`<version>${junit-bom.version}</version>`) — the same number the BOM would give, so no
+skew. In `<dependencies>` a versionless dependency is correct; the rule is about the managed list.
 
 Rule 3 — Remove every coordinate in the `eliminates` list supplied to you. Do not remove a
 dependency that is not on that list, even if it looks obsolete — another pack may still be
 migrating code that uses it, and removing it breaks the build gate before that pack runs.
+
+**The test stack is replaced, never just removed.** The test pack has already rewritten every
+test to JUnit 5 and Mockito 5, so wherever this pom declares one of these — in
+`<dependencyManagement>` and in `<dependencies>` alike — put the replacement in the same place,
+at `test` scope:
+- `junit:junit` → `org.junit.jupiter:junit-jupiter` (version `${junit-bom.version}`). Importing
+  `junit-bom` supplies a version, not a dependency: without this entry no module has JUnit 5 on
+  its test classpath and every test fails to compile.
+- `org.mockito:mockito-all`, or `org.mockito:mockito-core` below 5 → `org.mockito:mockito-core`
+  **and** `org.mockito:mockito-junit-jupiter` (which carries `MockitoExtension`), both at Mockito
+  5.x through the `mockito.version` property.
 
 Rule 4 — Apply every coordinate in the `upgrades` list supplied to you, as
 `group:artifact:version`. Set that exact version — in `<dependencyManagement>` if the artifact is
@@ -154,7 +174,9 @@ Check 1 — Java 21 and BOM coherence (25 pts):
 `maven.compiler.release` is 21 and old source/target properties are gone. The Spring Framework,
 Spring Security, Jackson and JUnit BOMs are imported, and **no hand-pinned version remains for
 anything they manage**. A surviving pinned Spring or Jackson version scores 0 — it silently
-overrides the BOM and reintroduces version skew. **Any `org.springframework.boot` coordinate or
+overrides the BOM and reintroduces version skew. **A `<dependencyManagement>` entry with no
+`<version>` scores 0** — it shadows the BOM's version with none and Maven will not read the pom.
+**Any `org.springframework.boot` coordinate or
 `spring-boot-maven-plugin` scores 0 for this check** — Boot is not part of this target.
 
 Check 2 — Jakarta coordinates complete (20 pts):
@@ -170,7 +192,9 @@ Every coordinate on the supplied `eliminates` list is gone, every coordinate on 
 exactly the requested version, and **nothing outside those lists changed**. Removing an extra
 dependency scores 0 — it breaks the build gate for a pack that has not run yet. An `upgrades`
 entry left at its old version also scores 0: the pack that requested it is about to migrate code
-against an API that is not on the classpath.
+against an API that is not on the classpath. So does removing `junit:junit` or `mockito-all`
+without `junit-jupiter`, `mockito-core` 5.x and `mockito-junit-jupiter` in their place — the
+migrated tests cannot compile.
 
 Check 5 — Packaging and scopes preserved (15 pts):
 Packaging type is unchanged (`war` stays `war`, `ear` stays `ear`), the module list and its order

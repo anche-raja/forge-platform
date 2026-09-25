@@ -455,7 +455,7 @@ def _tree_rel(path: str, tree: str) -> str:
 def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeConfig, *, dry_run: bool = False,
                   single_file: Optional[str] = None, resume: bool = False, no_metrics: bool = False,
                   run_acceptance: bool = False, acceptance_build: bool = False, with_tests: bool = False,
-                  run_tests: Optional[bool] = None, chain: bool = False,
+                  run_tests: Optional[bool] = None, chain: bool = False, in_place: bool = False,
                   on_event: OnEvent = None, cancel: Optional[threading.Event] = None) -> RunResult:
     """One phase over one project — what ``migrate.py --phase`` does.
 
@@ -475,6 +475,12 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     pack's result rather than the original file. Without it a second pack over
     the same files is refused (``PackOverlap``), because it would read the
     original and replace the first pack's work.
+
+    ``in_place`` is the chat's ``leader.migrate_on_branch``: every earlier pack's
+    output has already been committed into ``source_dir`` itself, so the units
+    are read from there -- no merged view, and no overlap refusal, since the
+    input already is the previous pack's result. Each unit gets its own
+    checkpoint thread per pack, because the path no longer differs between packs.
     """
     from forge.extract import clear_context_cache
     from forge.extract.selectors import is_generated_target
@@ -499,7 +505,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # means `write_output`'s relative paths still land correctly in output_dir.
     _chain_dir: Optional[tempfile.TemporaryDirectory] = None
     damaged: List[dict] = []
-    if chain and not resume:
+    if chain and not resume and not in_place:
         from forge.verify import syntax
         from forge.verify.merged_tree import MergedTree
 
@@ -556,7 +562,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     # build on it. Refused rather than merged — see run_manifest's docstring.
     # Chaining is the sanctioned answer, so it is exempt: overwriting is the
     # point when the input was that output.
-    if not dry_run and not chain:
+    if not dry_run and not chain and not in_place:
         clashes = run_manifest.conflicts(output_dir, phase, source_dir, [u for u, _ in units])
         if clashes:
             raise PackOverlap(run_manifest.refusal(phase, clashes))
@@ -570,7 +576,8 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     def one(i: int, file_path: str, generate: bool) -> dict:
         return run_file(app, config, state_manager, metrics, file_path=file_path, index=i, total=total,
                         phase=phase, dry_run=dry_run, source_dir=source_dir, output_dir=output_dir,
-                        generate=generate, on_event=progress)
+                        generate=generate, thread_id=f"{file_path}#{phase}" if in_place else None,
+                        on_event=progress)
 
     progress = _ProgressRelay(on_event)
     numbered = list(enumerate(units, start=1))
@@ -771,7 +778,8 @@ PROJECT_BUILD_NAME = "project-build.json"
 _BUILD_SECTION = "## Project build"
 
 
-def build_project(source_dir: str, output_dir: str, config: ForgeConfig, *, on_event: OnEvent = None) -> dict:
+def build_project(source_dir: str, output_dir: str, config: ForgeConfig, *, overlay: bool = True,
+                  on_event: OnEvent = None) -> dict:
     """Build the migrated project -- source with the output laid over it -- with its own build.
 
     The last check before landing, and the one that catches every file a pack
@@ -779,6 +787,11 @@ def build_project(source_dir: str, output_dir: str, config: ForgeConfig, *, on_e
     beside the report (``land_on_branch`` reads it), adds a section to the
     report, and emits one ``build`` event. Costs no model call. Never raises on
     a failed build; the result says what failed.
+
+    ``overlay=False`` builds ``source_dir`` as it stands: under
+    ``leader.migrate_on_branch`` the migration is already committed there, and
+    a fix the user made on the branch must be what gets built, not the output
+    copy FORGE wrote before it.
     """
     from forge.verify import project_build
     from forge.verify.merged_tree import MergedTree
@@ -787,8 +800,9 @@ def build_project(source_dir: str, output_dir: str, config: ForgeConfig, *, on_e
     out = Path(output_dir)
     emit(on_event, {"type": "build_start"})
     with tempfile.TemporaryDirectory(prefix="forge-build-") as tmp:
-        merged = MergedTree(source_dir, str(out) if out.is_dir() else None,
-                            deleted=run_manifest.deleted_paths(str(out)) if out.is_dir() else ())
+        layered = overlay and out.is_dir()
+        merged = MergedTree(source_dir, str(out) if layered else None,
+                            deleted=run_manifest.deleted_paths(str(out)) if layered else ())
         result = project_build.run(str(merged.materialize(tmp)), config)
 
     record = {

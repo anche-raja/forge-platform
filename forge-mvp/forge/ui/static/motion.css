@@ -1,0 +1,163 @@
+/* FORGE chat — the modern skin: surfaces, depth and motion.
+
+   Loaded after chat.css and only restyles: every selector here repeats the
+   specificity of the chat.css rule it overrides, and nothing here touches a
+   layout property chat.css calls load-bearing (min-width:0 down the chain, the
+   one scroller). Remove this file and the page still works, just plainer.
+
+   Motion rules:
+   - Only transform and opacity animate, so nothing reflows while it moves.
+   - A row animates in only when chat.js gave it `c-in`, which put() does for
+     what arrives now and never for a transcript redrawn on reload.
+   - prefers-reduced-motion switches every animation and transition off. */
+
+:root {
+  --ground: #f4f6f9; --panel: #ffffff; --ink: #151821; --muted: #667085;
+  --line: #e1e5ec; --line-soft: #edf0f4;
+  --accent: #0d6784; --accent-2: #1fa6bd; --accent-3: #5b7cfa; --accent-ink: #ffffff;
+  --grad: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 55%, var(--accent-3) 100%);
+  --tint: rgba(13, 103, 132, .08);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, .05), 0 1px 3px rgba(16, 24, 40, .06);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, .08), 0 2px 4px rgba(16, 24, 40, .04);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, .12), 0 4px 8px rgba(16, 24, 40, .05);
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  --spring: cubic-bezier(.34, 1.56, .64, 1);
+}
+
+html, body { font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+::selection { background: rgba(31, 166, 189, .22); }
+
+/* Thin scrollbars, so the transcript's scroller reads as part of the page. */
+body[data-step="chat"] * { scrollbar-width: thin; scrollbar-color: #c9ced8 transparent; }
+body[data-step="chat"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+body[data-step="chat"] ::-webkit-scrollbar-thumb { background: #c9ced8; border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+body[data-step="chat"] ::-webkit-scrollbar-thumb:hover { background-color: #a9b0bd; }
+
+/* ─── the mark ────────────────────────────────────────────────────────────── */
+body[data-step="chat"] .c-mark { background: var(--grad); background-size: 200% 200%; color: #fff; box-shadow: 0 2px 8px rgba(13, 103, 132, .28); }
+body[data-step="chat"] .steps .brand .c-mark { animation: c-sheen-bg 8s ease-in-out infinite; }
+/* The assistant's mark breathes while it is writing. */
+body[data-step="chat"] .c-live > .c-mark { animation: c-breathe 1.6s ease-in-out infinite; }
+
+/* ─── the rail ────────────────────────────────────────────────────────────── */
+body[data-step="chat"] .steps { background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); border-right-color: var(--line); }
+body[data-step="chat"] .steps .brand { align-items: center; }
+body[data-step="chat"] .steps .c-newchat { border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-sm); transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease), background-color .18s var(--ease); }
+body[data-step="chat"] .steps .c-newchat:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); border-color: var(--accent-2); background: var(--panel); }
+body[data-step="chat"] .steps .c-newchat:hover .c-plus { color: var(--accent); transform: rotate(90deg); }
+body[data-step="chat"] .steps .c-plus { display: inline-block; transition: transform .3s var(--spring), color .18s var(--ease); }
+body[data-step="chat"] .steps .c-spend b, body[data-step="chat"] .steps .c-packs b { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+body[data-step="chat"] .steps .jobbar { border-radius: 999px; border-color: var(--accent-2); background: var(--tint); animation: c-fade-in .3s var(--ease) both; }
+
+/* ─── the empty state ─────────────────────────────────────────────────────── */
+body[data-step="chat"] #c-empty > * { animation: c-rise .6s var(--ease) both; }
+body[data-step="chat"] #c-empty > :nth-child(2) { animation-delay: .08s; }
+body[data-step="chat"] #c-empty > :nth-child(3) { animation-delay: .16s; }
+body[data-step="chat"] #c-empty > :nth-child(4) { animation-delay: .24s; }
+body[data-step="chat"] #c-empty .c-markbig { width: 56px; height: 56px; font-size: 26px; border-radius: 18px; animation: c-rise .6s var(--ease) both, c-halo 3.2s ease-in-out .6s infinite, c-sheen-bg 8s ease-in-out infinite; }
+body[data-step="chat"] #c-empty h1 { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+body[data-step="chat"] .c-suggest button { border: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow-sm); animation: c-rise .5s var(--ease) both; transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease), color .18s var(--ease); }
+body[data-step="chat"] .c-suggest button:nth-child(1) { animation-delay: .3s; }
+body[data-step="chat"] .c-suggest button:nth-child(2) { animation-delay: .36s; }
+body[data-step="chat"] .c-suggest button:nth-child(3) { animation-delay: .42s; }
+body[data-step="chat"] .c-suggest button:nth-child(4) { animation-delay: .48s; }
+body[data-step="chat"] .c-suggest button:nth-child(n+5) { animation-delay: .54s; }
+body[data-step="chat"] .c-suggest button:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--accent-2); color: var(--accent); }
+
+/* ─── arriving rows ───────────────────────────────────────────────────────── */
+body[data-step="chat"] #c-items > .c-in { animation: c-rise .38s var(--ease) both; }
+body[data-step="chat"] #c-items > .c-user.c-in { animation-name: c-from-right; }
+body[data-step="chat"] #c-items > .c-card.c-in { animation-name: c-card-in; animation-duration: .45s; }
+
+/* ─── messages ────────────────────────────────────────────────────────────── */
+body[data-step="chat"] .c-user > div { background: var(--grad); color: #fff; border-radius: 18px 18px 6px 18px; box-shadow: 0 4px 14px rgba(13, 103, 132, .22); }
+body[data-step="chat"] .c-user .c-md { color: #fff; }
+body[data-step="chat"] .c-user .c-md code { background: rgba(255, 255, 255, .18); color: #fff; }
+body[data-step="chat"] .c-user .c-md a { color: #fff; }
+body[data-step="chat"] .c-md code { background: #eef1f6; border-radius: 5px; }
+body[data-step="chat"] .c-md pre { background: #f8fafc; border-color: var(--line); border-radius: 12px; }
+body[data-step="chat"] .c-live .c-tail > :last-child::after { background: var(--grad); border-radius: 2px; }
+body[data-step="chat"] .c-dots i { background: var(--accent-2); }
+body[data-step="chat"] .c-note { border-left-color: var(--accent-2); }
+
+/* ─── tool rows ───────────────────────────────────────────────────────────── */
+body[data-step="chat"] .c-tool { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-sm); transition: box-shadow .2s var(--ease), border-color .2s var(--ease); }
+body[data-step="chat"] .c-tool:hover { box-shadow: var(--shadow-md); }
+/* A light sweep across a row whose tool is still running. */
+body[data-step="chat"] .c-tool.c-running { border-color: rgba(31, 166, 189, .45); }
+body[data-step="chat"] .c-tool.c-running::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(100deg, transparent 20%, rgba(31, 166, 189, .09) 50%, transparent 80%); transform: translateX(-100%); animation: c-sweep 2.2s ease-in-out infinite; }
+body[data-step="chat"] .c-spin { border-color: var(--line-soft); border-top-color: var(--accent-2); border-right-color: var(--accent); }
+/* The finished mark pops in -- only on a row that arrived live. */
+body[data-step="chat"] .c-in .c-mk { display: inline-block; animation: c-pop .45s var(--spring) both; }
+body[data-step="chat"] .c-toolbody { animation: c-fade-in .22s var(--ease) both; }
+body[data-step="chat"] .c-toolhead .c-caret { transition: transform .22s var(--spring), color .18s var(--ease); }
+
+/* Progress: a gradient that flows while the pack is still running. */
+body[data-step="chat"] .c-prog .progress { background: var(--line-soft); height: 4px; border-radius: 999px; }
+body[data-step="chat"] .c-prog .progress div { background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent-3), var(--accent)); background-size: 300% 100%; border-radius: 999px; transition: width .5s var(--ease); }
+body[data-step="chat"] .c-running .c-prog .progress div { animation: c-flow 2.4s linear infinite; }
+
+/* ─── cards ───────────────────────────────────────────────────────────────── */
+body[data-step="chat"] .c-card { border-color: var(--line); border-radius: 14px; box-shadow: var(--shadow-sm); transition: box-shadow .22s var(--ease), border-color .22s var(--ease), opacity .3s var(--ease); }
+body[data-step="chat"] .c-card:hover { box-shadow: var(--shadow-md); }
+body[data-step="chat"] .c-card .chips li { transition: transform .18s var(--ease), border-color .18s var(--ease); }
+body[data-step="chat"] .c-card .chips li:hover { transform: translateY(-1px); border-color: var(--accent-2); }
+body[data-step="chat"] .c-card .tbl tr { transition: background-color .15s var(--ease); }
+body[data-step="chat"] .c-card .tbl tbody tr:hover { background: #f8fafc; }
+/* The card that asks for money glows a few times when it arrives, then stays
+   still. Repeats the #c-items rule's specificity, or that rule would win. */
+body[data-step="chat"] .c-card.c-confirm { background: linear-gradient(180deg, #fffaf0 0%, #fff4dc 100%); border-color: #efd9a3; }
+body[data-step="chat"] #c-items > .c-card.c-confirm.c-in { animation: c-card-in .45s var(--ease) both, c-attention 2.2s ease-in-out .5s 3; }
+body[data-step="chat"] .c-diff { border-radius: 10px 10px 0 0; }
+body[data-step="chat"] .c-diff:last-child { border-radius: 10px; }
+body[data-step="chat"] .c-seg { border-radius: 10px; box-shadow: var(--shadow-sm); }
+body[data-step="chat"] .c-segbtn.on { background: var(--grad); }
+body[data-step="chat"] details > summary { transition: color .15s var(--ease); }
+body[data-step="chat"] details[open] > :not(summary) { animation: c-fade-in .25s var(--ease) both; }
+
+/* ─── buttons ─────────────────────────────────────────────────────────────── */
+body[data-step="chat"] #step-chat button:not(.c-toolhead):not(.c-segbtn):not(.c-round):not(.c-diffmore) { transition: transform .18s var(--ease), box-shadow .18s var(--ease), border-color .18s var(--ease), background-color .18s var(--ease), filter .18s var(--ease); }
+body[data-step="chat"] #step-chat button.primary, body[data-step="chat"] #step-chat .button.primary { background: var(--grad); border-color: transparent; box-shadow: 0 2px 8px rgba(13, 103, 132, .28); }
+body[data-step="chat"] #step-chat button.primary:hover:not([disabled]) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(13, 103, 132, .32); filter: brightness(1.05); }
+body[data-step="chat"] .c-act:hover:not([disabled]) { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+
+/* ─── the composer ────────────────────────────────────────────────────────── */
+body[data-step="chat"] #c-composer { background: linear-gradient(180deg, rgba(244, 246, 249, 0) 0%, var(--ground) 30%); }
+body[data-step="chat"] .c-field { border-radius: 20px; border-color: var(--line); box-shadow: var(--shadow-md); transition: border-color .2s var(--ease), box-shadow .25s var(--ease); }
+body[data-step="chat"] .c-field:focus-within { border-color: var(--accent-2); box-shadow: 0 0 0 4px rgba(31, 166, 189, .14), var(--shadow-lg); }
+body[data-step="chat"] .c-round { width: 34px; height: 34px; right: 8px; bottom: 8px; background: var(--grad); box-shadow: 0 2px 8px rgba(13, 103, 132, .3); transition: transform .25s var(--spring), box-shadow .2s var(--ease), opacity .2s var(--ease); }
+body[data-step="chat"] .c-round:hover:not([disabled]) { opacity: 1; transform: translateY(-1px) scale(1.06); box-shadow: 0 6px 16px rgba(13, 103, 132, .35); }
+body[data-step="chat"] .c-round:active:not([disabled]) { transform: scale(.92); }
+body[data-step="chat"] .c-round[disabled] { box-shadow: none; }
+/* Stop: dark, with a ring that keeps saying "a turn is running". */
+body[data-step="chat"] .c-stopper { background: var(--ink); animation: c-ring 1.8s ease-out infinite; }
+body[data-step="chat"] #c-notice:not([hidden]) { animation: c-rise .3s var(--ease) both; border-radius: 12px; }
+body[data-step="chat"] #c-notice.bad:not([hidden]) { animation: c-shake .42s var(--ease) both; }
+
+/* ─── the pill, the scrim and the apply bar ───────────────────────────────── */
+body[data-step="chat"] .c-pane::after { background: linear-gradient(to bottom, rgba(244, 246, 249, 0), var(--ground)); }
+body[data-step="chat"] .c-jump { border-radius: 999px; box-shadow: var(--shadow-lg); animation: c-jump-in .3s var(--spring) both; }
+body[data-step="chat"] #c-applybar { background: rgba(255, 255, 255, .92); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 -6px 20px rgba(16, 24, 40, .08); animation: c-slide-up .32s var(--ease) both; }
+
+/* ─── keyframes ───────────────────────────────────────────────────────────── */
+@keyframes c-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes c-from-right { from { opacity: 0; transform: translateX(14px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes c-card-in { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes c-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes c-pop { 0% { opacity: 0; transform: scale(.3); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes c-sweep { to { transform: translateX(100%); } }
+@keyframes c-flow { from { background-position: 0% 0; } to { background-position: 300% 0; } }
+@keyframes c-sheen-bg { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+@keyframes c-breathe { 0%, 100% { transform: scale(1); box-shadow: 0 2px 8px rgba(13, 103, 132, .28); } 50% { transform: scale(1.08); box-shadow: 0 0 0 6px rgba(31, 166, 189, .12); } }
+@keyframes c-halo { 0%, 100% { box-shadow: 0 4px 18px rgba(13, 103, 132, .3), 0 0 0 0 rgba(31, 166, 189, .25); } 50% { box-shadow: 0 6px 24px rgba(13, 103, 132, .35), 0 0 0 12px rgba(31, 166, 189, 0); } }
+@keyframes c-attention { 0%, 100% { box-shadow: var(--shadow-sm), 0 0 0 0 rgba(224, 168, 60, 0); } 50% { box-shadow: var(--shadow-md), 0 0 0 5px rgba(224, 168, 60, .22); } }
+@keyframes c-ring { 0% { box-shadow: 0 0 0 0 rgba(21, 24, 33, .35); } 100% { box-shadow: 0 0 0 10px rgba(21, 24, 33, 0); } }
+@keyframes c-shake { 0%, 100% { transform: none; } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(2px); } }
+@keyframes c-jump-in { from { opacity: 0; transform: translate(-50%, 10px) scale(.95); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes c-slide-up { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  body[data-step="chat"] *, body[data-step="chat"] *::before, body[data-step="chat"] *::after {
+    animation: none !important; transition: none !important;
+  }
+}

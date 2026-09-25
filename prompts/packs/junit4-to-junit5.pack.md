@@ -16,6 +16,7 @@ depends_on: [java8-to-java21]
 decisions: []
 eliminates:
   - "junit:junit"
+  - "org.mockito:mockito-all"
 acceptance:
   - no_match: 'org\.junit\.(Test|Before|After|Ignore|runner|Assert)'
     scope: "**/src/test/java/**/*.java"

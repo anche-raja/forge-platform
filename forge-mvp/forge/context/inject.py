@@ -1,6 +1,7 @@
 """Find and render the context block for the unit a graph node is working on."""
 
-from typing import Optional, Set, Tuple
+from pathlib import Path
+from typing import List, Optional, Set, Tuple
 
 from forge.config import ForgeConfig
 from forge.context.render import DEFAULT_MAX_CHARS, context_digest, render_context
@@ -61,6 +62,77 @@ def decisions_block(state: ForgeState, config: ForgeConfig) -> Optional[str]:
         return None
     return ("PROJECT DECISIONS (fixed for this project; a rule that depends on one of these means this value):\n"
             + "\n".join(lines))
+
+
+def plan_packs(state: ForgeState, config: ForgeConfig) -> Optional[List[str]]:
+    """The packs this run belongs to, or None when nothing says.
+
+    The chat's plan first (``plan_packs``, set by the leader from the packs
+    discovery selected), then the ``packs:`` list of the ``forge-profile.yaml``
+    discovery wrote into the output directory -- the file a CLI user edits to
+    skip a pack.
+    """
+    chosen = config.get("plan_packs")
+    if isinstance(chosen, (list, tuple)):
+        return [str(p) for p in chosen]
+    out = state.get("output_dir")
+    if not out:
+        return None
+    import yaml
+
+    from forge.discover.emit import PROFILE_YAML
+
+    try:
+        data = yaml.safe_load((Path(out) / PROFILE_YAML).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    packs = data.get("packs") if isinstance(data, dict) else None
+    return [str(p) for p in packs if p] if isinstance(packs, list) else None
+
+
+def coordinates_block(state: ForgeState, config: ForgeConfig) -> Optional[str]:
+    """For a build-tier pack: the ``eliminates`` and ``upgrades`` the plan's other packs declare.
+
+    "A pack declares the coordinate changes its technology requires, and the
+    build pack applies them" (forge/packs/spec.py) -- but until this block the
+    lists were parsed and never sent, so the build pack's "remove every
+    coordinate in the eliminates list supplied to you" had no list. It guessed:
+    on AMS it dropped junit:junit with nothing in its place and left Struts on
+    6.8.0 under code the Struts pack had moved to 7.3.0.
+
+    Only runnable packs of the plan count: a pack the plan set aside, or one
+    that cannot run yet, migrates no code, so the build must not change its
+    coordinates. Empty lists are said, so an empty list is not read as a gap to
+    fill. No plan at all (a bare ``--phase`` run with no profile) gives no
+    block, with a warning.
+    """
+    from forge.utils.file_scanner import runnable_phases
+
+    fs = state["current_file"]
+    spec = get_phase(state.get("phase") or fs.get("phase") or "java21")
+    if getattr(spec, "tier", None) != "build":
+        return None
+    packs = plan_packs(state, config)
+    if packs is None:
+        _warn_once("coordinates:no-plan", "no plan and no forge-profile.yaml: the build pack runs without the "
+                                          "eliminates/upgrades the other packs declare")
+        return None
+    runnable = set(runnable_phases())
+    eliminates: List[str] = []
+    upgrades: List[str] = []
+    for pack_id in dict.fromkeys(packs):
+        if pack_id not in runnable:
+            continue
+        try:
+            other = get_phase(pack_id)
+        except ValueError:
+            continue
+        eliminates += [f"- {c}   (for {pack_id})" for c in getattr(other, "eliminates", ()) or ()]
+        upgrades += [f"- {c}   (for {pack_id})" for c in getattr(other, "upgrades", ()) or ()]
+    return "\n".join(
+        ["DEPENDENCY CHANGES THE PACKS IN THIS PLAN REQUIRE (Rules 3 and 4 act on exactly these; add nothing):",
+         "eliminates:"] + (eliminates or ["- none"])
+        + ["upgrades:"] + (upgrades or ["- none"]))
 
 
 def context_block_for(state: ForgeState, config: ForgeConfig) -> Tuple[Optional[str], Optional[str]]:

@@ -16,6 +16,12 @@ is the human's signature on someone else's code.
 and the pull request each wait for a click. On, a plan whose build passed is
 landed on ``<branch_prefix>-<timestamp>`` and its pull request opened with no
 click -- through the same handlers and the same refusals.
+
+``migrate_on_branch`` moves the branch to the start. The first pack of a chat
+creates ``<branch_prefix>-<timestamp>``, every pack's files are copied into the
+repository and committed there (one commit per pack), the build at the end is
+of the repository itself, and with ``auto_publish`` the pull request is opened
+whatever the build said -- as a draft when it did not pass.
 """
 
 from dataclasses import dataclass
@@ -65,6 +71,7 @@ class LeaderSettings:
     history_messages: int = DEFAULT_HISTORY_MESSAGES
     auto_publish: bool = False
     branch_prefix: str = DEFAULT_BRANCH_PREFIX
+    migrate_on_branch: bool = False
 
     @classmethod
     def from_config(cls, config) -> "LeaderSettings":
@@ -82,4 +89,5 @@ class LeaderSettings:
             history_messages=_int(block.get("history_messages"), DEFAULT_HISTORY_MESSAGES, minimum=4),
             auto_publish=_bool(block.get("auto_publish")),
             branch_prefix=str(block.get("branch_prefix") or "").strip().strip("/-") or DEFAULT_BRANCH_PREFIX,
+            migrate_on_branch=_bool(block.get("migrate_on_branch")),
         )

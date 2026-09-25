@@ -63,6 +63,15 @@
   function obj(v) { return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; }
   function arr(v) { return Array.isArray(v) ? v : []; }
 
+  // Every row of the transcript goes in through here. Something that arrives
+  // now gets `c-in`, which motion.css animates in; a transcript redrawn on
+  // reload is history, and fifty cards rising at once would be noise.
+  function put(el) {
+    if (!C.replaying) el.classList.add('c-in');
+    $('c-items').appendChild(el);
+    return el;
+  }
+
   // ─── minimal markdown, escaped first ──────────────────────────────────────
   // Deliberately tiny: bold, inline code, fenced blocks, dash lists, paragraphs.
   // No links, no images, no headings, no raw HTML pass-through — a model that
@@ -116,6 +125,7 @@
     id: '',                 // conversation id, mirrored into localStorage
     es: null, jobId: null,  // the turn this tab is following
     busy: false, booted: false, stick: true,
+    replaying: false,       // true while reload() redraws the transcript: nothing animates in
     unitCost: 0,            // from the last estimate card; drives the running cost
     queue: { run: '', keys: {} },   // the review queue the live cards belong to
     cards: {},              // card_id -> {card, el}
@@ -294,8 +304,13 @@
     }
     if (data) bindProject(data);
     await reconcileQueue();
-    if (data) draw(data);
-    else spend(null, null);
+    C.replaying = true;
+    try {
+      if (data) draw(data);
+      else spend(null, null);
+    } finally {
+      C.replaying = false;
+    }
     $('c-empty').hidden = !!(data && (data.transcript || []).length);
     chips();
     railPath();
@@ -375,7 +390,7 @@
     var body = node('div', 'c-md c-blocks');
     body.textContent = text;
     box.appendChild(body); row.appendChild(box);
-    $('c-items').appendChild(row);
+    put(row);
     $('c-empty').hidden = true;
     C.ghost = row;         // dropGhost() has nothing to remove without this
     fit(true);
@@ -498,7 +513,7 @@
     setBusy(false);
     var p = node('p', 'c-note bad');
     p.textContent = 'That turn failed: ' + str(d.error);
-    $('c-items').appendChild(p);
+    put(p);
     window.FORGE.health();
   }
 
@@ -544,7 +559,7 @@
     var tail = node('div', 'c-tail c-blocks');
     body.appendChild(dots); body.appendChild(done); body.appendChild(tail);
     root.appendChild(mark); root.appendChild(body);
-    $('c-items').appendChild(root);
+    put(root);
     return { buf: '', cut: 0, seen: '', text: null, root: root, dots: dots, done: done, tail: tail };
   }
 
@@ -611,7 +626,7 @@
     m.dots.hidden = true;
     html(m.done, md(m.buf));
     html(m.tail, '');
-    m.root.className = 'c-assistant';
+    m.root.classList.remove('c-live');
     m.root.hidden = !m.buf;
   }
 
@@ -633,13 +648,13 @@
     var body = node('div', 'c-md c-blocks');
     html(body, md(text));
     box.appendChild(body); row.appendChild(box);
-    $('c-items').appendChild(row);
+    put(row);
   }
 
   function simpleNote(text, bad) {
     var p = node('p', bad ? 'c-note bad' : 'c-note');
     p.textContent = text;
-    $('c-items').appendChild(p);
+    put(p);
   }
 
   // ─── tool rows ────────────────────────────────────────────────────────────
@@ -653,7 +668,7 @@
   function toolStart(d, replayed) {
     var id = str(d.tool_id);
     if (C.tools[id]) return C.tools[id];
-    var el = node('div', 'c-tool');
+    var el = node('div', 'c-tool c-running');
     html(el,
       '<button type="button" class="c-toolhead" aria-expanded="false">'
       + '<span class="c-state"><span class="c-spin"></span></span>'
@@ -667,7 +682,7 @@
     var args = argsText(d.args);
     el.querySelector('.c-toolargs').textContent = args;   // model-written JSON, never markup
     el.querySelector('.c-toolargs').hidden = !args;
-    $('c-items').appendChild(el);
+    put(el);
 
     var head = el.querySelector('.c-toolhead'), body = el.querySelector('.c-toolbody');
     head.onclick = function () {
@@ -728,7 +743,9 @@
     var cls = d.needs_confirmation ? 'hold' : (ok ? 'ok' : 'no');
     html(t.state, '<span class="c-mk ' + cls + '">' + mark + '</span>');
     t.state.setAttribute('title', d.needs_confirmation ? 'waiting for you' : (ok ? 'done' : 'failed'));
-    t.el.className = ok ? 'c-tool' : 'c-tool bad';
+    // classList, not className: `c-in` may still be animating the row in.
+    t.el.classList.remove('c-running');
+    t.el.classList.toggle('bad', !ok);
     t.sum.textContent = str(d.summary);
     t.sum.hidden = !d.summary;
     if (t.total && t.done < t.total) t.done = t.total;
@@ -847,7 +864,7 @@
     var kind = str(card.kind);
     var el = node('div', 'card c-card');
     C.cards[id] = { id: id, card: card, el: el };
-    $('c-items').appendChild(el);
+    put(el);
 
     if (kind === 'plan') { planCard(el, card); adopt(card.discovery); }
     else if (kind === 'evidence') { evidenceCard(el, card); }

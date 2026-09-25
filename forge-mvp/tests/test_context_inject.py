@@ -276,3 +276,67 @@ def test_max_chars_from_config_bounds_the_block(tmp_path, module):
     assert block is not None and len(block) <= 1200, "max_chars is a guarantee, not a target"
     assert "OMITTED" in block and "## summary" in block and "migration-context.json" in block
     assert len(digest) == 64
+
+
+# ─── coordinates: what the plan's packs need the build pack to change ────────
+# The lists were parsed and never sent. On AMS the build pack guessed: it
+# dropped junit:junit with nothing in its place and left Struts on 6.8.0 under
+# code struts2-modernize had moved to 7.3.0, and neither module compiled.
+
+BUILD = "build-maven-modernize"
+
+
+def _pom_state(tmp_path, pack=BUILD):
+    pom = tmp_path / "pom.xml"
+    pom.write_text("<project/>\n", encoding="utf-8")
+    return make_state(str(pom), tmp_path, phase=pack)
+
+
+def test_the_build_pack_is_told_the_coordinates_the_plans_packs_need_changed(tmp_path):
+    from forge.context.inject import coordinates_block
+
+    config = write_config(tmp_path, plan_packs=[BUILD, "junit4-to-junit5", "struts2-modernize"])
+    block = coordinates_block(_pom_state(tmp_path), config)
+    assert "- junit:junit   (for junit4-to-junit5)" in block
+    assert "- org.apache.struts:struts2-core:7.3.0   (for struts2-modernize)" in block
+    assert "javax.servlet:javax.servlet-api" not in block, "javax-to-jakarta is not in this plan"
+
+
+def test_a_pack_outside_the_plan_changes_nothing_and_an_empty_list_says_none(tmp_path):
+    from forge.context.inject import coordinates_block
+
+    block = coordinates_block(_pom_state(tmp_path), write_config(tmp_path, plan_packs=[BUILD, "java8-to-java21"]))
+    assert "eliminates:\n- none" in block and "upgrades:\n- none" in block
+    assert "struts" not in block, "a plan that stays on Struts must not have its Struts upgraded"
+
+
+def test_without_a_chat_plan_the_profile_in_the_output_directory_is_the_plan(tmp_path):
+    from forge.context.inject import coordinates_block
+
+    out = tmp_path / "migrated"
+    out.mkdir()
+    (out / "forge-profile.yaml").write_text(
+        "packs:\n  - build-maven-modernize\n      # file pom.xml\n  - struts2-modernize   # a note\n",
+        encoding="utf-8")
+    block = coordinates_block(_pom_state(tmp_path), write_config(tmp_path))
+    assert "struts2-core:7.3.0" in block and "junit:junit" not in block
+
+
+def test_only_a_build_pack_gets_the_block_and_no_plan_means_no_block(tmp_path):
+    from forge.context.inject import coordinates_block
+
+    planned = write_config(tmp_path, plan_packs=["junit4-to-junit5", "struts2-modernize"])
+    assert coordinates_block(_pom_state(tmp_path, "struts2-modernize"), planned) is None
+    assert coordinates_block(_pom_state(tmp_path), write_config(tmp_path)) is None
+
+
+def test_the_coordinates_reach_the_build_packs_transform_prompt(tmp_path):
+    out = tmp_path / "migrated"
+    out.mkdir()
+    (out / "forge-profile.yaml").write_text("packs:\n  - build-maven-modernize\n  - junit4-to-junit5\n",
+                                            encoding="utf-8")
+    pom = tmp_path / "pom.xml"
+    pom.write_text("<project><dependencies/></project>\n", encoding="utf-8")
+    human, _ = _transform(tmp_path, str(pom), BUILD)
+    assert "DEPENDENCY CHANGES THE PACKS IN THIS PLAN REQUIRE" in human
+    assert "- junit:junit   (for junit4-to-junit5)" in human

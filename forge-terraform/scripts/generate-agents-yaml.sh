@@ -160,6 +160,9 @@ dynamodb_checkpoint_table: "${CHECKPOINT_TABLE}"
 # ─── Bedrock Guardrails ───────────────────────────────────────────────────────
 guardrail_id: "${GUARDRAIL_ID}"
 guardrail_version: "${GUARDRAIL_VERSION}"
+# block: an intervention on the source BLOCKS the file, one on the output holds
+# it for review. warn: the finding is recorded and the file is migrated anyway.
+guardrail_action: block
 
 # ─── CloudWatch ───────────────────────────────────────────────────────────────
 cloudwatch_namespace: "FORGE/Migration"
@@ -235,6 +238,13 @@ leader:
   # tools). false: both wait for a click on their card.
   auto_publish: false
   branch_prefix: "forge/migration"
+  # true: the first pack of a chat creates <branch_prefix>-<timestamp>, every
+  # pack's files replace the originals in the repository and are committed
+  # there (one commit per pack), and the build at the end is of the repository
+  # itself. With auto_publish the pull request opens whatever the build said,
+  # as a draft when it did not pass. false: FORGE writes only its output
+  # folder, and land_on_branch copies it onto a branch at the end.
+  migrate_on_branch: false
 
 # ─── The secret gate ──────────────────────────────────────────────────────────
 # Local, deterministic, and ahead of EVERY remote call — ApplyGuardrail included.
