@@ -404,9 +404,16 @@ never edits the build file: the test dependencies a generated test needs are *re
 The prompt's first rule is "never invent API", which is why `forge/testgen/context.py` supplies the
 collaborators' public signatures and the test libraries the build actually carries.
 
-**The file writer treats model output as untrusted.** Destination paths come from the LLM, so
-`write_output` refuses anything resolving outside `output_dir`, and reconstructs the package path
-from the source's own `package` declaration when the model returns a bare filename.
+**The file writer treats model output as untrusted, and the path key as a hint.** Destination paths
+come from the LLM, so `write_output` refuses anything resolving outside `output_dir`. The key a model
+returns for a rewritten file varies by model: the original path, the original path with its leading
+slash lost (`Users/raja/...`), the path from the module root (`src/test/java/...`), a path missing one
+directory, or a bare filename — on AMS the JUnit pack committed three tests at three of those and the
+build failed on the JUnit 4 originals left behind. So the unit's own rewrite (one file returned,
+nothing in `deleted_files`) lands at the unit's own path whatever the key says; any other key whose
+tail matches exactly one existing source file (`_source_index`, cached per source tree) goes to that
+file; a bare filename is rebuilt from its `package` declaration and matched the same way; a rename is
+what `deleted_files` is for. `tests/test_writer_destinations.py` pins each shape.
 
 ## Specs
 - `forge-terraform/SPEC.md` — the build prompt that directory came from

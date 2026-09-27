@@ -1,9 +1,28 @@
+"""Where a transformed file lands. The model's path key is a hint, never the answer.
+
+A migration puts a rewritten file back where it came from. The key the model
+returns for it varies by model and by mood: the original path, the original
+path with its leading slash lost (``Users/raja/...``), the path from the module
+root instead of the reactor root (``src/test/java/...``), a path missing one
+directory (``AssetManagementInternalWeb/src/...``), or a bare filename. On AMS
+the JUnit pack committed three tests at three of those, and the build failed
+on the two originals it had left behind.
+
+So the unit's own rewrite goes to the unit's own path, whatever the key says;
+any other key that names the tail of exactly one existing source file goes to
+that file; a bare filename is rebuilt from its package and matched the same
+way; and nothing may escape the output directory.
+"""
+
+import os
 import re
 import shutil
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from forge.state import ForgeState
+from forge.utils.fs import prune_dirs
 from forge.utils.java_checks import declared_package
 from forge.utils.telemetry import get_logger
 
@@ -13,6 +32,7 @@ _PUBLIC_TYPE_RE = re.compile(
     r"^\s*(?:public\s+)?(?:final\s+|abstract\s+|sealed\s+)*(?:class|interface|enum|record)\s+(\w+)",
     re.MULTILINE,
 )
+_ARTIFACT_DIRS = ("target", "build", ".git", "node_modules", ".idea")
 
 
 def _package_relative_path(content: str) -> Optional[Path]:
@@ -29,6 +49,35 @@ def _package_relative_path(content: str) -> Optional[Path]:
     return Path("src/main/java", *pkg.split("."), f"{type_name.group(1)}.java")
 
 
+@lru_cache(maxsize=16)
+def _source_index(source_dir: str) -> Dict[str, Tuple[str, ...]]:
+    """``basename -> relative paths`` of every file under ``source_dir``, FORGE output and build dirs pruned.
+
+    Cached per source tree: a run never mutates its source (output goes to
+    ``output_dir``), and one walk serves every unit of the run.
+    """
+    index: Dict[str, List[str]] = {}
+    root = Path(source_dir)
+    for dirpath, dirs, files in os.walk(root):
+        prune_dirs(dirpath, dirs, also=_ARTIFACT_DIRS)
+        for name in files:
+            rel = Path(dirpath, name).relative_to(root).as_posix()
+            index.setdefault(name, []).append(rel)
+    return {name: tuple(sorted(paths)) for name, paths in index.items()}
+
+
+def clear_source_index() -> None:
+    _source_index.cache_clear()
+
+
+def _match_existing(rel: Path, source_dir: Path) -> Optional[Path]:
+    """The one existing source file whose path ends with ``rel``, if there is exactly one."""
+    candidates = _source_index(str(source_dir)).get(rel.name, ())
+    tail = rel.as_posix().lstrip("./")
+    matches = [c for c in candidates if c == tail or c.endswith("/" + tail)]
+    return Path(matches[0]) if len(matches) == 1 else None
+
+
 def _resolve_relative(file_path: str, content: str, source_dir: Path) -> Path:
     raw = Path(file_path)
     if raw.is_absolute():
@@ -38,16 +87,27 @@ def _resolve_relative(file_path: str, content: str, source_dir: Path) -> Path:
         except ValueError:
             # Absolute but outside source_dir — fall back to the declared package.
             return _package_relative_path(content) or Path(abs_src.name)
-    # Already relative: treat as relative to the project root, but only if it
-    # carries directory structure. A bare name loses the package, so rebuild it.
     if raw.parent != Path("."):
-        return raw
-    return _package_relative_path(content) or raw
+        # An absolute path that lost its leading slash still names a source file.
+        try:
+            return (Path("/") / raw).resolve().relative_to(source_dir)
+        except ValueError:
+            pass
+        if (source_dir / raw).is_file():
+            return raw
+        # A path from the module root, or missing a directory: the tail of one
+        # existing file is that file.
+        return _match_existing(raw, source_dir) or raw
+    # A bare name loses the package, so rebuild it, then find its module.
+    by_package = _package_relative_path(content)
+    if by_package is not None:
+        return _match_existing(by_package, source_dir) or by_package
+    return _match_existing(raw, source_dir) or raw
 
 
 def resolve_relative(file_path: str, content: str, source_dir: str) -> Path:
     """Public name for the destination-path rule; the review queue keys transformed files by it."""
-    return _resolve_relative(file_path, content, source_dir)
+    return _resolve_relative(file_path, content, Path(source_dir).resolve())
 
 
 # Held units wait here, inside output_dir, until a human approves them. Inside
@@ -60,17 +120,29 @@ def staging_root(output_dir: str) -> Path:
     return Path(output_dir).resolve() / STAGING_DIR
 
 
-def write_files(files: Mapping[str, str], source_dir: str, dest_root: Path) -> List[str]:
+def write_files(files: Mapping[str, str], source_dir: str, dest_root: Path, *,
+                unit_path: Optional[str] = None, deleted: Sequence[str] = ()) -> List[str]:
     """Write ``files`` (model-keyed path → content) under ``dest_root``, preserving package paths.
 
     The key comes from model output; it is never allowed to escape ``dest_root``.
-    Returns the absolute paths written.
+    When the transform returned one file for the unit at ``unit_path`` and
+    retired nothing, that file *is* the unit's rewrite and lands at the unit's
+    own path whatever the key says; a rename or move is what ``deleted``
+    is for. Returns the absolute paths written.
     """
     dest_root = Path(dest_root).resolve()
     src = Path(source_dir).resolve()
     written: List[str] = []
+    own_rel: Optional[Path] = None
+    if unit_path and len(files) == 1 and not deleted:
+        try:
+            own_rel = Path(unit_path).resolve().relative_to(src)
+        except ValueError:
+            own_rel = None
     for file_path, content in files.items():
-        rel_path = _resolve_relative(file_path, content, src)
+        rel_path = own_rel if own_rel is not None else _resolve_relative(file_path, content, src)
+        if own_rel is not None and Path(file_path).name != own_rel.name:
+            _log.info("Transform keyed %s as %s; written at the unit's own path", own_rel, file_path)
         dest = (dest_root / rel_path).resolve()
         if not dest.is_relative_to(dest_root):
             _log.error("Refusing to write outside %s: %s -> %s", dest_root, file_path, dest)
@@ -87,18 +159,31 @@ def _files_from(state: ForgeState) -> Mapping[str, str]:
     return out.get("files", {}) if isinstance(out, dict) else {}
 
 
+def _unit_of(state: ForgeState) -> Tuple[Optional[str], Sequence[str]]:
+    """``(the unit's own path or None for a generated target, what it retired)``."""
+    fs = state["current_file"]
+    out = fs.get("transform_output") or {}
+    deleted = out.get("deleted_files") if isinstance(out, dict) else None
+    unit = None if fs.get("generate") else fs.get("file_path")
+    return unit, list(deleted or [])
+
+
 def write_output(state: ForgeState) -> List[str]:
     """Write transformed files to output_dir. No-op returning [] when dry_run=True."""
     if state.get("dry_run"):
         return []
-    return write_files(_files_from(state), state["source_dir"], Path(state["output_dir"]))
+    unit, deleted = _unit_of(state)
+    return write_files(_files_from(state), state["source_dir"], Path(state["output_dir"]),
+                       unit_path=unit, deleted=deleted)
 
 
 def stage_output(state: ForgeState) -> List[str]:
     """Write transformed files to the staging tree instead — held for a human."""
     if state.get("dry_run"):
         return []
-    return write_files(_files_from(state), state["source_dir"], staging_root(state["output_dir"]))
+    unit, deleted = _unit_of(state)
+    return write_files(_files_from(state), state["source_dir"], staging_root(state["output_dir"]),
+                       unit_path=unit, deleted=deleted)
 
 
 def promote_staged(output_dir: str, held_paths: Sequence[str]) -> List[str]:
