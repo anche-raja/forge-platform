@@ -7,7 +7,15 @@ detect:
   any:
     - file_glob: "**/pom.xml"
 applies_to:
-  - file_glob: "**/pom.xml"
+  # By content, not by name: a pom with nothing to modernize — an aggregator
+  # that only names its parent and its modules — is not sent. The transform
+  # had nothing to change in it, and the reviewer, asked to score five checks
+  # on a file none of them apply to, scored both AMS aggregators 0 and sent
+  # them to a human. A pom that declares dependencies, management, a build,
+  # properties or profiles is where the rules have something to act on.
+  - content_match:
+      glob: "**/pom.xml"
+      pattern: '<(dependencies|dependencyManagement|build|pluginManagement|properties|profiles|reporting)\b'
 context: reactor
 depends_on: []
 decisions: [runtime, container]
