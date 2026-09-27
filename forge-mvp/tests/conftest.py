@@ -119,6 +119,8 @@ context:
   max_chars: 60000
 test_generation:
   enabled: true
+  # The mocked suite never runs Maven; tests/test_testgen_compile_gate.py injects its build.
+  compile_gate: false
   style: junit5
   pass_threshold: 75
   retry_threshold: 50

@@ -63,6 +63,10 @@ class BuildResult:
     tail: List[str] = field(default_factory=list)
     java_home: Optional[str] = None
     seconds: float = 0.0
+    # The failing step's whole output, paths relative to the project. The tail
+    # is what a report shows; the compile gate after test generation needs
+    # every javac line, and a module with many errors has more than a tail.
+    output: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -277,7 +281,7 @@ def run(root: str, config, *, runner=subprocess.run) -> BuildResult:
             tail = [ln for ln in text.strip().splitlines() if ln.strip() not in ("[ERROR]", "")][-TAIL_LINES:]
             return BuildResult("fail", f"{step.label} failed (exit {proc.returncode})", steps=steps,
                                failed_step=step.label, tail=tail, java_home=java_home,
-                               seconds=round(time.monotonic() - started, 1))
+                               seconds=round(time.monotonic() - started, 1), output=text)
     return BuildResult("pass", f"{len(steps)} step(s) built", steps=steps, java_home=java_home,
                        seconds=round(time.monotonic() - started, 1))
 

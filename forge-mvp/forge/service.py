@@ -12,6 +12,8 @@ patch them before they are first bound.
 """
 
 import json
+import re
+import shutil
 import tempfile
 import threading
 import time
@@ -1102,6 +1104,15 @@ def generate_tests(source_dir: str, output_dir: str, config: ForgeConfig, *, dry
         finally:
             runner.close()
 
+    # A generated test that does not compile breaks every build after it. With
+    # run_tests off nothing had compiled them before they were written: on AMS
+    # two of 40 named members that did not exist or were protected, and the
+    # plan's own build failed on them. One build with tests compiled, and each
+    # test the compiler names is held instead.
+    if units and not dry_run and _testgen_compile_gate_enabled(config):
+        _hold_generated_tests_that_do_not_compile(units, source_dir, str(output_root), config,
+                                                  deleted=deleted, on_event=on_event)
+
     record = build_record(units, scan.skipped, source_dir=source_dir, output_dir=str(output_root),
                           style=settings.style, dry_run=dry_run, bedrock_calls=bedrock_calls, cost_usd=cost)
     record_path = write_record(str(output_root), record)
@@ -1115,6 +1126,95 @@ def generate_tests(source_dir: str, output_dir: str, config: ForgeConfig, *, dry
         units=units, skipped=list(scan.skipped), totals=totals,
         paths={"report": str(report_path), "record": str(record_path)}, record=record, cancelled=cancelled,
     )
+
+
+COMPILE_GATE_ROUNDS = 3
+_JAVAC_ERROR_LINE = re.compile(r"\[ERROR\]\s+(?P<path>\S+?\.java):\[(?P<line>\d+),(?P<col>\d+)\]\s*(?P<msg>.*)")
+
+
+def _testgen_compile_gate_enabled(config) -> bool:
+    block = (config.get("test_generation") if config is not None else None) or {}
+    return bool(block.get("compile_gate", True))
+
+
+def _hold_generated_tests_that_do_not_compile(units: List[dict], source_dir: str, output_dir: str, config,
+                                              *, deleted: Sequence[str] = (), on_event: OnEvent = None,
+                                              build=None) -> List[str]:
+    """Build the tree with the generated tests in it; hold every generated test the compiler names.
+
+    The build is the project's own (``project_build``), over the source with
+    the output laid on top, so the tests compile against the migrated classes.
+    A test the compiler names is moved to ``.forge-staging/`` with the error
+    as its hold reason and forgotten from the manifest -- it is not written,
+    not synced, not committed. Then the build runs again, because a module
+    only compiles after the one before it, up to ``COMPILE_GATE_ROUNDS``
+    times. A failure that names no generated test is not this gate's to
+    judge; the plan's build verdict reports it. No Maven, no gate.
+    """
+    from forge.testgen.writer import forget_written
+    from forge.utils.file_writer import staging_root
+    from forge.verify import project_build
+    from forge.verify.merged_tree import MergedTree
+
+    build = build or project_build.run
+    out_root = Path(output_dir).resolve()
+    held: List[str] = []
+    for round_no in range(1, COMPILE_GATE_ROUNDS + 1):
+        candidates = {}
+        for unit in units:
+            if unit.get("status") != "GENERATED":
+                continue
+            for written in unit.get("written_paths") or []:
+                try:
+                    candidates[Path(written).resolve().relative_to(out_root).as_posix()] = unit
+                except ValueError:
+                    continue
+        if not candidates:
+            return held
+        with tempfile.TemporaryDirectory(prefix="forge-testgate-") as tmp:
+            merged = MergedTree(str(Path(source_dir).resolve()), str(out_root), deleted=list(deleted))
+            result = build(str(merged.materialize(tmp)), config)
+        if result.outcome == "skip":
+            # Nothing buildable, or no Maven: no gate, and no event either --
+            # a stream that carries no build should read exactly as before.
+            from forge.utils.telemetry import get_logger
+
+            get_logger(__name__).info("generated tests not compile-checked: %s", result.detail)
+            return held
+        if result.outcome == "pass":
+            emit(on_event, {"type": "testgen_compile_gate", "outcome": "pass", "round": round_no, "held": len(held)})
+            return held
+        broken: Dict[str, str] = {}
+        for line in (result.output or "\n".join(result.tail)).splitlines():
+            m = _JAVAC_ERROR_LINE.search(line)
+            if not m:
+                continue
+            path = m.group("path").replace("\\", "/")
+            for rel in candidates:
+                if path == rel or path.endswith("/" + rel):
+                    broken.setdefault(rel, f"{rel}:[{m.group('line')},{m.group('col')}] {m.group('msg')}".strip())
+        if not broken:
+            emit(on_event, {"type": "testgen_compile_gate", "outcome": "fail", "round": round_no,
+                            "reason": "the build failed, but on no generated test: " + result.detail, "held": len(held)})
+            return held
+        stage = staging_root(output_dir)
+        for rel, error in broken.items():
+            unit = candidates[rel]
+            src = out_root / rel
+            dest = stage / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_file():
+                shutil.move(str(src), str(dest))
+            forget_written(output_dir, [str(src)])
+            unit["status"] = "HELD"
+            unit["hold_reason"] = f"does not compile: {error}"
+            unit["held_paths"] = [str(dest)]
+            unit["written_paths"] = []
+            held.append(rel)
+            emit(on_event, {"type": "testgen_held", "test": rel, "reason": unit["hold_reason"]})
+    emit(on_event, {"type": "testgen_compile_gate", "outcome": "fail", "round": COMPILE_GATE_ROUNDS,
+                    "reason": "still failing after the last round", "held": len(held)})
+    return held
 
 
 def _emit_acceptance(on_event: OnEvent, outcome: AcceptanceOutcome) -> None:

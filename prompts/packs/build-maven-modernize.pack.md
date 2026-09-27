@@ -102,6 +102,13 @@ at `test` scope:
   **and** `org.mockito:mockito-junit-jupiter` (which carries `MockitoExtension`), both at Mockito
   5.x through a `mockito.version` property this pom (or the parent) defines — Mockito has no BOM.
 
+A dependency you add or rename in a module must be managed somewhere the reactor can see — the
+parent's `<dependencyManagement>`, an imported BOM that covers its group — or carry a `<version>`
+here. A versionless dependency nothing manages fails Maven's model build (on AMS: the web pom's
+`log4j-slf4j-impl` renamed to `log4j-slf4j2-impl` while the parent still managed only the old
+artifact). If you rename an artifact in a child, say so in `manual_flags`: the parent's unit
+manages the old coordinates and has to manage the new ones.
+
 Rule 4 — Apply every coordinate in the `upgrades` list supplied to you, as
 `group:artifact:version`. Set that exact version — in `<dependencyManagement>` if the artifact is
 managed there, otherwise on the dependency itself. If the artifact is absent from this pom, do

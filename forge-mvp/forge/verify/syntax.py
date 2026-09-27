@@ -195,18 +195,87 @@ def pom_structure_errors(name: str, content: str) -> List[str]:
     return errors
 
 
-def pom_inherited_properties(pom_path: str, source_dir: Optional[str] = None,
-                             output_dir: Optional[str] = None) -> Optional[Set[str]]:
-    """Properties the parents of the pom at ``pom_path`` define, following ``<relativePath>`` on disk.
+def pom_management(content: str) -> Tuple[Set[str], Set[str]]:
+    """``(managed "group:artifact" keys, imported BOM groupIds)`` from a pom's ``<dependencyManagement>``."""
+    try:
+        root = ET.fromstring(content.encode("utf-8"))
+    except ET.ParseError:
+        return set(), set()
+    managed: Set[str] = set()
+    boms: Set[str] = set()
+    for management in (el for el in root.iter() if _local(el.tag) == "dependencyManagement"):
+        deps = next((c for c in management if _local(c.tag) == "dependencies"), None)
+        for dep in (deps if deps is not None else ()):
+            if _local(dep.tag) != "dependency":
+                continue
+            fields = {_local(c.tag): (c.text or "").strip() for c in dep}
+            key = f"{fields.get('groupId', '')}:{fields.get('artifactId', '')}"
+            if fields.get("scope") == "import" and fields.get("type") == "pom":
+                boms.add(fields.get("groupId", ""))
+            else:
+                managed.add(key)
+    return managed, boms
 
-    A parent this run already rewrote into ``output_dir`` counts with its new
-    properties too, so a child is judged against what the parent will be, not
-    only what it was. ``None`` when a parent cannot be found on disk -- an
-    external parent resolved from a repository -- because its properties are
+
+def _covered_by_bom(group: str, bom_groups: Iterable[str]) -> bool:
+    """A BOM's groupId covers its own group and the groups beneath it (``org.junit`` -> ``org.junit.jupiter``)."""
+    return any(group == b or group.startswith(b + ".") for b in bom_groups if b)
+
+
+def pom_unmanaged_errors(name: str, content: str, inheritance: Mapping[str, Set[str]]) -> List[str]:
+    """One error per versionless ``<dependencies>`` entry that nothing in the reactor manages.
+
+    Managed means: this pom's own ``<dependencyManagement>``, a parent's, or an
+    imported BOM (own or a parent's) whose group covers the artifact. Anything
+    else fails Maven's model build. On AMS the build pack renamed the web pom's
+    ``log4j-slf4j-impl`` to ``log4j-slf4j2-impl`` while the parent still managed
+    only the old artifact, and the reactor failed at POM parsing.
+    """
+    try:
+        root = ET.fromstring(content.encode("utf-8"))
+    except ET.ParseError:
+        return []
+    own_managed, own_boms = pom_management(content)
+    managed = own_managed | set(inheritance.get("managed", ()))
+    boms = own_boms | set(inheritance.get("bom_groups", ()))
+    errors: List[str] = []
+    # ElementTree has no parent pointers: the managed lists are found from
+    # their <dependencyManagement> and every other <dependencies> is real.
+    managed_lists = {id(d) for m in root.iter() if _local(m.tag) == "dependencyManagement"
+                     for d in m if _local(d.tag) == "dependencies"}
+    for deps in (el for el in root.iter() if _local(el.tag) == "dependencies" and id(el) not in managed_lists):
+        for dep in deps:
+            if _local(dep.tag) != "dependency":
+                continue
+            fields = {_local(c.tag): (c.text or "").strip() for c in dep}
+            if fields.get("version"):
+                continue
+            group, artifact = fields.get("groupId", ""), fields.get("artifactId", "")
+            if f"{group}:{artifact}" in managed or _covered_by_bom(group, boms):
+                continue
+            errors.append(
+                f"{Path(name).name}: {group}:{artifact} has no <version> and nothing manages it -- not this "
+                "pom's <dependencyManagement>, not a parent's, and no imported BOM covers its group. Give it a "
+                "version here, or manage it in the parent (renaming an artifact needs the parent to manage the "
+                "new coordinates too)."
+            )
+    return errors
+
+
+def pom_inheritance(pom_path: str, source_dir: Optional[str] = None,
+                    output_dir: Optional[str] = None) -> Optional[Dict[str, Set[str]]]:
+    """What the parents of the pom at ``pom_path`` define, following ``<relativePath>`` on disk.
+
+    ``{"properties", "managed", "bom_groups"}``: the properties they define,
+    the ``group:artifact`` keys they manage, the groupIds of the BOMs they
+    import. A parent this run already rewrote into ``output_dir`` counts with
+    its new values too, so a child is judged against what the parent will be,
+    not only what it was. ``None`` when a parent cannot be found on disk -- an
+    external parent resolved from a repository -- because what it defines is
     unknowable here, and guessing would send correct files back for a retry.
     """
     path = Path(pom_path)
-    known: Set[str] = set()
+    known: Dict[str, Set[str]] = {"properties": set(), "managed": set(), "bom_groups": set()}
     for _ in range(MAX_PARENT_DEPTH):
         try:
             root = ET.fromstring(path.read_bytes())
@@ -224,9 +293,19 @@ def pom_inherited_properties(pom_path: str, source_dir: Optional[str] = None,
         if not candidate.is_file() or not _is_declared_parent(candidate, parent):
             return None
         for text in _pom_texts(candidate, source_dir, output_dir):
-            known |= pom_defined_properties(text)
+            known["properties"] |= pom_defined_properties(text)
+            managed, boms = pom_management(text)
+            known["managed"] |= managed
+            known["bom_groups"] |= boms
         path = candidate
     return None
+
+
+def pom_inherited_properties(pom_path: str, source_dir: Optional[str] = None,
+                             output_dir: Optional[str] = None) -> Optional[Set[str]]:
+    """The ``properties`` half of :func:`pom_inheritance`, kept for callers that want only that."""
+    inheritance = pom_inheritance(pom_path, source_dir, output_dir)
+    return None if inheritance is None else inheritance["properties"]
 
 
 def _is_declared_parent(candidate: Path, parent: ET.Element) -> bool:
@@ -270,7 +349,8 @@ def _pom_texts(pom: Path, source_dir: Optional[str], output_dir: Optional[str]) 
 
 
 def check_files(files: Mapping[str, str], config, *, run=subprocess.run,
-                inherited_properties: Optional[Iterable[str]] = None) -> Tuple[str, List[str]]:
+                inherited_properties: Optional[Iterable[str]] = None,
+                inheritance: Optional[Mapping[str, Set[str]]] = None) -> Tuple[str, List[str]]:
     """``(verdict, errors)`` over a transform's ``{path: content}``.
 
     FAIL when any checked file does not parse, or when a ``pom.xml`` references
@@ -278,11 +358,14 @@ def check_files(files: Mapping[str, str], config, *, run=subprocess.run,
     is none -- an environment gap, never a verdict on the migration. PASS
     otherwise, including when nothing was checkable.
 
-    The property check runs only when the caller says what the pom inherits
-    (``inherited_properties``, from :func:`pom_inherited_properties`): with no
-    parent information a child's reference cannot be judged, and ``None`` --
-    the default -- skips it rather than guess.
+    The property and unmanaged-dependency checks run only when the caller says
+    what the pom inherits (``inheritance``, from :func:`pom_inheritance`; or
+    ``inherited_properties`` alone for the property check): with no parent
+    information a child's reference cannot be judged, and ``None`` -- the
+    default -- skips them rather than guess.
     """
+    if inheritance is not None and inherited_properties is None:
+        inherited_properties = inheritance.get("properties", set())
     errors: List[str] = []
     skipped = False
     javac = None
@@ -310,6 +393,8 @@ def check_files(files: Mapping[str, str], config, *, run=subprocess.run,
                 errors += pom_structure_errors(name, content)
                 if inherited_properties is not None:
                     errors += pom_property_errors(name, content, inherited_properties)
+                if inheritance is not None:
+                    errors += pom_unmanaged_errors(name, content, inheritance)
     if errors:
         return FAIL, errors[:MAX_ERROR_LINES]
     return (SKIPPED if skipped else PASS), []

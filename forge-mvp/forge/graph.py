@@ -68,7 +68,7 @@ def build_graph(config: ForgeConfig):
                     findings += [f"repaired: {r}" for r in repaired]
             transform_output["files"] = files
             file_status["transform_output"] = transform_output
-            extra["inherited_properties"] = syntax.pom_inherited_properties(
+            extra["inheritance"] = syntax.pom_inheritance(
                 file_status["file_path"], state.get("source_dir"), state.get("output_dir"))
         verdict, errors = syntax.check_files(files, config, **extra)
         file_status["syntax_verdict"] = verdict

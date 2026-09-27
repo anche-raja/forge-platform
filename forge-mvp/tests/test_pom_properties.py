@@ -122,6 +122,70 @@ def test_a_managed_entry_without_a_version_fails_even_with_no_parent_in_view():
     assert syntax.check_files({"pom.xml": parent()}, CONFIG) == (syntax.PASS, [])
 
 
+WEB = """<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>com.corp</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+  <artifactId>web</artifactId>
+  %(management)s
+  <dependencies>
+    <dependency><groupId>%(group)s</groupId><artifactId>%(artifact)s</artifactId></dependency>
+    <dependency><groupId>x</groupId><artifactId>pinned</artifactId><version>1</version></dependency>
+  </dependencies>
+</project>
+"""
+
+
+def web(group="org.apache.logging.log4j", artifact="log4j-slf4j2-impl", management=""):
+    return WEB % {"group": group, "artifact": artifact, "management": management}
+
+
+def _inheritance(managed=(), boms=()):
+    return {"properties": set(), "managed": set(managed), "bom_groups": set(boms)}
+
+
+def test_the_ams_rename_fails_because_nothing_manages_the_new_artifact():
+    inh = _inheritance(managed={"org.apache.logging.log4j:log4j-slf4j-impl"},
+                       boms={"org.springframework", "org.junit", "com.fasterxml.jackson"})
+    verdict, errors = syntax.check_files({"web/pom.xml": web()}, CONFIG, inheritance=inh)
+    assert verdict == syntax.FAIL and len(errors) == 1
+    assert "log4j-slf4j2-impl has no <version> and nothing manages it" in errors[0]
+
+
+def test_a_dependency_the_parent_manages_or_a_bom_covers_passes():
+    parent_manages = _inheritance(managed={"org.apache.logging.log4j:log4j-slf4j2-impl"})
+    assert syntax.check_files({"web/pom.xml": web()}, CONFIG, inheritance=parent_manages) == (syntax.PASS, [])
+    bom_covers = _inheritance(boms={"org.junit"})
+    assert syntax.check_files({"web/pom.xml": web("org.junit.jupiter", "junit-jupiter")}, CONFIG,
+                              inheritance=bom_covers) == (syntax.PASS, [])
+    own = web(management="<dependencyManagement><dependencies><dependency><groupId>org.apache.logging.log4j</groupId>"
+                         "<artifactId>log4j-slf4j2-impl</artifactId><version>2.24.0</version></dependency>"
+                         "</dependencies></dependencyManagement>")
+    assert syntax.check_files({"web/pom.xml": own}, CONFIG, inheritance=_inheritance()) == (syntax.PASS, [])
+
+
+def test_a_bom_covers_its_own_group_and_the_groups_beneath_it_only():
+    assert syntax.check_files({"web/pom.xml": web("org.junit.platform", "junit-platform-launcher")}, CONFIG,
+                              inheritance=_inheritance(boms={"org.junit"})) == (syntax.PASS, [])
+    assert syntax.check_files({"web/pom.xml": web("org.junitx", "thing")}, CONFIG,
+                              inheritance=_inheritance(boms={"org.junit"}))[0] == syntax.FAIL
+
+
+def test_inheritance_carries_what_the_parents_manage_and_import(tmp_path):
+    root = parent("<lib.version>2</lib.version>").replace(
+        "</dependencies>\n  </dependencyManagement>",
+        "<dependency><groupId>com.h2database</groupId><artifactId>h2</artifactId><version>2</version></dependency>"
+        "</dependencies>\n  </dependencyManagement>")
+    (tmp_path / "pom.xml").write_text(root, encoding="utf-8")
+    leaf = tmp_path / "child" / "pom.xml"
+    leaf.parent.mkdir()
+    leaf.write_text(child(), encoding="utf-8")
+    inh = syntax.pom_inheritance(str(leaf))
+    assert inh["properties"] >= {"lib.version"}
+    assert "com.h2database:h2" in inh["managed"] and "org.junit.jupiter:junit-jupiter" in inh["managed"]
+    assert inh["bom_groups"] == {"org.junit"}
+    assert syntax.pom_inherited_properties(str(leaf)) == inh["properties"]
+
+
 def test_without_parent_information_nothing_is_judged():
     # The default: a caller that cannot say what the pom inherits gets no property verdict.
     assert syntax.check_files({"pom.xml": parent(junit="${junit-bom.version}")}, CONFIG) == (syntax.PASS, [])
