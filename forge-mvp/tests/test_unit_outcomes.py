@@ -78,7 +78,7 @@ def _run(tmp_path, java_file, transforms, *, reviews=(_PASS,), guardrail=None, p
 _BROKEN = '{"files": {"UserAction.java": "public class UserAction { String s = "unescaped"; }"}}'
 
 
-def test_a_broken_json_reply_is_retried_and_the_retry_asks_for_valid_json(tmp_path, java_file):
+def test_a_broken_json_reply_is_retried_and_the_retry_demands_the_fenced_file(tmp_path, java_file):
     result, upgrade, review = _run(tmp_path, java_file, [_BROKEN, _files(java_file)])
     fs = result["current_file"]
     assert fs["status"] == "DONE" and fs["retry_count"] == 1
@@ -87,7 +87,8 @@ def test_a_broken_json_reply_is_retried_and_the_retry_asks_for_valid_json(tmp_pa
     assert upgrade.call_count == 2 and review.call_count == 1
     retry_prompt = upgrade.call_args_list[1][0][0][1].content
     assert "Failed to parse transform output as JSON" in retry_prompt
-    assert "exactly one valid JSON object" in retry_prompt
+    # JSON-escaping a file fails the same way twice, so the easier form is demanded, not offered.
+    assert "Do NOT reply with JSON" in retry_prompt and "fenced code block" in retry_prompt
 
 
 def test_a_wrong_shape_is_retried_the_same_way(tmp_path, java_file):

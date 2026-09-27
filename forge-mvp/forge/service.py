@@ -14,6 +14,7 @@ patch them before they are first bound.
 import json
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -198,6 +199,72 @@ def _emit_file_metrics(metrics, final: dict, fs: dict) -> None:
     metrics.emit(payload)
 
 
+# Bedrock answers that mean "not now", never "not this file". A throttle clears
+# if you wait: on AMS a Spring pack of 59 files, eight at a time beside another
+# run's test generation, saw 24 of them throttled and -- with the client's own
+# retries exhausted in seconds -- sent to a human with nothing wrong in them.
+_TRANSIENT_CODES = frozenset({"ThrottlingException", "ServiceUnavailableException", "TooManyRequestsException",
+                              "ModelNotReadyException", "InternalServerException", "ModelTimeoutException"})
+UNIT_BACKOFF_SECONDS = (30, 60, 120)
+
+
+class BedrockQuotaExhausted(RuntimeError):
+    """Bedrock's daily token quota is spent: no unit of this run can succeed until it resets."""
+
+
+def _quota_exhausted(error: Exception) -> bool:
+    """``Too many tokens per day`` is a throttle that waiting minutes cannot clear."""
+    return isinstance(error, ClientError) and "per day" in str(error).lower()
+
+
+def _is_transient(error: Exception) -> bool:
+    if isinstance(error, ClientError):
+        return str((error.response or {}).get("Error", {}).get("Code", "")) in _TRANSIENT_CODES
+    return isinstance(error, BotoCoreError)     # a dropped connection, a read timeout
+
+
+def _invoke_with_patience(app, initial: dict, cfg: dict, file_path: str, *, sleep=None) -> dict:
+    """``app.invoke``, waiting out Bedrock's "not now" answers before giving the unit to a human.
+
+    A throttle or a ServiceUnavailable after the client's own retries is
+    waited out -- 30, 60, then 120 seconds -- and the unit is run again from
+    the start. A unit that still cannot reach the model goes to manual review
+    with the reason: it is not a reason to end a run seven paid units in,
+    which is what it did on AMS, twice. Any other exception still ends the
+    run, because a programming error must not hide as a manual-review unit.
+
+    One throttle is not waited out: Bedrock's daily token quota. Nothing in
+    the run can succeed until it resets, so :class:`BedrockQuotaExhausted`
+    ends the run at once with that message rather than holding every unit
+    after minutes of waiting each.
+    """
+    from forge.utils.telemetry import get_logger
+
+    log = get_logger(__name__)
+    sleep = sleep or time.sleep          # bound here, so a test's patched clock is the one used
+    error: Optional[Exception] = None
+    for attempt, delay in enumerate((*UNIT_BACKOFF_SECONDS, None)):
+        try:
+            return app.invoke(initial, config=cfg)
+        except (BotoCoreError, ClientError) as e:
+            error = e
+            if _quota_exhausted(e):
+                raise BedrockQuotaExhausted(
+                    f"Bedrock's daily token quota for this model is spent ({e}). The run stops here; "
+                    "units already migrated are kept. Run the pack again after the quota resets, or "
+                    "name another transform_model in agents.yaml.") from e
+            if delay is None or not _is_transient(e):
+                break
+            log.warning("Bedrock said not now for %s (attempt %d): %s; waiting %ds", file_path, attempt + 1, e, delay)
+            sleep(delay)
+    log.warning("Bedrock call failed for %s; sent to manual review: %s", file_path, error)
+    fs = dict(initial["current_file"])
+    fs["status"] = "MANUAL_REVIEW"
+    fs["error"] = f"Bedrock call failed after retries: {error}"
+    fs["review_feedback"] = "The model could not be reached for this file; run the pack again for it."
+    return {**initial, "current_file": fs}
+
+
 def run_file(app, config, state_manager, metrics, file_path: str, index: int, total: int, phase: str, dry_run: bool,
              source_dir: str, output_dir: str, generate: bool = False, file_status_overrides: Optional[dict] = None,
              thread_id: Optional[str] = None, on_event: OnEvent = None) -> dict:
@@ -205,21 +272,7 @@ def run_file(app, config, state_manager, metrics, file_path: str, index: int, to
                                    generate=generate, file_status_overrides=file_status_overrides)
     cfg = {"configurable": {"thread_id": thread_id or file_path}}
 
-    try:
-        final = app.invoke(initial, config=cfg)
-    except (BotoCoreError, ClientError) as e:
-        # Bedrock said no -- ServiceUnavailable, a throttle, a dropped
-        # connection -- after the client's own retries. That is one unit a
-        # human must look at, with the reason; it is not a reason to end a
-        # run seven paid units in, which is what it did on AMS, twice.
-        from forge.utils.telemetry import get_logger
-
-        get_logger(__name__).warning("Bedrock call failed for %s; sent to manual review: %s", file_path, e)
-        fs = dict(initial["current_file"])
-        fs["status"] = "MANUAL_REVIEW"
-        fs["error"] = f"Bedrock call failed after retries: {e}"
-        fs["review_feedback"] = "The model could not be reached for this file; run the pack again for it."
-        final = {**initial, "current_file": fs}
+    final = _invoke_with_patience(app, initial, cfg, file_path)
     fs = final["current_file"]
     label = f"{Path(file_path).name} (generated)" if generate else Path(file_path).name
     emit(on_event, {"type": "file", "index": index, "total": total, "file": file_path, "label": label,

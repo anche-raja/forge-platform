@@ -184,12 +184,23 @@ class JavaUpgradeAgent(BaseAgent):
         file_status["transform_malformed"] = True
         file_status["transform_output"] = None
         file_status["error"] = error
-        file_status["review_feedback"] = (
-            f"Your previous reply could not be used. {error}\n"
-            "Reply with exactly one valid JSON object in the shape the instructions give: no markdown "
-            "fences and no text before or after it. Each file's content is a single JSON string, so "
-            "escape every double quote, backslash and newline inside it. If you cannot produce that "
-            "JSON, reply instead with ONLY the whole migrated file inside one fenced code block "
-            "(```java or ```xml) and nothing else: it is accepted as the file's content."
-        )
+        if error.startswith("Failed to parse transform output as JSON"):
+            # JSON-escaping a Java file with regexes fails the same way twice
+            # (on AMS: three times). The fenced form is strictly easier, so it
+            # is demanded, not offered.
+            file_status["review_feedback"] = (
+                f"Your previous reply could not be used. {error}\n"
+                "Do NOT reply with JSON this time. Reply with ONLY the whole migrated file inside one "
+                "fenced code block (```java or ```xml) and nothing else -- no JSON, no prose. It is "
+                "accepted as the file's content."
+            )
+        else:
+            file_status["review_feedback"] = (
+                f"Your previous reply could not be used. {error}\n"
+                "Reply with exactly one valid JSON object in the shape the instructions give: no markdown "
+                "fences and no text before or after it. Each file's content is a single JSON string, so "
+                "escape every double quote, backslash and newline inside it. If you cannot produce that "
+                "JSON, reply instead with ONLY the whole migrated file inside one fenced code block "
+                "(```java or ```xml) and nothing else: it is accepted as the file's content."
+            )
         return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}
