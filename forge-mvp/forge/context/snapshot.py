@@ -22,7 +22,7 @@ def write_context_snapshot(output_dir: str, name: str, source_dir: str, modules:
     src = Path(source_dir).resolve()
     entries = {}
     for module in modules:
-        ctx = get_context(name, str(src), module).data
+        ctx = get_context(name, str(src), module, output_dir=output_dir).data
         rendered = render_context(name, ctx, for_target=module)
         entries[ctx.get("module_rel", ".")] = {
             "module_dir": ctx.get("module_dir"),

@@ -81,10 +81,16 @@ def test_a_defined_property_passes():
     assert syntax.check_files({"pom.xml": ok}, CONFIG, inherited_properties=set()) == (syntax.PASS, [])
 
 
-def test_no_version_at_all_is_what_a_bom_import_wants():
-    managed = parent().replace("<version>5.10.5</version><scope>test</scope>", "<scope>test</scope>")
-    assert "${" not in managed
-    assert syntax.check_files({"pom.xml": managed}, CONFIG, inherited_properties=set()) == (syntax.PASS, [])
+def test_no_version_in_dependencies_is_what_a_bom_import_wants():
+    # The managed list keeps only the BOM import; the pom's own dependency carries no version.
+    pom = parent().replace(
+        "      <dependency>\n        <groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId>\n"
+        "        <version>5.10.5</version><scope>test</scope>\n      </dependency>\n", "").replace(
+        "</project>",
+        "  <dependencies><dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId>"
+        "<scope>test</scope></dependency></dependencies>\n</project>")
+    assert "5.10.5</version><scope>test" not in pom and "${" not in pom
+    assert syntax.check_files({"pom.xml": pom}, CONFIG, inherited_properties=set()) == (syntax.PASS, [])
 
 
 @pytest.mark.parametrize("ref", ["${project.version}", "${revision}", "${env.JUNIT}",
@@ -104,6 +110,16 @@ def test_a_profile_may_define_the_property():
         "<profiles><profile><id>ci</id><properties><junit-bom.version>5.10.5</junit-bom.version>"
         "</properties></profile></profiles></project>")
     assert syntax.check_files({"pom.xml": pom}, CONFIG, inherited_properties=set()) == (syntax.PASS, [])
+
+
+def test_a_managed_entry_without_a_version_fails_even_with_no_parent_in_view():
+    # The AMS failure the second time round: told a BOM-managed dependency
+    # carries no version, the transform dropped it from the managed list too.
+    managed = parent().replace("<version>5.10.5</version><scope>test</scope>", "<scope>test</scope>")
+    verdict, errors = syntax.check_files({"pom.xml": managed}, CONFIG)
+    assert verdict == syntax.FAIL and len(errors) == 1
+    assert "junit-jupiter" in errors[0] and "<dependencyManagement>" in errors[0]
+    assert syntax.check_files({"pom.xml": parent()}, CONFIG) == (syntax.PASS, [])
 
 
 def test_without_parent_information_nothing_is_judged():

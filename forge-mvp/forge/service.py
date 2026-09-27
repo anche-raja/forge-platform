@@ -376,12 +376,18 @@ class _ProgressRelay:
             emit(self._on_event, event)
 
 
-def _workers_for(config) -> int:
+def _workers_for(config, phase: Optional[str] = None) -> int:
     """``max_parallel_files``, except where parallel files would corrupt each other.
 
     Maven build verification compiles the whole output tree, so a compile
     running beside another file's write sees a half-migrated project and
     feeds a wrong verdict into the retry loop. That mode stays sequential.
+
+    So does a ``tier: build`` pack: its units are poms ordered parents before
+    children (:func:`forge.extract.reactor.build_order`), and a child is
+    transformed and reviewed against the parent this run has already
+    rewritten. Eight poms at once would hand every child its pre-migration
+    parent, which is how a sound child pom was held at 45 on AMS.
     """
     from forge.config import parallel_files
     from forge.utils.telemetry import get_logger
@@ -391,7 +397,19 @@ def _workers_for(config) -> int:
     if workers > 1 and bv.get("enabled") and bv.get("mode") == "maven":
         get_logger(__name__).info("build_verification mode maven: running files one at a time")
         return 1
+    if workers > 1 and phase and _is_build_tier(phase):
+        get_logger(__name__).info("%s is a build-tier pack: parents before children, one at a time", phase)
+        return 1
     return workers
+
+
+def _is_build_tier(phase: str) -> bool:
+    from forge.phases import get_phase
+
+    try:
+        return str(getattr(get_phase(phase), "tier", "") or "") == "build"
+    except Exception:  # noqa: BLE001 -- an unknown phase is not a build tier
+        return False
 
 
 def _run_units(numbered, one, workers: int, cancel: Optional[threading.Event]):
@@ -549,6 +567,13 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
         if not dry_run and files:
             state_manager.mark_pending(files, phase)
 
+    # A build-tier pack transforms parents before children, so a child pom is
+    # transformed and reviewed against the parent this run has rewritten.
+    if _is_build_tier(phase):
+        from forge.extract.reactor import build_order
+
+        files = build_order(files)
+
     # Generated targets run after the real files so the descriptors they are
     # built from have already been migrated in this run.
     units = [(f, False) for f in files] + [(g, True) for g in generated]
@@ -571,7 +596,7 @@ def run_migration(source_dir: str, phase: str, output_dir: str, config: ForgeCon
     emit(on_event, {"type": "start", "phase": phase, "files": len(files), "generated": len(generated),
                     "dry_run": dry_run, "total": total, "passed_over": passed_over})
 
-    workers = _workers_for(config)
+    workers = _workers_for(config, phase)
 
     def one(i: int, file_path: str, generate: bool) -> dict:
         return run_file(app, config, state_manager, metrics, file_path=file_path, index=i, total=total,

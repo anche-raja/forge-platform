@@ -163,7 +163,7 @@ def context_block_for(state: ForgeState, config: ForgeConfig) -> Tuple[Optional[
     file_path = fs["file_path"]
     module_dir = fs.get("module_dir") or extractor.module_for(file_path, source_dir)
     try:
-        ctx = get_context(name, source_dir, module_dir).data
+        ctx = get_context(name, source_dir, module_dir, output_dir=state.get("output_dir")).data
     except ValueError as e:
         _warn_once(f"module:{module_dir}", f"context '{name}' unavailable for {module_dir}: {e}; running without context")
         return None, None

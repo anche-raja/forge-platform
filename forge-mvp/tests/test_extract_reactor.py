@@ -105,8 +105,9 @@ def test_a_leaf_sees_its_whole_parent_chain_nearest_first(tmp_path):
     ctx = run(str(tmp_path), str(leaf))
     assert ctx["module"]["coordinates"] == "com.corp:services:1.0"
     assert ctx["module"]["parent"] == "com.corp:internal:1.0"
-    assert ctx["module"]["declares"]["dependencies"] == 2
+    assert "properties" not in ctx["module"], "the module's own pre-migration values are not restated"
     assert [p["coordinates"] for p in ctx["parents"]] == ["com.corp:internal:1.0", "com.corp:parent:1.0"]
+    assert [p["rewritten"] for p in ctx["parents"]] == [False, False]
     root = ctx["parents"][1]
     assert root["bom_imports"] == ["org.springframework:spring-framework-bom:${spring.version}"]
     assert root["managed_versions"] == {"com.h2database:h2": "1.3.176"}

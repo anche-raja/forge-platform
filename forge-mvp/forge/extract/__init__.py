@@ -41,6 +41,10 @@ class Extractor:
     selectors: Mapping[str, SelectorFn]          # selector name -> resolver
     find_modules: Callable[[str], Tuple[str, ...]]   # source_dir -> module dirs it applies to
     module_for: Callable[[str, str], str]        # (file_path, source_dir) -> module dir
+    # An extractor whose facts change as the run writes -- the `reactor`
+    # reads a parent this run has already rewritten -- is run as
+    # ``run(source_dir, module_dir, output_dir=...)`` and never cached.
+    wants_output_dir: bool = False
 
     def provides(self, selector: str) -> bool:
         return selector in self.selectors
@@ -72,15 +76,22 @@ def _cached(name: str, source_dir: str, module_dir: str) -> Context:
     return Context(name=name, module_dir=module_dir, data=extractor.run(source_dir, module_dir))
 
 
-def get_context(name: str, source_dir: str, module_dir: str) -> Context:
+def get_context(name: str, source_dir: str, module_dir: str, output_dir: Optional[str] = None) -> Context:
     """The extracted context for one module, computed once per process.
 
     Source is never mutated during a run — output goes to ``output_dir`` — so
-    caching on the resolved paths is safe for the life of the process.
+    caching on the resolved paths is safe for the life of the process. An
+    extractor that ``wants_output_dir`` reads what the run has written so far,
+    which does change, so it is computed every time and handed ``output_dir``.
     """
     if name not in EXTRACTORS:
         raise KeyError(f"no extractor registered for context '{name}'")
-    return _cached(name, str(Path(source_dir).resolve()), str(Path(module_dir).resolve()))
+    source, module = str(Path(source_dir).resolve()), str(Path(module_dir).resolve())
+    extractor = EXTRACTORS[name]
+    if extractor.wants_output_dir:
+        out = str(Path(output_dir).resolve()) if output_dir else None
+        return Context(name=name, module_dir=module, data=extractor.run(source, module, output_dir=out))
+    return _cached(name, source, module)
 
 
 def clear_context_cache() -> None:

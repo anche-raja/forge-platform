@@ -198,11 +198,16 @@ resolves `servlet_components` (real files) and `tomcat_context` (one **generated
 `META-INF/context.xml` per module; an existing one is an edit, not a generate). `reactor`
 (`forge/extract/reactor.py`, the build pack's context) reads a pom's parent chain from the source
 tree — each parent's coordinates, `<properties>`, BOM imports, managed dependency and plugin
-versions — plus the merged inherited properties (nearest parent wins) and the module graph, and its
-summary says the chain is the reactor *before* the pack ran, since each parent is migrated by its
-own unit in the same run. It exists because a child pom judged alone was held at 45 on AMS with
-every deduction reading "parent not provided, cannot verify". Sections for a `pom.xml` target
-render module, parents, inherited properties, then the graph (`render._PRIORITY_POM`).
+versions — plus the merged inherited properties (nearest parent wins) and the module graph. A
+parent this run has already rewritten into the output dir is read from there and marked
+`rewritten` (`Extractor.wants_output_dir`: run every time with `output_dir`, never cached), and a
+`tier: build` pack runs its poms parents-first, one at a time (`reactor.build_order` by
+inheritance depth, `_workers_for` → 1), so a child is transformed and reviewed against what its
+parent has become. The module's own pre-migration properties are deliberately not restated. It
+exists because a child pom judged alone was held at 45 on AMS with every deduction reading
+"parent not provided, cannot verify", and then, with a pre-migration parent shown, at 25 with
+"the parent has not been migrated yet". Sections for a `pom.xml` target render module, parents,
+inherited properties, then the graph (`render._PRIORITY_POM`).
 
 **Context reaches the prompts through `forge/context/`.** `render_context` produces a
 deterministic block bounded by `context.max_chars` — a hard guarantee, with section priority

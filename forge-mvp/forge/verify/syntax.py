@@ -128,6 +128,37 @@ def pom_property_errors(name: str, content: str, inherited: Iterable[str] = ()) 
     ]
 
 
+def pom_structure_errors(name: str, content: str) -> List[str]:
+    """Shapes Maven's model builder refuses, checked without any parent in view.
+
+    A ``<dependencyManagement>`` entry with no ``<version>``: Maven takes the
+    first declaration for an artifact, so an entry declared before a BOM
+    import manages the artifact with nothing, and every pom that then uses it
+    without a version fails at POM parsing. On AMS the build pack, told that a
+    BOM-managed dependency carries no version, dropped the version from the
+    parent's managed ``junit-jupiter`` entry too, and the whole reactor failed.
+    """
+    try:
+        root = ET.fromstring(content.encode("utf-8"))
+    except ET.ParseError:
+        return []
+    errors: List[str] = []
+    for management in (el for el in root.iter() if _local(el.tag) == "dependencyManagement"):
+        deps = next((c for c in management if _local(c.tag) == "dependencies"), None)
+        for dep in (deps if deps is not None else ()):
+            if _local(dep.tag) != "dependency":
+                continue
+            fields = {_local(c.tag): (c.text or "").strip() for c in dep}
+            if not fields.get("version"):
+                errors.append(
+                    f"{Path(name).name}: <dependencyManagement> entry {fields.get('groupId', '?')}:"
+                    f"{fields.get('artifactId', '?')} has no <version>. Maven takes the first declaration, "
+                    "so it manages the artifact with nothing and every module using it fails at POM parsing. "
+                    "Delete the entry (the imported BOM manages it) or give it the BOM's version."
+                )
+    return errors
+
+
 def pom_inherited_properties(pom_path: str, source_dir: Optional[str] = None,
                              output_dir: Optional[str] = None) -> Optional[Set[str]]:
     """Properties the parents of the pom at ``pom_path`` define, following ``<relativePath>`` on disk.
@@ -239,8 +270,10 @@ def check_files(files: Mapping[str, str], config, *, run=subprocess.run,
         elif lower.endswith(_XML_SUFFIXES):
             malformed = _xml(name, content)
             errors += malformed
-            if not malformed and inherited_properties is not None and is_pom(name):
-                errors += pom_property_errors(name, content, inherited_properties)
+            if not malformed and is_pom(name):
+                errors += pom_structure_errors(name, content)
+                if inherited_properties is not None:
+                    errors += pom_property_errors(name, content, inherited_properties)
     if errors:
         return FAIL, errors[:MAX_ERROR_LINES]
     return (SKIPPED if skipped else PASS), []

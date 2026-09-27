@@ -1,4 +1,4 @@
-"""The ``reactor`` extractor: what a pom inherits, from the parents on disk.
+"""The ``reactor`` extractor: what a pom inherits, from the parents as this run has them.
 
 The build pack migrates one pom at a time, but a pom is not judged alone. A
 child module inherits its Java level, its BOM imports and its managed versions
@@ -10,20 +10,23 @@ reading "parent not provided, cannot verify" -- or has to be told to assume.
 
 So this extractor hands both of them the parent chain: each parent's
 coordinates, packaging, ``<properties>``, BOM imports, managed dependency and
-plugin versions, plus the module graph of the reactor, all read from the source
-tree with no model. The chain is the reactor AS IT WAS BEFORE THE PACK RAN --
-each parent is migrated by its own unit in the same run -- and the summary says
-so, because judging a child by its parent's pre-migration values would be the
-mistake this context exists to prevent.
+plugin versions, plus the module graph of the reactor, all read with no model.
+A parent this run has already rewritten into the output directory is read from
+there and marked ``rewritten``; the build tier runs parents before children,
+one at a time, so a child is judged against what its parent has become, not
+what it was. The module's own pre-migration values are deliberately not
+restated: the transform has the original and the reviewer has the transform,
+and a root pom was once marked down against its own old properties shown
+back to it as "context".
 
-Deterministic, local, no network. One run per module, cached by
-``forge.extract.get_context``.
+Deterministic, local, no network. Not cached: what a parent is changes as the
+run proceeds, and reading a handful of small poms costs nothing.
 """
 
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from forge.extract import Extractor, register
 from forge.utils.fs import prune_dirs
@@ -64,6 +67,13 @@ def _coordinates(root: ET.Element) -> str:
     group = _text(root, "groupId") or _text(parent, "groupId")
     version = _text(root, "version") or _text(parent, "version")
     return f"{group}:{_text(root, 'artifactId')}:{version}"
+
+
+def _declared_parent(root: ET.Element) -> Optional[str]:
+    parent = _child(root, "parent")
+    if parent is None:
+        return None
+    return f"{_text(parent, 'groupId')}:{_text(parent, 'artifactId')}:{_text(parent, 'version')}"
 
 
 def _properties(root: ET.Element) -> Dict[str, str]:
@@ -119,22 +129,6 @@ def _plugin_versions(root: ET.Element) -> Dict[str, str]:
     return out
 
 
-def _declares(root: ET.Element) -> Dict[str, int]:
-    """How much of each kind the pom declares itself -- what a reviewer can judge here."""
-    def count(el: Optional[ET.Element], child: str) -> int:
-        return sum(1 for c in (el if el is not None else ()) if _local(c.tag) == child)
-    build = _child(root, "build")
-    return {
-        "properties": len(_properties(root)),
-        "dependencies": count(_child(root, "dependencies"), "dependency"),
-        "dependency_management": count(_child(_child(root, "dependencyManagement"), "dependencies"), "dependency"),
-        "plugins": count(_child(build, "plugins"), "plugin")
-                   + count(_child(_child(build, "pluginManagement"), "plugins"), "plugin"),
-        "profiles": count(_child(root, "profiles"), "profile"),
-        "modules": count(_child(root, "modules"), "module"),
-    }
-
-
 def _modules(root: ET.Element) -> List[str]:
     modules = _child(root, "modules")
     return [(m.text or "").strip() for m in (modules if modules is not None else ()) if _local(m.tag) == "module"]
@@ -144,30 +138,62 @@ def _parent_path(pom: Path, root: ET.Element) -> Tuple[Optional[Path], str]:
     """``(path of the parent pom on disk or None, why not)``.
 
     Maven's rule: ``<relativePath>`` if given (a directory means its pom.xml),
-    ``../pom.xml`` when absent, and an empty ``<relativePath/>`` means the
-    parent comes from a repository only -- never from the disk.
+    ``../pom.xml`` when absent, an empty ``<relativePath/>`` means the parent
+    comes from a repository only, and the pom found there counts only when
+    its coordinates are the declared ones -- a sibling project's pom one
+    directory up is not this pom's parent.
     """
     parent = _child(root, "parent")
     if parent is None:
         return None, "no <parent>: this pom is the reactor root"
+    declared = _declared_parent(root)
     rel_el = _child(parent, "relativePath")
     rel = (rel_el.text or "").strip() if rel_el is not None else None
     if rel_el is not None and not rel:
         return None, "empty <relativePath/>: the parent is resolved from a repository, not the disk"
-    declared = f"{_text(parent, 'groupId')}:{_text(parent, 'artifactId')}:{_text(parent, 'version')}"
     candidate = pom.parent / (rel or "../pom.xml")
     if candidate.is_dir():
         candidate = candidate / "pom.xml"
     if not candidate.is_file():
         return None, f"parent {declared} is not on disk (external)"
-    # Maven takes the pom at relativePath only when its coordinates are the
-    # declared ones; otherwise the parent comes from a repository. A sibling
-    # project's pom one directory up is not this pom's parent.
     candidate_root = _parse(candidate)
     if candidate_root is None or _coordinates(candidate_root) != declared:
         found = _coordinates(candidate_root) if candidate_root is not None else "unparseable"
         return None, f"parent {declared} is not on disk (external); {candidate.name} at that path is {found}"
     return candidate, ""
+
+
+def parent_chain(pom: Path) -> Tuple[List[Path], str]:
+    """The parents of ``pom`` on disk, nearest first, and why the walk stopped."""
+    chain: List[Path] = []
+    current, root = pom, _parse(pom)
+    if root is None:
+        return chain, "does not parse"
+    for _ in range(MAX_PARENT_DEPTH):
+        parent, why = _parent_path(current, root)
+        if parent is None:
+            return chain, why
+        chain.append(parent)
+        current, root = parent, _parse(parent)
+        if root is None:
+            return chain, f"parent {parent} does not parse"
+    return chain, f"parent chain deeper than {MAX_PARENT_DEPTH}; stopped"
+
+
+def inheritance_depth(pom_path: str) -> int:
+    """How many parents ``pom_path`` has on disk: 0 for a reactor root."""
+    return len(parent_chain(Path(pom_path))[0])
+
+
+def build_order(paths: Sequence[str]) -> List[str]:
+    """Poms ordered parents before children, so a child is transformed against a rewritten parent.
+
+    Depth in the directory tree is not the order: on AMS the parent BOM lives
+    in ``ams-parent-bom/`` beside the modules that inherit from it. Inheritance
+    depth is, and the original order breaks ties so the run stays reproducible.
+    """
+    order = {p: i for i, p in enumerate(paths)}
+    return sorted(paths, key=lambda p: (inheritance_depth(p) if Path(p).name == "pom.xml" else 0, order[p]))
 
 
 # ─── the extractor ────────────────────────────────────────────────────────────
@@ -203,13 +229,24 @@ def find_modules(source_dir: str) -> Tuple[str, ...]:
     return tuple(sorted(found))
 
 
-def run(source_dir: str, module_dir: Optional[str]) -> dict:
+def _current_text(pom: Path, source_dir: str, output_dir: Optional[str]) -> Tuple[Optional[ET.Element], bool]:
+    """The parent as this run has it: the output directory's copy when rewritten, else the source's."""
+    if output_dir:
+        rewritten = Path(output_dir) / _rel(pom, source_dir)
+        if rewritten.is_file():
+            root = _parse(rewritten)
+            if root is not None:
+                return root, True
+    return _parse(pom), False
+
+
+def run(source_dir: str, module_dir: Optional[str], output_dir: Optional[str] = None) -> dict:
     """The reactor context for the module at ``module_dir``: the pom, its parent chain, the module graph."""
     module_path = Path(module_dir or source_dir).resolve()
     pom = module_path / "pom.xml"
     ctx: dict = {
         "extractor": NAME,
-        "version": 1,
+        "version": 2,
         "module_dir": str(module_path),
         "module_rel": _rel(module_path, source_dir) or ".",
     }
@@ -220,36 +257,29 @@ def run(source_dir: str, module_dir: Optional[str]) -> dict:
         ctx["summary"] = {"module": None, "parent_chain": [], "notes": notes}
         return ctx
 
-    boms, managed = _dependency_management(root)
+    # What names the module -- never its own pre-migration properties or versions.
     ctx["module"] = {
         "path": _rel(pom, source_dir),
         "coordinates": _coordinates(root),
         "packaging": _text(root, "packaging", "jar"),
-        "parent": _coordinates_of_parent(root),
+        "parent": _declared_parent(root),
         "modules": _modules(root),
-        "declares": _declares(root),
-        "properties": _properties(root),
-        "bom_imports": boms,
-        "managed_versions": managed,
-        "plugin_versions": _plugin_versions(root),
     }
 
+    chain, why = parent_chain(pom)
+    notes.append(why)
     parents: List[dict] = []
     inherited: Dict[str, str] = {}
-    current, current_root = pom, root
-    for _ in range(MAX_PARENT_DEPTH):
-        parent_path, why = _parent_path(current, current_root)
-        if parent_path is None:
-            notes.append(why)
-            break
-        parent_root = _parse(parent_path)
+    for parent_pom in chain:
+        parent_root, rewritten = _current_text(parent_pom, source_dir, output_dir)
         if parent_root is None:
-            notes.append(f"parent {_rel(parent_path, source_dir)} does not parse; its properties are unknown")
+            notes.append(f"parent {_rel(parent_pom, source_dir)} does not parse; its properties are unknown")
             break
         p_boms, p_managed = _dependency_management(parent_root)
         props = _properties(parent_root)
         parents.append({
-            "path": _rel(parent_path, source_dir),
+            "path": _rel(parent_pom, source_dir),
+            "rewritten": rewritten,
             "coordinates": _coordinates(parent_root),
             "packaging": _text(parent_root, "packaging", "jar"),
             "properties": props,
@@ -262,9 +292,6 @@ def run(source_dir: str, module_dir: Optional[str]) -> dict:
         # The nearest parent wins, as it does for Maven.
         for key, value in props.items():
             inherited.setdefault(key, value)
-        current, current_root = parent_path, parent_root
-    else:
-        notes.append(f"parent chain deeper than {MAX_PARENT_DEPTH}; stopped")
 
     ctx["parents"] = parents
     ctx["inherited_properties"] = inherited
@@ -272,29 +299,30 @@ def run(source_dir: str, module_dir: Optional[str]) -> dict:
         "root": parents[-1]["path"] if parents else ctx["module"]["path"],
         "modules": sorted(_rel(Path(m) / "pom.xml", source_dir) for m in find_modules(source_dir)),
     }
+    pending = [p["path"] for p in parents if not p["rewritten"]]
+    if not parents:
+        standing = "This pom inherits nothing: judge it on what it declares."
+    elif pending:
+        standing = ("A parent marked rewritten: true is this run's output -- what this pom now inherits. "
+                    f"Parents not yet rewritten ({', '.join(pending)}) are shown as they were BEFORE this "
+                    "pack ran and are migrated by their own units; never deduct for their pre-migration "
+                    "values. Judge this file on what it declares, and read the parents for what it inherits.")
+    else:
+        standing = ("Every parent shown has already been rewritten by this run: it is what this pom now "
+                    "inherits. Judge this file on what it declares, and read the parents for what it inherits.")
     ctx["summary"] = {
         "module": ctx["module"]["coordinates"],
         "packaging": ctx["module"]["packaging"],
         "parent_chain": [p["coordinates"] for p in parents],
+        "rewritten_parents": [p["path"] for p in parents if p["rewritten"]],
         "inherits": {
             "properties": len(inherited),
             "bom_imports": sum(len(p["bom_imports"]) for p in parents),
             "managed_versions": sum(len(p["managed_versions"]) for p in parents),
         },
-        "notes": notes + [
-            "The parent chain is the reactor BEFORE this pack ran; each parent pom is migrated by "
-            "its own unit in the same run. Judge this file on what it declares, and read the parents "
-            "for what it inherits -- never for their pre-migration values.",
-        ],
+        "notes": notes + [standing],
     }
     return ctx
-
-
-def _coordinates_of_parent(root: ET.Element) -> Optional[str]:
-    parent = _child(root, "parent")
-    if parent is None:
-        return None
-    return f"{_text(parent, 'groupId')}:{_text(parent, 'artifactId')}:{_text(parent, 'version')}"
 
 
 EXTRACTOR = register(Extractor(
@@ -303,4 +331,5 @@ EXTRACTOR = register(Extractor(
     selectors={},
     find_modules=find_modules,
     module_for=module_for,
+    wants_output_dir=True,
 ))

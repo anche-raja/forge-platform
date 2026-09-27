@@ -79,7 +79,11 @@ BOM now manages: delete the whole entry when it carries nothing but coordinates,
 a `<scope>`, `<exclusions>` or a `<classifier>` worth keeping, give it the version the BOM pins —
 as a literal, or through a property this pom's own `<properties>` block defines for that BOM
 import — the same number the BOM would give, so no skew. In `<dependencies>` a versionless
-dependency is correct; the rule is about the managed list.
+dependency is correct; the rule is about the managed list. **A `<dependencyManagement>` entry with
+no `<version>` is a model error**: Maven takes the first declaration, so an entry declared before
+the BOM import manages the artifact with nothing, and every module that then uses it fails at POM
+parsing (on AMS: `junit-jupiter` in the parent's managed list). Delete such an entry or give it
+the BOM's version — never leave it versionless.
 
 A dependency a BOM manages carries no `<version>` at all — not a literal, not a property. Never reference a `${property}` this pom does not define in its own `<properties>` (or, for a child module, that the parent's property block you were given does not define): an undefined property fails Maven's model build before anything compiles. Do not invent property names such as `${junit-bom.version}`; if you import a BOM, the artifacts it manages get no version element.
 
