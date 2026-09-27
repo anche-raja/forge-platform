@@ -36,7 +36,7 @@ class FileStatus(TypedDict):
     transform_model: Optional[str]
     review_model: Optional[str]
     error: Optional[str]
-    # A unit the pack creates rather than edits (Liberty server.xml): there is
+    # A unit the pack creates rather than edits (Tomcat context.xml): there is
     # no source to read, so the transform is given the context instead.
     generate: bool
     module_dir: Optional[str]

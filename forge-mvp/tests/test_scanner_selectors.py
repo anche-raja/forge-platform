@@ -11,7 +11,7 @@ from tests.test_extract_web_bootstrap import make_module
 from tests.test_packs import _fm, write_pack
 
 WEBAPP = "webapp-bootstrap-jakarta10"
-LIBERTY = "liberty-server-config"
+TOMCAT = "tomcat-context-config"
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +39,7 @@ def _names(paths):
 
 
 def test_both_web_bootstrap_packs_are_runnable_now():
-    assert {WEBAPP, LIBERTY} <= set(runnable_phases())
+    assert {WEBAPP, TOMCAT} <= set(runnable_phases())
 
 
 def test_webapp_bootstrap_scan_returns_descriptors_plus_resolved_components(tmp_path):
@@ -53,49 +53,46 @@ def test_webapp_bootstrap_scan_returns_descriptors_plus_resolved_components(tmp_
     assert scan.generated == ()
 
 
-def test_liberty_scan_yields_exactly_one_generated_unit_per_module_and_no_files(tmp_path):
+def test_tomcat_scan_yields_exactly_one_generated_unit_per_module_and_no_files(tmp_path):
     a = make_module(tmp_path, name="a")
     b = make_module(tmp_path, name="b")
-    scan = scan_java_files(str(tmp_path), LIBERTY)
+    scan = scan_java_files(str(tmp_path), TOMCAT)
     assert scan.files == []
-    assert scan.generated == tuple(sorted(str(m / "src/main/liberty/config/server.xml") for m in (a, b)))
+    assert scan.generated == tuple(sorted(str(m / "src/main/webapp/META-INF/context.xml") for m in (a, b)))
     for g in scan.generated:
         assert not Path(g).exists()
 
 
-def test_liberty_scan_edits_an_existing_server_xml_in_place(tmp_path):
+def test_tomcat_scan_edits_an_existing_context_xml_in_place(tmp_path):
     """If the generate target already exists, it is a file to migrate, not to
     create — the transform reads it rather than being told to invent it."""
-    mod = make_module(tmp_path, extras=(("server.xml", "src/main/liberty/config/server.xml"),))
-    scan = scan_java_files(str(tmp_path), LIBERTY)
-    target = str(mod / "src/main/liberty/config/server.xml")
+    mod = make_module(tmp_path, extras=(("context.xml", "src/main/webapp/META-INF/context.xml"),))
+    scan = scan_java_files(str(tmp_path), TOMCAT)
+    target = str(mod / "src/main/webapp/META-INF/context.xml")
     assert target in scan.files
     assert scan.generated == ()
 
 
-TOMCAT = "tomcat-context-config"
-
-
-def test_tomcat_scan_generates_one_context_xml_per_module_and_takes_liberty_images(tmp_path):
+def test_tomcat_scan_generates_one_context_xml_per_module_and_takes_legacy_server_images(tmp_path):
     a = make_module(tmp_path, name="a")
     b = make_module(tmp_path, name="b")
+    # A legacy Liberty image is a SOURCE the Tomcat pack rewrites (content_match); the Temurin one is not.
     (a / "Dockerfile").write_text("FROM websphere-liberty:26.0.0.8-full-java8-ibmjava\n", encoding="utf-8")
     (b / "Dockerfile").write_text("FROM eclipse-temurin:21-jre\n", encoding="utf-8")
     scan = scan_java_files(str(tmp_path), TOMCAT)
     assert scan.generated == tuple(sorted(str(m / "src/main/webapp/META-INF/context.xml") for m in (a, b)))
     assert [Path(f).resolve() for f in scan.files] == [(a / "Dockerfile").resolve()], \
-        "only the image built on Liberty"
+        "only the image built on the legacy application server"
 
 
 def test_a_named_file_the_pack_would_create_is_generated_only_for_its_own_selector():
     from forge.extract.selectors import is_generated_target
     from forge.phases import get_phase
 
-    context_xml, server_xml = "/absent/src/main/webapp/META-INF/context.xml", "/absent/src/main/liberty/config/server.xml"
+    context_xml, web_xml = "/absent/src/main/webapp/META-INF/context.xml", "/absent/src/main/webapp/WEB-INF/web.xml"
     assert is_generated_target(get_phase(TOMCAT), context_xml)
-    assert not is_generated_target(get_phase(TOMCAT), server_xml)
-    assert is_generated_target(get_phase(LIBERTY), server_xml)
-    assert not is_generated_target(get_phase(LIBERTY), context_xml)
+    assert not is_generated_target(get_phase(TOMCAT), web_xml)
+    assert not is_generated_target(get_phase(WEBAPP), context_xml), "servlet_components generates nothing"
 
 
 def test_selector_files_respect_scope_prefix_and_test_source_exclusion(tmp_path):

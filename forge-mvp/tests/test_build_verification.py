@@ -213,12 +213,12 @@ def test_disabled_verification_leaves_file_done(tmp_path, java_file):
 
 
 def test_javac_mode_ignores_non_java_written_files(tmp_path):
-    """A migrated web.xml or a generated server.xml is not something to hand to
+    """A migrated web.xml or a generated context.xml is not something to hand to
     javac; with nothing else written the gate is SKIPPED, not FAIL."""
     v = BuildVerifier(_enabled(tmp_path))
     state = make_state("x", tmp_path, dry_run=False)
     state["current_file"]["written_paths"] = [str(tmp_path / "out/WEB-INF/web.xml"),
-                                              str(tmp_path / "out/src/main/liberty/config/server.xml")]
+                                              str(tmp_path / "out/src/main/webapp/META-INF/context.xml")]
     result = v.verify(state)
     assert result["verdict"] == "SKIPPED"
     assert "no Java sources" in result["output"]

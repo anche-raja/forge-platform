@@ -149,9 +149,9 @@ def test_webapp_bootstrap_single_file_run_injects_context_and_writes_snapshot(tm
     assert "Context snapshot:" in capsys.readouterr().out
 
 
-def test_liberty_run_generates_server_xml_under_the_module(tmp_path, capsys):
+def test_tomcat_run_generates_context_xml_under_the_module(tmp_path, capsys):
     """A generated unit has no source; the scan yields it, the transform is
-    given the context, and the output lands at the module's Liberty config path.
+    given the context, and the output lands at the module's WAR META-INF path.
 
     A generated unit is HIGH risk by rule, so this run opts out of the default
     hold with risk_ceiling: auto; the sibling test below pins the default."""
@@ -163,17 +163,17 @@ def test_liberty_run_generates_server_xml_under_the_module(tmp_path, capsys):
     with _mocked_aws(cfg) as mocks:
         with patch("forge.state_store.dynamodb.DynamoDBStateManager.put_file_status"), \
              patch("forge.state_store.dynamodb.DynamoDBStateManager.mark_pending") as pending:
-            _run([str(tmp_path / "proj"), "--phase", "liberty-server-config",
+            _run([str(tmp_path / "proj"), "--phase", "tomcat-context-config",
                   "--output-dir", str(out), "--config", str(cfg)])
 
     human = mocks["upgrade"].return_value.invoke.call_args[0][0][1].content
     assert "No existing file — generate it." in human
     assert "## datasources" in human and "jdbc/ordersDS" in human
-    written = out / "orders/src/main/liberty/config/server.xml"
+    written = out / "orders/src/main/webapp/META-INF/context.xml"
     assert written.exists(), sorted(str(p) for p in out.rglob("*"))
     pending.assert_not_called(), "a generated target is not a PENDING source file"
     stdout = capsys.readouterr().out
-    assert "(+1 generated)" in stdout and "server.xml (generated) → DONE" in stdout
+    assert "(+1 generated)" in stdout and "context.xml (generated) → DONE" in stdout
 
 
 # ─── acceptance ───────────────────────────────────────────────────────────────
@@ -232,8 +232,8 @@ def _run_main(argv):
         return migrate.main()
 
 
-def test_liberty_generated_unit_is_held_by_default(tmp_path, capsys):
-    """Under the default risk_ceiling (review-high) a generated server.xml is
+def test_tomcat_generated_unit_is_held_by_default(tmp_path, capsys):
+    """Under the default risk_ceiling (review-high) a generated context.xml is
     staged and held, never written unseen."""
     cfg = tmp_path / "agents.yaml"
     write_config(tmp_path)
@@ -243,14 +243,14 @@ def test_liberty_generated_unit_is_held_by_default(tmp_path, capsys):
     with _mocked_aws(cfg):
         with patch("forge.state_store.dynamodb.DynamoDBStateManager.put_file_status"), \
              patch("forge.state_store.dynamodb.DynamoDBStateManager.mark_pending"):
-            _run([str(tmp_path / "proj"), "--phase", "liberty-server-config",
+            _run([str(tmp_path / "proj"), "--phase", "tomcat-context-config",
                   "--output-dir", str(out), "--config", str(cfg)])
 
-    assert not (out / "orders/src/main/liberty/config/server.xml").exists()
-    staged = out / ".forge-staging/orders/src/main/liberty/config/server.xml"
+    assert not (out / "orders/src/main/webapp/META-INF/context.xml").exists()
+    staged = out / ".forge-staging/orders/src/main/webapp/META-INF/context.xml"
     assert staged.exists()
     stdout = capsys.readouterr().out
-    assert "server.xml (generated) → HELD" in stdout and "1 held" in stdout
+    assert "context.xml (generated) → HELD" in stdout and "1 held" in stdout
     queue = json.loads((out / "manual-review-queue.json").read_text(encoding="utf-8"))
     (entry,) = queue["entries"]
     assert entry["status"] == "HELD" and entry["held_paths"] == [str(staged)]

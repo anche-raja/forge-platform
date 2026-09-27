@@ -21,7 +21,7 @@ from forge.extract import (
     get_context,
     get_extractor,
 )
-from forge.extract.selectors import SERVER_XML_REL, is_generated_target, server_config, servlet_components
+from forge.extract.selectors import TOMCAT_CONTEXT_REL, is_generated_target, servlet_components, tomcat_context
 from forge.extract.web_bootstrap import find_modules, module_for, parse_xml, run, strip_ns
 
 FIXTURES = Path(__file__).parent / "fixtures" / "web_bootstrap"
@@ -70,6 +70,7 @@ def full_module(tmp_path):
         vendors=("jboss-web.xml",),
         java=("DataSourceConfig.java", "LoggingFilter.java", "StartupListener.java",
               "AuditFilter.java", "SessionCleanup.java", "CodeTable.java"),
+        # The legacy Liberty server.xml is an INPUT (pool sizes, JNDI names); no pack writes one.
         extras=(("server.xml", "src/main/liberty/config/server.xml"),
                 ("persistence.xml", "src/main/resources/META-INF/persistence.xml"),
                 ("context.xml", "src/main/webapp/META-INF/context.xml"),
@@ -82,7 +83,7 @@ def full_module(tmp_path):
 def test_extractor_is_registered_with_both_selectors():
     ext = get_extractor("web_bootstrap")
     assert ext is not None and ext is EXTRACTORS["web_bootstrap"]
-    assert ext.provides("servlet_components") and ext.provides("server_config")
+    assert ext.provides("servlet_components") and ext.provides("tomcat_context")
     assert not ext.provides("struts_actions")
 
 
@@ -277,7 +278,7 @@ def test_multiple_vendor_descriptors_are_all_kept(tmp_path):
     assert kinds == ["jboss", "weblogic", "websphere"]
 
 
-# ─── EAR, Liberty, datasources ────────────────────────────────────────────────
+# ─── EAR, legacy server.xml, datasources ──────────────────────────────────────
 
 def test_ear_application_xml_modules_and_library_directory(tmp_path):
     mod = make_module(tmp_path)
@@ -311,6 +312,9 @@ def test_ear_context_root_is_recovered_from_the_ear_pom_when_application_xml_is_
 
 
 def test_existing_liberty_server_xml_carries_pool_sizes_and_masks_literal_secrets(tmp_path, full_module):
+    """Legacy INPUT only: Liberty is not a target, but the application runs on
+    it today and the Tomcat pack carries these pool sizes and JNDI names into
+    META-INF/context.xml before retiring the file."""
     lib = run(str(tmp_path), str(full_module))["existing_server_xml"]
     assert lib["features"] == ["servlet-3.1", "jsp-2.3", "jdbc-4.1"]
     ds = lib["datasources"][0]
@@ -495,22 +499,22 @@ def test_servlet_components_selector_returns_sorted_unique_source_files(tmp_path
     assert {Path(f).name for f in sel.files} == {"LoggingFilter.java", "StartupListener.java", "AuditFilter.java", "SessionCleanup.java"}
 
 
-def test_server_config_selector_yields_one_generated_target_per_module(tmp_path, full_module):
-    sel = server_config({}, str(full_module))
-    assert sel.files == () and sel.generated == (str(full_module / SERVER_XML_REL),)
+def test_tomcat_context_selector_yields_one_generated_target_per_module(tmp_path, full_module):
+    sel = tomcat_context({}, str(full_module))
+    assert sel.files == () and sel.generated == (str(full_module / TOMCAT_CONTEXT_REL),)
 
 
-def test_is_generated_target_only_for_a_missing_server_xml_on_a_server_config_pack():
+def test_is_generated_target_only_for_a_missing_context_xml_on_a_tomcat_context_pack():
     class Spec:
-        selectors = ("server_config",)
+        selectors = ("tomcat_context",)
 
     class Other:
         selectors = ("servlet_components",)
 
-    assert is_generated_target(Spec(), "/nowhere/src/main/liberty/config/server.xml")
-    assert not is_generated_target(Other(), "/nowhere/src/main/liberty/config/server.xml")
+    assert is_generated_target(Spec(), "/nowhere/src/main/webapp/META-INF/context.xml")
+    assert not is_generated_target(Other(), "/nowhere/src/main/webapp/META-INF/context.xml")
     assert not is_generated_target(Spec(), "/nowhere/web.xml")
-    assert not is_generated_target(Spec(), str(FIXTURES / "server.xml")), "an existing file is edited, not generated"
+    assert not is_generated_target(Spec(), str(FIXTURES / "context.xml")), "an existing file is edited, not generated"
 
 
 # ─── any real project ─────────────────────────────────────────────────────────

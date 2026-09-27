@@ -213,14 +213,16 @@ def test_unstated_decisions_that_the_selected_packs_read_become_assumptions(regi
 
 
 def test_a_decision_with_no_value_anywhere_is_called_out(registry):
-    """`liberty-server-config` reads liberty_edition and liberty_features, and
-    DEFAULT_DECISIONS carries neither — the spec table lists both. A reader must
-    not have to notice the absence for themselves."""
-    plan = plan_for({}, [act("liberty-server-config")], registry)
+    """A pack reading a decision that DEFAULT_DECISIONS does not carry (the
+    defaults and the spec table are kept by hand) must be called out — a
+    reader must not have to notice the absence for themselves. Every shipped
+    decision has a default today, so `container` is withheld to exercise it."""
+    defaults = {k: v for k, v in DEFAULT_DECISIONS.items() if k != "container"}
+    plan = reconcile({}, [act("tomcat-context-config")], registry, defaults=defaults)
 
     unset = [a for a in plan.assumptions if "no value set anywhere" in a]
-    assert {"liberty_edition", "liberty_features"} == {a.split()[0] for a in unset}
-    assert "open, websphere" in next(a for a in unset if a.startswith("liberty_edition"))
+    assert {"container"} == {a.split()[0] for a in unset}
+    assert "tomcat, wildfly, jetty" in unset[0]
 
 
 # ─── vagueness and malformed input ───────────────────────────────────────────
@@ -385,17 +387,17 @@ def test_discover_with_intent_narrows_and_writes_the_plan(repo, tmp_path):  # no
 
 
 def test_a_decision_from_the_prompt_re_gates_the_activations(repo, tmp_path):  # noqa: F811
-    """`liberty-server-config` is gated on `container: liberty`. Asking for
-    Tomcat must stop it firing — which means re-resolving after the decision."""
+    """`tomcat-context-config` is gated on `container: tomcat`. Asking for
+    WildFly must stop it firing — which means re-resolving after the decision."""
     from forge import service
 
     config = write_config(tmp_path)
     with patch("forge.intent.agent.ChatBedrockConverse") as MockLLM:
-        MockLLM.return_value.invoke.return_value = llm_reply({"decisions": {"container": "tomcat"}})
-        result = service.discover(str(repo), str(tmp_path / "out"), config, intent="deploy on tomcat")
+        MockLLM.return_value.invoke.return_value = llm_reply({"decisions": {"container": "wildfly"}})
+        result = service.discover(str(repo), str(tmp_path / "out"), config, intent="deploy on wildfly")
 
-    assert "liberty-server-config" not in result["order"]
-    assert result["decisions"]["container"] == "tomcat"
+    assert "tomcat-context-config" not in result["order"]
+    assert result["decisions"]["container"] == "wildfly"
 
 
 def test_intent_without_a_config_is_refused_before_any_call(repo, tmp_path):  # noqa: F811

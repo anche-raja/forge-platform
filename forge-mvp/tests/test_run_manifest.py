@@ -35,35 +35,36 @@ def _unit(src, rel):
     return str(p)
 
 
-SERVER_XML = "web/src/main/liberty/config/server.xml"
+# A vendor descriptor the bootstrap pack migrates and the Tomcat pack retires.
+VENDOR_XML = "web/src/main/webapp/WEB-INF/ibm-web-bnd.xml"
 
 
 def test_a_file_a_later_pack_retires_is_no_longer_a_write(out):
-    """Or landing would copy the Liberty server.xml straight back in after the
+    """Or landing would copy the vendor descriptor straight back in after the
     Tomcat pack retired it."""
-    run_manifest.record(out, "liberty-server-config", [SERVER_XML])
-    run_manifest.record(out, "tomcat-context-config", [], deleted=[SERVER_XML])
-    assert SERVER_XML not in run_manifest.load(out)
-    assert run_manifest.deleted_paths(out) == [SERVER_XML]
+    run_manifest.record(out, "webapp-bootstrap-jakarta10", [VENDOR_XML])
+    run_manifest.record(out, "tomcat-context-config", [], deleted=[VENDOR_XML])
+    assert VENDOR_XML not in run_manifest.load(out)
+    assert run_manifest.deleted_paths(out) == [VENDOR_XML]
 
-    run_manifest.record(out, "liberty-server-config", [SERVER_XML])
-    assert run_manifest.load(out)[SERVER_XML] == "liberty-server-config"
+    run_manifest.record(out, "webapp-bootstrap-jakarta10", [VENDOR_XML])
+    assert run_manifest.load(out)[VENDOR_XML] == "webapp-bootstrap-jakarta10"
     assert run_manifest.deleted_paths(out) == [], "writing it again brings it back"
 
 
 def test_a_retired_file_is_not_landed_even_if_it_was_approved(out):
     from forge.leader.landing import recorded_files
 
-    run_manifest.record(out, "liberty-server-config", [SERVER_XML, "web/pom.xml"])
-    run_manifest.record(out, "tomcat-context-config", [], deleted=[SERVER_XML])
+    run_manifest.record(out, "webapp-bootstrap-jakarta10", [VENDOR_XML, "web/pom.xml"])
+    run_manifest.record(out, "tomcat-context-config", [], deleted=[VENDOR_XML])
     assert recorded_files(out) == {"web/pom.xml"}
 
 
 def test_an_absolute_deleted_path_is_recorded_relative_to_the_tree_the_run_read(src):
     from forge.service import _tree_rel
 
-    assert _tree_rel(str(Path(src) / SERVER_XML), src) == SERVER_XML
-    assert _tree_rel(SERVER_XML, src) == SERVER_XML
+    assert _tree_rel(str(Path(src) / VENDOR_XML), src) == VENDOR_XML
+    assert _tree_rel(VENDOR_XML, src) == VENDOR_XML
     outside = str(Path(src).parent / "elsewhere/server.xml")
     assert _tree_rel(outside, src) == Path(outside).as_posix(), "outside the tree: kept, landing bounds it"
 
@@ -98,7 +99,7 @@ def test_rerunning_the_same_pack_is_never_a_conflict(out, src):
 
 
 def test_packs_touching_different_files_do_not_conflict(out, src):
-    """The common safe case: liberty-server-config and jsp-jstl-modernize."""
+    """The common safe case: webapp-bootstrap-jakarta10 and jsp-jstl-modernize."""
     a = _unit(src, "src/main/webapp/WEB-INF/web.xml")
     b = _unit(src, "src/main/webapp/index.jsp")
     run_manifest.record(out, "webapp-bootstrap-jakarta10", [str(Path(out) / "src/main/webapp/WEB-INF/web.xml")])

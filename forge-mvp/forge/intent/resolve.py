@@ -177,9 +177,9 @@ def reconcile(
         read_by_selected |= set(registry[pid].decisions)
     for key in sorted(read_by_selected):
         if key not in decisions:
-            # DEFAULT_DECISIONS is missing two keys the spec table lists
-            # (liberty_edition, liberty_features). A pack reading a decision
-            # that has no value anywhere is worth more noise than an assumed
+            # DEFAULT_DECISIONS and the spec table are kept by hand, so a pack
+            # can read a key neither carries. A pack reading a decision that
+            # has no value anywhere is worth more noise than an assumed
             # default, not less — it is the one a reader cannot even see.
             assumptions.append(
                 f"{key} is read by a selected pack but has no value set anywhere "

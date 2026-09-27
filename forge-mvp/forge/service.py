@@ -322,7 +322,7 @@ def discover(source_dir: str, output_dir: str, config: Optional[ForgeConfig] = N
 
         plan = resolved(activations)
         # A decision from the prompt can change which packs a `decision_equals`
-        # gate admits — ask for Tomcat and the Liberty pack must stop firing.
+        # gate admits — ask for WildFly and the Tomcat pack must stop firing.
         # resolve_packs is pure over profile.decisions, so re-deriving costs
         # nothing and needs no second model call.
         if plan.decisions != decisions:

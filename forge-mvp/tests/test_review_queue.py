@@ -81,10 +81,10 @@ def test_original_is_capped_with_a_marker(tmp_path):
 
 
 def test_generated_unit_has_no_original(tmp_path):
-    target = tmp_path / "src/mod/src/main/liberty/config/server.xml"
-    fs = _status(target, "HELD", files={str(target): "<server/>"}, generate=True)
+    target = tmp_path / "src/mod/src/main/webapp/META-INF/context.xml"
+    fs = _status(target, "HELD", files={str(target): "<Context/>"}, generate=True)
     e = build_queue([fs], str(tmp_path / "src"), str(tmp_path / "out"))["entries"][0]
-    assert e["original"] is None and e["transformed"] == {"mod/src/main/liberty/config/server.xml": "<server/>"}
+    assert e["original"] is None and e["transformed"] == {"mod/src/main/webapp/META-INF/context.xml": "<Context/>"}
 
 
 def test_transformed_is_read_back_from_staged_files_when_state_was_truncated(tmp_path, src):

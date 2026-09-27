@@ -400,7 +400,7 @@ test_generation:
 decisions:
   web_framework: modernize-in-place     # modernize-in-place | migrate-to-spring
   runtime: war-xml-bootstrap            # war-xml-bootstrap | war-programmatic-bootstrap
-  container: liberty                    # liberty | wildfly | tomcat | jetty
+  container: tomcat                     # tomcat | wildfly | jetty
   views: in-place                       # in-place | thymeleaf | defer
   url_compat: preserve-with-redirect
   # auto: a file the reviewer passes (score >= pass_threshold) is written with no

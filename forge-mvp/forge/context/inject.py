@@ -44,8 +44,8 @@ def decisions_block(state: ForgeState, config: ForgeConfig) -> Optional[str]:
 
     Packs branch on decisions -- "per the `container` decision", "only on a
     bare servlet container (tomcat, jetty)" -- and until this block existed
-    the value never reached the prompt: setting ``container: tomcat`` switched
-    the Liberty pack off at discovery and changed nothing any model wrote. The
+    the value never reached the prompt: setting ``container: wildfly`` switched
+    the Tomcat pack off at discovery and changed nothing any model wrote. The
     values are the ones discovery resolves: agents.yaml (with a chat's intent
     overrides) over the platform defaults. A pack that declares no decisions,
     and every built-in phase, gets no block.

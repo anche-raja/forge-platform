@@ -30,7 +30,8 @@ from forge.testgen.runner import TestRunner
 from forge.testgen.settings import TestGenSettings
 from forge.testgen.targets import target_from_unit
 from forge.testgen.state import TestGenState
-from forge.testgen.writer import remove_written, stage_test_files, write_test_files
+from forge.testgen.writer import (forget_written, record_written, remove_written, stage_test_files,
+                                  write_test_files)
 from forge.utils.secret_scan import find_secrets
 from forge.utils.telemetry import get_logger
 
@@ -112,6 +113,8 @@ def build_testgen_graph(config: ForgeConfig, settings: Optional[TestGenSettings]
             unit["written_paths"] = []
             return {**state, "current_unit": unit}
         unit["written_paths"] = write_test_files(files, target_from_unit(unit), state["output_dir"])
+        # Recorded, or landing treats them as strays and the branch sync skips them.
+        record_written(state["output_dir"], unit["written_paths"])
         unit["status"] = "GENERATED"
         return {**state, "current_unit": unit}
 
@@ -130,6 +133,7 @@ def build_testgen_graph(config: ForgeConfig, settings: Optional[TestGenSettings]
             # src/test/java breaks every build that follows, and whether it is
             # the test or the migrated code that is wrong is a human's call.
             remove_written(unit.get("written_paths") or [], state["output_dir"])
+            forget_written(state["output_dir"], unit.get("written_paths") or [])
             unit["written_paths"] = []
         return {**state, "current_unit": unit}
 

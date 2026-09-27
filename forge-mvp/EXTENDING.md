@@ -1,6 +1,6 @@
 # Adding a technology transition
 
-A new migration — Hibernate 5→6, Log4j→SLF4J, WebLogic→Liberty — is **one markdown file and no
+A new migration — Hibernate 5→6, Log4j→SLF4J, WebLogic→Tomcat — is **one markdown file and no
 Python**. This is the platform's extension point, and it is the thing most worth knowing about
 FORGE's design.
 
@@ -79,14 +79,14 @@ prompt from activating a pack your repository shows no sign of needing.
 | `property_lt` | `{name: "maven.compiler.source", value: "21"}` | Maven properties |
 | `gradle_property_lt` | the same shape | Gradle properties |
 | `xml_element` | `"namespace:element"` | Descriptor element names |
-| `decision_equals` | `{key: "container", value: "liberty"}` | **A gate, never evidence** |
+| `decision_equals` | `{key: "container", value: "tomcat"}` | **A gate, never evidence** |
 
 Versions are resolved through `${properties}`, `dependencyManagement` and imported BOMs, so
 `dependency_lt` compares against the real resolved version.
 
 **`decision_equals` can never activate a pack alone.** Every decision rule must hold *and* at least
-one non-decision rule must fire — otherwise an empty directory would "need" the Liberty pack
-because the config happens to name Liberty.
+one non-decision rule must fire — otherwise an empty directory would "need" the Tomcat pack
+because the config happens to name Tomcat.
 
 ---
 

@@ -51,7 +51,7 @@ def test_security_configuration_is_high_by_rule_even_when_small():
 
 
 def test_generated_unit_is_high_by_rule():
-    score, tier, reasons = score_unit("/m/src/main/liberty/config/server.xml", "", generate=True)
+    score, tier, reasons = score_unit("/m/src/main/webapp/META-INF/context.xml", "", generate=True)
     assert tier == "HIGH" and reasons[0].startswith("generated unit")
 
 

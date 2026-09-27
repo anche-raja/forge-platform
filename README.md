@@ -3,7 +3,7 @@
 AI-powered **J2EE → Java 21** migration platform. It takes a legacy enterprise application —
 Java 8, `javax.*`, Struts 1/2, Spring 5, Spring Security 5, JSP/JSTL, JUnit 4, vendor
 descriptors — and moves it to **Java 21 · Jakarta EE 10 · Spring Framework 6 · a WAR on
-WebSphere/Open Liberty**, one *pack* (technology transition) at a time. Every file goes through
+Apache Tomcat 10.1**, one *pack* (technology transition) at a time. Every file goes through
 Bedrock Guardrails, a transform model, a cross-model review, a deterministic risk score and an
 optional compile gate before it is written; risky units are held for a human. No Spring Boot.
 
@@ -291,7 +291,7 @@ sort, so the plan stays reproducible and replays with no model call.
 
 `java21` is the one built-in phase. Everything else is a **pack** under [prompts/packs/](prompts/packs/) —
 one technology transition per file (`javax-to-jakarta`, `struts2-modernize`, `springsec-to-springsec6`,
-`webapp-bootstrap-jakarta10`, `liberty-server-config`, …), loaded at startup and accepted by
+`webapp-bootstrap-jakarta10`, `tomcat-context-config`, …), loaded at startup and accepted by
 `--phase`. The contract is [prompts/FORGE-Platform-Requirements.md](prompts/FORGE-Platform-Requirements.md).
 
 ### Optional: build verification
@@ -341,7 +341,7 @@ anything was held, so it gates CI. See [ARCHITECTURE.md §14](forge-mvp/ARCHITEC
 - ✅ **Observability** — the pipeline now publishes the metrics the CloudWatch alarms and dashboard consume
 - ✅ **Build verification** — opt-in `javac`/`mvn` gate; a failed compile retries with the compiler errors
 - ✅ **Phases** — `java21` built in; 10 runnable packs on top (4 without their declared context)
-- ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml`, vendor descriptors and Liberty `server.xml` migrate with full descriptor context
+- ✅ **Phase 1 packs + `web_bootstrap` extractor** — `web.xml` and vendor descriptors migrate with full descriptor context; the Tomcat `META-INF/context.xml` is generated from it
 - ✅ **Discovery + acceptance** — `--discover` profiles any repo and selects packs; `--acceptance` gates the project on mechanical checks
 - ✅ **Human in the loop** — risky units are held and reviewed **in the chat**, with Approve / Reject / Retry on each; notes roll up into `pack-feedback.md`. `migration-review.html` → `decisions.json` → `--apply-decisions` is the CI-friendly equivalent
 - ✅ **The chat leader** — `python migrate.py --ui`: a model sequences the plan, chains packs so each builds on the last, and confirms before spending. The wizard is gone (ARCHITECTURE §16)

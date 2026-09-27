@@ -116,7 +116,7 @@ def resolve_packs(profile: Profile, packs: Sequence[PackSpec]) -> List[Activatio
     target is, not what the repository contains, so it can never activate a
     pack on its own. Every decision rule a pack declares must hold, and at least
     one repository rule must fire. Otherwise an empty directory would "need"
-    the Liberty pack because the config says the container is Liberty.
+    the Tomcat pack because the config says the container is Tomcat.
     """
     out: List[Activation] = []
     for pack in packs:

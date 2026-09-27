@@ -13,17 +13,19 @@ FORGE migrates any J2EE/Jakarta application in the enterprise, from a single-mod
 multi-module EAR, using the **same engine**. What differs between projects is never code — it is
 which **stack packs** discovery activates.
 
-**The target is a WAR on WebSphere/Open Liberty at Jakarta EE 10 — Spring Framework 6.2 without
+**The target is a WAR on Apache Tomcat 10.1 at Jakarta EE 10 — Spring Framework 6.2 without
 Spring Boot.** This is a deliberate platform constraint, not a per-project decision: no embedded
 server, no executable jar, no Boot autoconfiguration, no `spring-boot-*` coordinate anywhere in
 the output. Dependency versions are aligned by the Spring Framework, Spring Security, Jackson and
-JUnit BOMs instead.
+JUnit BOMs instead. (Liberty support as a target was removed on 2026-09-27.)
 
-Liberty being a **full Jakarta EE 10 profile** is what makes this the low-risk target. JNDI,
-JTA, managed connection pools, security registries and shared-library classloading all remain
-container responsibilities, exactly as they are on the app server the application runs on today.
-Nothing that the container used to provide has to be reimplemented inside the application — which
-is the failure mode of migrating a JEE app onto a bare servlet container.
+Tomcat is a servlet container, not a full profile, and the packs are written for that: JNDI and a
+connection pool per `<Resource>` come from the WAR's own `META-INF/context.xml`, which the
+`tomcat-context-config` pack generates from the old descriptors so the code keeps its JNDI lookups
+and nothing in Java changes; JSTL is bundled because Tomcat does not ship it; and what Tomcat does
+not provide — JTA, CDI, mail sessions, a security registry — is **flagged**, never silently
+reimplemented inside the application. Pool sizes are carried from the old server's configuration
+or flagged, never invented.
 
 Three things are kept strictly separate:
 
@@ -85,7 +87,7 @@ acceptance:                      # mechanical, post-migration; no model involved
 - **`detect.any` fires on repository evidence; `decision_equals` rules are gates.** A decision
   describes the target, not the repository, so it can never activate a pack by itself — every
   decision rule a pack declares must hold *and* at least one other rule must fire. Otherwise an
-  empty directory would "need" the Liberty pack because the config names Liberty.
+  empty directory would "need" the Tomcat pack because the config names Tomcat.
 - **`detect`** must be decidable **without an LLM** — dependency coordinates, file globs, import
   prefixes, XML doctypes, descriptor element names. Detection is evidence, not opinion.
 - **`applies_to`** takes three kinds. A `file_glob` names files by path. A `content_match`
@@ -145,7 +147,7 @@ technology.
 | `jsp-jstl-modernize` | view | complete |
 | `junit4-to-junit5` | test | complete |
 | `webapp-bootstrap-jakarta10` | platform | complete |
-| `liberty-server-config` | platform | complete |
+| `tomcat-context-config` | platform | complete |
 | `ejb2-to-spring` | framework | detect-only |
 | `ejb3-to-spring` | framework | detect-only |
 | `jsf-to-faces4` | view | detect-only |
@@ -200,9 +202,7 @@ specific input, and they live in `forge-profile.yaml` — never in a pack, never
 |---|---|---|---|
 | `web_framework` | `modernize-in-place` | `struts2-modernize` | `modernize-in-place` |
 | `runtime` | `war-xml-bootstrap` · `war-programmatic-bootstrap` | `webapp-bootstrap-jakarta10`, `build-maven-modernize` | `war-xml-bootstrap` |
-| `container` | `liberty` *(platform standard)* · `wildfly` · `tomcat` · `jetty` | `webapp-bootstrap-jakarta10`, `liberty-server-config`, `build-maven-modernize` | `liberty` |
-| `liberty_edition` | `open` · `websphere` | `liberty-server-config` | `websphere` |
-| `liberty_features` | `jakartaee-10.0` · `webProfile-10.0` · `granular` | `liberty-server-config` | `granular` |
+| `container` | `tomcat` *(platform standard, Apache Tomcat 10.1)* · `wildfly` · `jetty` | `webapp-bootstrap-jakarta10`, `tomcat-context-config`, `build-maven-modernize` | `tomcat` |
 | `views` | `in-place` · `thymeleaf` · `defer` | `jsp-jstl-modernize`, `jsf-to-faces4` | `in-place` |
 | `url_compat` | `preserve-with-redirect` · `preserve-exact` · `clean-only` | *(no pack today)* | `preserve-with-redirect` |
 | `persistence` | `keep-orm` · `to-spring-data` | `hibernate-to-hibernate6`, `ejb*-to-spring` | `keep-orm` |
@@ -219,7 +219,7 @@ a decision value no pack implements resolves to a plan that selects nothing. The
 arbitration machinery stay so a second route can be reintroduced without them going missing.
 
 Doing them in that order is not a compromise, it is the cheaper path: once an application is on
-Struts 7, it is already on Java 21, Jakarta EE 10 and Liberty, and the eventual Spring migration
+Struts 7, it is already on Java 21, Jakarta EE 10 and Tomcat 10.1, and the eventual Spring migration
 is a framework change **alone** rather than four changes at once. Activating both for one project
 is a configuration error — they edit the same files toward different targets.
 
@@ -253,13 +253,11 @@ packs:
   - jsp-jstl-modernize@1.0.0       # evidence: 116 JSP, 57 java.sun.com JSTL URIs
   - junit4-to-junit5@1.0.0         # evidence: junit:junit:4.12, mockito 1.9.5
   - webapp-bootstrap-jakarta10@1.0.0 # evidence: WEB-INF/web.xml v3.1
-  - liberty-server-config@1.0.0    # evidence: container decision = liberty
+  - tomcat-context-config@1.0.0    # evidence: WEB-INF/web.xml, container decision = tomcat
 
 decisions:
   runtime: war-xml-bootstrap
-  container: liberty
-  liberty_edition: websphere
-  liberty_features: granular
+  container: tomcat
   views: in-place
   url_compat: preserve-with-redirect
   idiom_aggressiveness: conservative

@@ -18,9 +18,9 @@ BEGIN = "=== CONTEXT: {name} ==="
 END = "=== END CONTEXT ==="
 
 # What matters most depends on the target. Migrating web.xml, the chain and
-# the descriptor itself lead; generating server.xml, the resources and any
-# existing Liberty config lead so pool sizes and JNDI names are never the
-# part that gets cut.
+# the descriptor itself lead; generating the Tomcat META-INF/context.xml, the
+# resources and any existing app-server config lead so pool sizes and JNDI
+# names are never the part that gets cut.
 _PRIORITY_EDIT = (
     "web_xml", "filter_chain", "vendors", "servlet_components",
     "unresolved_classes", "datasources", "ear", "existing_server_xml",
@@ -35,7 +35,7 @@ _NEVER_RENDER = frozenset({"authz", "ids", "extractor", "version", "module_dir",
 
 
 def section_priority(for_target: str) -> Tuple[str, ...]:
-    return _PRIORITY_GENERATE if Path(for_target).name == "server.xml" else _PRIORITY_EDIT
+    return _PRIORITY_GENERATE if Path(for_target).name == "context.xml" else _PRIORITY_EDIT
 
 
 def _dump(value) -> str:

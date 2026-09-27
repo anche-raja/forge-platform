@@ -16,7 +16,7 @@ from tests.test_extract_web_bootstrap import make_module
 from tests.test_packs import _fm, write_pack
 
 WEBAPP = "webapp-bootstrap-jakarta10"
-LIBERTY = "liberty-server-config"
+TOMCAT = "tomcat-context-config"
 LEGACY_HEADER = "Transform this file:\nFile path: "
 
 
@@ -31,10 +31,11 @@ def _fresh():
 
 @pytest.fixture
 def module(tmp_path):
-    # The existing Liberty config lives outside the maven config dir, as ops
-    # often keeps it; the generate target at src/main/liberty/config/ stays absent.
+    # The old application server's server.xml (a legacy input: its pool sizes
+    # must reach the prompt) lives where ops often keeps it, outside the Maven
+    # tree; the generate target at src/main/webapp/META-INF/ stays absent.
     return make_module(tmp_path, java=("LoggingFilter.java", "StartupListener.java"),
-                       extras=(("server.xml", "deploy/liberty/server.xml"),))
+                       extras=(("server.xml", "deploy/config/server.xml"),))
 
 
 @pytest.fixture
@@ -73,7 +74,7 @@ def test_context_block_is_appended_after_the_source_for_a_pack_with_context(tmp_
     assert human.startswith(LEGACY_HEADER), "the CLI tests split on this header"
     assert BEGIN.format(name="web_bootstrap") in human and END in human
     # The pack declares decisions, so their block is the last thing in the message.
-    assert human.rstrip().endswith("- container: liberty") or "PROJECT DECISIONS" in human.split(END)[-1]
+    assert human.rstrip().endswith("- container: tomcat") or "PROJECT DECISIONS" in human.split(END)[-1]
     assert human.index("```") < human.index(BEGIN.format(name="web_bootstrap")), "source first, context after"
     assert "## filter_chain" in human and "springSecurityFilterChain" in human
     assert "LoggingFilter" in human, "resolved servlet components are part of the context"
@@ -104,24 +105,24 @@ def test_the_decisions_a_pack_declares_reach_its_prompt_with_their_values(tmp_pa
 
     web_xml = str(module / "src/main/webapp/WEB-INF/web.xml")
     human, _ = _transform(tmp_path, web_xml, WEBAPP)
-    assert "PROJECT DECISIONS" in human and "- container: liberty" in human, "the platform default"
+    assert "PROJECT DECISIONS" in human and "- container: tomcat" in human, "the platform default"
     assert human.index(END) < human.index("PROJECT DECISIONS"), "after the context block"
 
     state = make_state(web_xml, tmp_path, phase=WEBAPP)
-    block = decisions_block(state, write_config(tmp_path, decisions={"container": "tomcat"}))
-    assert "- container: tomcat" in block and "- runtime: war-xml-bootstrap" in block
+    block = decisions_block(state, write_config(tmp_path, decisions={"container": "wildfly"}))
+    assert "- container: wildfly" in block and "- runtime: war-xml-bootstrap" in block
     assert "risk_ceiling" not in block, "only the decisions the pack declares"
 
 
 def test_generated_unit_gets_the_context_instead_of_a_source_file(tmp_path, module):
-    target = str(module / "src/main/liberty/config/server.xml")
+    target = str(module / "src/main/webapp/META-INF/context.xml")
     assert not Path(target).exists()
-    human, fs = _transform(tmp_path, target, LIBERTY, generate=True)
+    human, fs = _transform(tmp_path, target, TOMCAT, generate=True)
 
     assert human.startswith(LEGACY_HEADER)
     assert "No existing file — generate it." in human and f"Target path: {target}" in human
     assert "```" not in human.split(BEGIN.format(name="web_bootstrap"))[0], "no source fence for a generated unit"
-    # For a server.xml target the resources lead, so pool sizes are never what gets cut.
+    # For a context.xml target the resources lead, so pool sizes are never what gets cut.
     assert human.index("## datasources") < human.index("## web_xml")
     assert "maxPoolSize" in human and "jdbc/ordersDS" in human
     assert fs["status"] == "REVIEWING"
@@ -176,13 +177,13 @@ def test_pre_flight_screens_the_context_block_for_a_generated_unit(tmp_path, mod
     guardrail must see."""
     from forge.agents.guardrails_pre import GuardrailsPreAgent
 
-    target = str(module / "src/main/liberty/config/server.xml")
+    target = str(module / "src/main/webapp/META-INF/context.xml")
     with patch("forge.agents.guardrails_pre.BedrockGuardrails") as MockGR, \
          patch("forge.agents.guardrails_pre.ChatBedrockConverse") as MockLLM:
         MockGR.return_value.evaluate.return_value = {"action": "NONE", "findings": [], "intervened": False}
         MockLLM.return_value.invoke.return_value = llm_reply({"verdict": "PASS", "findings": [], "reason": ""})
         agent = GuardrailsPreAgent(write_config(tmp_path))
-        state = make_state(target, tmp_path, phase=LIBERTY)
+        state = make_state(target, tmp_path, phase=TOMCAT)
         state["current_file"]["generate"] = True
         result = agent.run(state)
         screened = MockGR.return_value.evaluate.call_args[0][0]

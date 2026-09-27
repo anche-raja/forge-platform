@@ -806,7 +806,7 @@ def test_selector_not_provided_by_registered_context_is_a_load_error(packs):
     write_pack(packs, "p", frontmatter=_fm(context="web_bootstrap", applies_to="\n  - selector: struts_actions"))
     msg = load_error(packs)
     assert "not provided by context 'web_bootstrap'" in msg
-    assert "server_config" in msg and "servlet_components" in msg, "the error names what the extractor does provide"
+    assert "tomcat_context" in msg and "servlet_components" in msg, "the error names what the extractor does provide"
 
 
 def test_registered_context_with_its_own_selectors_loads(packs):
@@ -849,7 +849,7 @@ def test_web_bootstrap_packs_selectors_match_the_extractor(library):
     from forge.extract import get_extractor
 
     ext = get_extractor("web_bootstrap")
-    for pid in ("webapp-bootstrap-jakarta10", "liberty-server-config"):
+    for pid in ("webapp-bootstrap-jakarta10", "tomcat-context-config"):
         pack = library[pid]
         assert pack.context == "web_bootstrap"
         for sel in pack.selectors:

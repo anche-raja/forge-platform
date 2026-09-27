@@ -129,9 +129,9 @@ Beyond whatever the model reports, `reconcile` walks the selected packs' declare
 flags every one still sitting on a platform default. That is the useful subset: not every default
 matters, only the ones a pack in this plan will actually read.
 
-It also surfaces a decision with **no value anywhere**. `DEFAULT_DECISIONS` is missing
-`liberty_edition` and `liberty_features`, both of which the spec table lists and
-`liberty-server-config` reads — an absence a reader would otherwise have to notice for themselves.
+It also surfaces a decision with **no value anywhere**: `DEFAULT_DECISIONS` and the spec table are
+kept by hand, so a pack can read a key neither carries — an absence a reader would otherwise have
+to notice for themselves. (Every shipped decision has a default today; the test withholds one.)
 
 ---
 
@@ -149,8 +149,8 @@ and blast radius. "Ignore the db folder" is therefore always safe to honour.
 
 ## 7. A decision can re-gate discovery
 
-`liberty-server-config` is gated on `decision_equals: {key: container, value: liberty}`. If the
-prompt asks for Tomcat, that pack must stop firing — but the activations were computed before the
+`tomcat-context-config` is gated on `decision_equals: {key: container, value: tomcat}`. If the
+prompt asks for WildFly, that pack must stop firing — but the activations were computed before the
 prompt was read.
 
 `service.discover` handles it by re-deriving: `resolve_packs` is pure over `profile.decisions`, so

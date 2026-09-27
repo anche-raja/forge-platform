@@ -43,11 +43,11 @@ def test_internal_and_duplicate_sections_are_not_rendered():
     assert "## extractor" not in out and "## module_dir" not in out
 
 
-def test_priority_differs_for_a_generated_server_xml_target():
+def test_priority_differs_for_a_generated_context_xml_target():
     assert section_priority("/m/web.xml")[:2] == ("web_xml", "filter_chain")
-    assert section_priority("/m/src/main/liberty/config/server.xml")[:2] == ("datasources", "existing_server_xml")
+    assert section_priority("/m/src/main/webapp/META-INF/context.xml")[:2] == ("datasources", "existing_server_xml")
     edit = render_context("web_bootstrap", _ctx(), for_target="/m/web.xml")
-    gen = render_context("web_bootstrap", _ctx(), for_target="/m/server.xml")
+    gen = render_context("web_bootstrap", _ctx(), for_target="/m/context.xml")
     assert edit.index("## web_xml") < edit.index("## datasources")
     assert gen.index("## datasources") < gen.index("## web_xml")
 

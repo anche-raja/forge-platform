@@ -171,7 +171,7 @@ def test_resolution_fires_the_right_packs_with_evidence(repo, packs):
     expected = {"build-maven-modernize", "java8-to-java21", "javax-to-jakarta", "spring-to-spring6",
                 "springsec-to-springsec6", "struts2-modernize",
                 "jsp-jstl-modernize", "junit4-to-junit5", "webapp-bootstrap-jakarta10",
-                "liberty-server-config", "hibernate-to-hibernate6"}
+                "tomcat-context-config", "hibernate-to-hibernate6"}
     assert expected <= set(acts), sorted(set(acts))
     for absent in ("ejb2-to-spring", "ejb3-to-spring", "jsf-to-faces4", "ibatis-to-mybatis", "ant-to-maven",
                    # Removed with the Struts -> Spring MVC route.
@@ -183,7 +183,7 @@ def test_resolution_fires_the_right_packs_with_evidence(repo, packs):
     assert any("spring-core:5.3.39 < 6.0.0" in e for e in acts["spring-to-spring6"].evidence)
     assert any("import javax.servlet" in e for e in acts["javax-to-jakarta"].evidence)
     assert any("content orders/src/main/webapp/WEB-INF/jsp/list.jsp" in e for e in acts["jsp-jstl-modernize"].evidence)
-    assert any("decision container=liberty" in e for e in acts["liberty-server-config"].evidence)
+    assert any("decision container=tomcat" in e for e in acts["tomcat-context-config"].evidence)
     assert any("hibernate-core:5.6.15.Final < 6.0.0" in e for e in acts["hibernate-to-hibernate6"].evidence)
     assert acts["hibernate-to-hibernate6"].complete is False
 
@@ -211,33 +211,33 @@ def test_unresolved_version_is_assumed_old_and_says_so(tmp_path):
 
 
 def test_a_decision_alone_never_activates_a_pack(tmp_path, packs):
-    """Config says the container is Liberty; the directory is empty. Nothing to migrate."""
+    """Config says the container is Tomcat; the directory is empty. Nothing to migrate."""
     (tmp_path / "nothing").mkdir()
     acts = resolve_packs(build_profile(str(tmp_path / "nothing"), decisions=DEFAULT_DECISIONS), packs)
     assert acts == []
 
 
-def test_a_web_app_on_the_liberty_target_activates_the_liberty_pack_with_both_kinds_of_evidence(repo, packs):
+def test_a_web_app_on_the_tomcat_target_activates_the_tomcat_pack_with_both_kinds_of_evidence(repo, packs):
     p = build_profile(str(repo), decisions=DEFAULT_DECISIONS)
-    act = next(a for a in resolve_packs(p, packs) if a.pack_id == "liberty-server-config")
+    act = next(a for a in resolve_packs(p, packs) if a.pack_id == "tomcat-context-config")
     assert any(e.startswith("file ") and e.endswith("WEB-INF/web.xml") for e in act.evidence)
-    assert "decision container=liberty" in act.evidence
+    assert "decision container=tomcat" in act.evidence
 
 
 def test_decision_equals_does_not_fire_when_the_decision_differs(repo, packs):
     p = build_profile(str(repo), decisions={"container": "wildfly"})
     acts = {a.pack_id for a in resolve_packs(p, packs)}
-    assert "liberty-server-config" not in acts
+    assert "tomcat-context-config" not in acts
 
 
-def test_the_tomcat_target_swaps_the_liberty_pack_for_the_tomcat_one(repo, packs):
-    on_tomcat = {a.pack_id: a for a in resolve_packs(
-        build_profile(str(repo), decisions={**DEFAULT_DECISIONS, "container": "tomcat"}), packs)}
-    assert "tomcat-context-config" in on_tomcat and "liberty-server-config" not in on_tomcat
+def test_the_container_decision_gates_the_tomcat_pack(repo, packs):
+    on_tomcat = {a.pack_id: a for a in resolve_packs(build_profile(str(repo), decisions=DEFAULT_DECISIONS), packs)}
+    assert "tomcat-context-config" in on_tomcat, "tomcat is the platform default"
     assert "decision container=tomcat" in on_tomcat["tomcat-context-config"].evidence
 
-    on_liberty = {a.pack_id for a in resolve_packs(build_profile(str(repo), decisions=DEFAULT_DECISIONS), packs)}
-    assert "liberty-server-config" in on_liberty and "tomcat-context-config" not in on_liberty
+    on_jetty = {a.pack_id for a in resolve_packs(
+        build_profile(str(repo), decisions={**DEFAULT_DECISIONS, "container": "jetty"}), packs)}
+    assert "tomcat-context-config" not in on_jetty
 
 
 # ─── outputs and CLI ──────────────────────────────────────────────────────────
@@ -256,7 +256,7 @@ def test_write_outputs_produces_profile_yaml_with_packs_evidence_and_decisions(r
     assert yaml_text.index("- build-maven-modernize") < yaml_text.index("- struts2-modernize") < yaml_text.index("- jsp-jstl-modernize")
     assert "- hibernate-to-hibernate6   # detect-only" in yaml_text
     assert "# dependency org.apache.struts:struts2-core:6.8.0 < 7.0.0" in yaml_text
-    assert "web_framework: modernize-in-place" in yaml_text and "container: liberty" in yaml_text
+    assert "web_framework: modernize-in-place" in yaml_text and "container: tomcat" in yaml_text
     data = json.loads(json_path.read_text(encoding="utf-8"))
     assert data["order"] == list(order) and any(a["pack"] == "struts2-modernize" for a in data["activations"])
 

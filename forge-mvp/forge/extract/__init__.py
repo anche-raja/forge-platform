@@ -21,7 +21,7 @@ class Selection(NamedTuple):
     """What a selector resolved to.
 
     ``files`` exist and will be transformed. ``generated`` are target paths that
-    do not exist yet — a pack that produces a new file (Liberty ``server.xml``)
+    do not exist yet — a pack that produces a new file (Tomcat ``META-INF/context.xml``)
     names where it goes, and the transform is given the context instead of a
     source file.
     """

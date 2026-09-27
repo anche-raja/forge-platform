@@ -24,7 +24,7 @@ That opens http://127.0.0.1:8765. Everything below happens in that window.
 >
 > Ten packs apply, in dependency order: build-maven-modernize, java8-to-java21, javax-to-jakarta,
 > spring-to-spring6, springsec-to-springsec6, struts2-modernize, jsp-jstl-modernize,
-> junit4-to-junit5, webapp-bootstrap-jakarta10, liberty-server-config.
+> junit4-to-junit5, webapp-bootstrap-jakarta10, tomcat-context-config.
 >
 > Nothing has run and nothing has been spent. Want me to start?
 
@@ -231,7 +231,7 @@ Ten packs run today. Each is one technology transition.
 | `jsp-jstl-modernize` | JSP + JSTL 1.x → Jakarta JSTL 3.0 |
 | `junit4-to-junit5` | JUnit 4 + old Mockito → JUnit 5 + Mockito 5 |
 | `webapp-bootstrap-jakarta10` | `web.xml` and vendor descriptors → Jakarta EE 10 |
-| `liberty-server-config` | App-server config → Liberty `server.xml` |
+| `tomcat-context-config` | App-server config → Tomcat 10.1 `META-INF/context.xml` |
 
 Eight more technologies are **recognised but not migrated** — FORGE will tell you they are there and
 that it cannot do them: Ant, Hibernate, JAX-RS, iBATIS, EJB 2, EJB 3, JMS and JSF.

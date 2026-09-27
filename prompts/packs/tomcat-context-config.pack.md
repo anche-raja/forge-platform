@@ -3,6 +3,11 @@ id: tomcat-context-config
 version: 1.0.0
 title: App-server config -> Tomcat 10.1 META-INF/context.xml
 tier: platform
+# Liberty is not a target (support was removed 2026-09-27). Every mention of it
+# in this pack is of the LEGACY SOURCE runtime: an existing server.xml is read
+# for its pool sizes and JNDI names, a Liberty Dockerfile is rewritten, and the
+# module's src/main/liberty/config/* is retired through deleted_files. That is
+# what takes Liberty out of the migrated application.
 detect:
   any:
     # decision_equals is a gate, not evidence: the pack applies to a web

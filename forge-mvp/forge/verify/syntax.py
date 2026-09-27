@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 PASS, FAIL, SKIPPED = "PASS", "FAIL", "SKIPPED"
 TIMEOUT_SECONDS = 60
@@ -74,12 +74,125 @@ def _xml(name: str, content: str) -> List[str]:
         return [f"{Path(name).name}: {e}"]
 
 
-def check_files(files: Mapping[str, str], config, *, run=subprocess.run) -> Tuple[str, List[str]]:
+# ─── Maven POMs: an undefined ${property} fails the model build before javac runs ──
+#
+# On AMS the build pack imported org.junit:junit-bom and pinned junit-jupiter at
+# ``${junit-bom.version}``, a property it never defined. Well-formed XML, a
+# passing review, and Maven refused the whole reactor at POM parsing. Whether a
+# referenced property is defined is mechanical, so it is checked here, with the
+# same retry-with-feedback loop a parse error gets.
+
+_PROPERTY_REF = re.compile(r"\$\{([A-Za-z0-9_.\-]+)\}")
+_XML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+# Defined by Maven itself, or conventionally supplied on the command line
+# (CI-friendly versions), so never "undefined" here.
+_BUILTIN_PREFIXES = ("project.", "pom.", "parent.", "maven.", "java.", "user.", "os.", "env.",
+                     "settings.", "session.", "file.", "path.", "line.", "sun.")
+_BUILTIN_NAMES = frozenset({"basedir", "revision", "sha1", "changelist"})
+MAX_PARENT_DEPTH = 8
+
+
+def is_pom(name: str) -> bool:
+    return Path(name).name.lower() == "pom.xml"
+
+
+def _local(tag: str) -> str:
+    return tag.split("}", 1)[1] if "}" in tag else tag
+
+
+def _builtin(prop: str) -> bool:
+    return prop in _BUILTIN_NAMES or prop.startswith(_BUILTIN_PREFIXES)
+
+
+def pom_defined_properties(content: str) -> Set[str]:
+    """Every property a pom defines, in its own or any profile's ``<properties>``.
+
+    Empty when it does not parse -- well-formedness is reported separately.
+    """
+    try:
+        root = ET.fromstring(content.encode("utf-8"))
+    except ET.ParseError:
+        return set()
+    return {_local(child.tag) for el in root.iter() if _local(el.tag) == "properties" for child in el}
+
+
+def pom_property_errors(name: str, content: str, inherited: Iterable[str] = ()) -> List[str]:
+    """One error per ``${property}`` this pom references and neither it nor ``inherited`` defines."""
+    defined = pom_defined_properties(content) | set(inherited)
+    referenced = set(_PROPERTY_REF.findall(_XML_COMMENT.sub("", content)))
+    return [
+        f"{Path(name).name}: ${{{prop}}} is referenced but defined nowhere in this pom or its parents. "
+        "A dependency a BOM manages carries no <version> at all; anything else needs the property "
+        "defined in <properties>."
+        for prop in sorted(referenced) if prop not in defined and not _builtin(prop)
+    ]
+
+
+def pom_inherited_properties(pom_path: str, source_dir: Optional[str] = None,
+                             output_dir: Optional[str] = None) -> Optional[Set[str]]:
+    """Properties the parents of the pom at ``pom_path`` define, following ``<relativePath>`` on disk.
+
+    A parent this run already rewrote into ``output_dir`` counts with its new
+    properties too, so a child is judged against what the parent will be, not
+    only what it was. ``None`` when a parent cannot be found on disk -- an
+    external parent resolved from a repository -- because its properties are
+    unknowable here, and guessing would send correct files back for a retry.
+    """
+    path = Path(pom_path)
+    known: Set[str] = set()
+    for _ in range(MAX_PARENT_DEPTH):
+        try:
+            root = ET.fromstring(path.read_bytes())
+        except (OSError, ET.ParseError):
+            return None
+        parent = next((c for c in root if _local(c.tag) == "parent"), None)
+        if parent is None:
+            return known
+        rel = next(((c.text or "") for c in parent if _local(c.tag) == "relativePath"), None)
+        if rel is not None and not rel.strip():
+            return None          # an empty relativePath means "from the repository only"
+        candidate = path.parent / (rel.strip() if rel else "../pom.xml")
+        if candidate.is_dir():
+            candidate = candidate / "pom.xml"
+        if not candidate.is_file():
+            return None
+        for text in _pom_texts(candidate, source_dir, output_dir):
+            known |= pom_defined_properties(text)
+        path = candidate
+    return None
+
+
+def _pom_texts(pom: Path, source_dir: Optional[str], output_dir: Optional[str]) -> List[str]:
+    """The pom on disk, plus this run's rewritten copy of it when there is one."""
+    texts: List[str] = []
+    try:
+        texts.append(pom.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return texts
+    if source_dir and output_dir:
+        try:
+            rel = pom.resolve().relative_to(Path(source_dir).resolve())
+            rewritten = Path(output_dir) / rel
+            if rewritten.is_file():
+                texts.append(rewritten.read_text(encoding="utf-8", errors="replace"))
+        except (ValueError, OSError):
+            pass
+    return texts
+
+
+def check_files(files: Mapping[str, str], config, *, run=subprocess.run,
+                inherited_properties: Optional[Iterable[str]] = None) -> Tuple[str, List[str]]:
     """``(verdict, errors)`` over a transform's ``{path: content}``.
 
-    FAIL when any checked file does not parse. SKIPPED when a Java file needed
-    javac and there is none -- an environment gap, never a verdict on the
-    migration. PASS otherwise, including when nothing was checkable.
+    FAIL when any checked file does not parse, or when a ``pom.xml`` references
+    a property nobody defines. SKIPPED when a Java file needed javac and there
+    is none -- an environment gap, never a verdict on the migration. PASS
+    otherwise, including when nothing was checkable.
+
+    The property check runs only when the caller says what the pom inherits
+    (``inherited_properties``, from :func:`pom_inherited_properties`): with no
+    parent information a child's reference cannot be judged, and ``None`` --
+    the default -- skips it rather than guess.
     """
     errors: List[str] = []
     skipped = False
@@ -102,7 +215,10 @@ def check_files(files: Mapping[str, str], config, *, run=subprocess.run) -> Tupl
                 # javac would not start: the environment, not the migration.
                 skipped = True
         elif lower.endswith(_XML_SUFFIXES):
-            errors += _xml(name, content)
+            malformed = _xml(name, content)
+            errors += malformed
+            if not malformed and inherited_properties is not None and is_pom(name):
+                errors += pom_property_errors(name, content, inherited_properties)
     if errors:
         return FAIL, errors[:MAX_ERROR_LINES]
     return (SKIPPED if skipped else PASS), []

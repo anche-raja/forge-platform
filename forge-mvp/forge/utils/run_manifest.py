@@ -67,9 +67,10 @@ def record(output_dir: str, phase: str, written: Sequence[str],
     """Note what ``phase`` wrote and retired (paths relative to ``output_dir``).
 
     The latest pack wins for a path: retiring a file an earlier pack wrote
-    (the Tomcat pack retiring the Liberty pack's ``server.xml``) takes it out
-    of the writes, or landing would copy the retired file straight back in;
-    writing a file again brings it back from the retired set.
+    (the Tomcat pack's ``deleted_files`` naming a legacy config file another
+    pack had already migrated) takes it out of the writes, or landing would
+    copy the retired file straight back in; writing a file again brings it
+    back from the retired set.
     """
     if not written and not deleted:
         return

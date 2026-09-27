@@ -10,8 +10,9 @@ element the table does not know goes to ``raw_unmapped`` rather than away.
 The parser is container- and build-tool-agnostic: it handles every Servlet
 namespace (Sun, JCP, Jakarta, the 2.3 DTD), the three vendor descriptor
 families in both ``.xml`` and EMF ``.xmi`` forms, EAR ``application.xml``,
-WildFly ``*-ds.xml``, Tomcat ``context.xml``, ``persistence.xml``, Liberty
-``server.xml``, and Maven or Gradle module layouts.
+WildFly ``*-ds.xml``, Tomcat ``context.xml``, ``persistence.xml``, an existing
+app-server ``server.xml`` (a Liberty one — read as LEGACY INPUT only, see
+``_parse_liberty_server_xml``), and Maven or Gradle module layouts.
 """
 
 import json
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from forge.extract import Extractor, register
-from forge.extract.selectors import server_config, servlet_components, tomcat_context
+from forge.extract.selectors import servlet_components, tomcat_context
 from forge.utils.fs import is_test_path, prune_dirs
 from forge.utils.java_checks import declared_package
 from forge.utils.telemetry import get_logger
@@ -675,7 +676,7 @@ def _parse_vendors(web_inf: Path, source_dir: Path, web_ids: Dict[str, str], not
     return vendors
 
 
-# ─── EAR, datasources, Liberty ────────────────────────────────────────────────
+# ─── EAR, datasources, legacy server.xml ──────────────────────────────────────
 
 def _parse_ear(source_dir: Path, module_dir: Path) -> Optional[Dict[str, Any]]:
     ear: Optional[Dict[str, Any]] = None
@@ -733,6 +734,16 @@ def _parse_ear(source_dir: Path, module_dir: Path) -> Optional[Dict[str, Any]]:
 
 
 def _parse_liberty_server_xml(path: Path, source_dir: Path) -> Dict[str, Any]:
+    """An existing Liberty ``server.xml`` in the module, as LEGACY INPUT.
+
+    Liberty is not a target (support was removed 2026-09-27) and no pack
+    generates this file any more. It is still parsed because the application
+    being migrated runs on Liberty today, and ``tomcat-context-config`` carries
+    its ``dataSource`` / ``connectionManager`` pool sizes, JNDI names and
+    ``webApplication`` context root into ``META-INF/context.xml`` — then
+    retires the file through ``deleted_files``. The result is
+    ``existing_server_xml`` in the context.
+    """
     out: Dict[str, Any] = {
         "path": _rel(path, source_dir), "features": [], "applications": [], "datasources": [],
         "libraries": [], "http_endpoints": [], "registries": [], "other": [], "parse_error": None,
@@ -842,6 +853,7 @@ def _collect_datasources(web: Dict[str, Any], vendors: List[Dict[str, Any]], lib
         for b in v["resource_ref_bindings"]:
             add(b["jndi"], v["path"], "vendor-binding", ref=b["name"])
     if liberty:
+        # Legacy input: the pool the old server ran with (see _parse_liberty_server_xml).
         for d in liberty["datasources"]:
             add(d["jndi_name"], liberty["path"], "liberty-server-xml", pool=d["pool"])
 
@@ -1052,7 +1064,7 @@ def run(source_dir: str, module_dir: Optional[str] = None) -> dict:
             notes.append(v["parse_error"])
 
     ear = _parse_ear(src, mod)
-    liberty = _find_existing_server_xml(mod, src)
+    liberty = _find_existing_server_xml(mod, src)  # legacy input only; see _parse_liberty_server_xml
     datasources = _collect_datasources(web, vendors, liberty, mod, src, notes)
     components, unresolved = _collect_components(web, mod, src)
 
@@ -1107,8 +1119,7 @@ def run(source_dir: str, module_dir: Optional[str] = None) -> dict:
 EXTRACTOR = register(Extractor(
     name=NAME,
     run=run,
-    selectors={"servlet_components": servlet_components, "server_config": server_config,
-               "tomcat_context": tomcat_context},
+    selectors={"servlet_components": servlet_components, "tomcat_context": tomcat_context},
     find_modules=find_modules,
     module_for=module_for,
 ))

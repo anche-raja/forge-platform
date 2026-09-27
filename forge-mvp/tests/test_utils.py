@@ -111,19 +111,19 @@ def test_writer_refuses_path_traversal(tmp_path):
 
 
 def test_writer_accepts_an_absolute_target_that_does_not_exist_in_source(tmp_path):
-    """A generated unit (Liberty server.xml) names a path with no source file
-    behind it. Path.resolve() is non-strict, so the source-relative layout is
-    preserved under output_dir exactly as for an existing file."""
+    """A generated unit (Tomcat META-INF/context.xml) names a path with no source
+    file behind it. Path.resolve() is non-strict, so the source-relative layout
+    is preserved under output_dir exactly as for an existing file."""
     out, proj = tmp_path / "out", tmp_path / "proj"
     module = proj / "orders"
     module.mkdir(parents=True)
-    target = module / "src/main/liberty/config/server.xml"
+    target = module / "src/main/webapp/META-INF/context.xml"
     assert not target.exists()
     write_output({
         "dry_run": False, "output_dir": str(out), "source_dir": str(proj),
-        "current_file": {"transform_output": {"files": {str(target): "<server/>"}}, "generate": True},
+        "current_file": {"transform_output": {"files": {str(target): "<Context/>"}}, "generate": True},
     })
-    assert (out / "orders/src/main/liberty/config/server.xml").read_text(encoding="utf-8") == "<server/>"
+    assert (out / "orders/src/main/webapp/META-INF/context.xml").read_text(encoding="utf-8") == "<Context/>"
     assert not target.exists(), "the source tree is never written to"
 
 

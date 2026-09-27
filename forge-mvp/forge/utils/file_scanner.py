@@ -26,7 +26,7 @@ class SkippedFile(NamedTuple):
 class ScanResult(NamedTuple):
     files: List[str]
     skipped: List[SkippedFile]
-    # Target paths a pack creates rather than edits (Liberty server.xml). They
+    # Target paths a pack creates rather than edits (Tomcat context.xml). They
     # do not exist yet, so they are not in `files`; the transform is given the
     # extracted context instead of a source.
     generated: Tuple[str, ...] = ()

@@ -18,7 +18,7 @@ PLAN_JSON = "intent-plan.json"
 DEFAULT_DECISIONS: Dict[str, str] = {
     "web_framework": "modernize-in-place",
     "runtime": "war-xml-bootstrap",
-    "container": "liberty",
+    "container": "tomcat",
     "views": "in-place",
     "url_compat": "preserve-with-redirect",
     "persistence": "keep-orm",

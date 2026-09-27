@@ -27,8 +27,9 @@ acceptance:
 
 ## transform
 
-You are migrating a Java EE web bootstrap to **Jakarta EE 10, packaged as a WAR, running on a
-servlet container, with Spring Framework 6.2 and no Spring Boot.**
+You are migrating a Java EE web bootstrap to **Jakarta EE 10, packaged as a WAR for Apache
+Tomcat 10.1 (or WildFly / Jetty, per the `container` decision), with Spring Framework 6.2 and no
+Spring Boot.**
 
 The deployment model does not change. The artifact is still a WAR, the container still starts the
 application, and the root context is still built by Spring's own bootstrap — either `web.xml` or a
@@ -69,33 +70,31 @@ Rule 2 — Per the `runtime` decision:
 
 Rule 3 — Vendor descriptors (`weblogic.xml`, `jboss-web.xml`, `ibm-web-bnd.xmi`) carry settings
 with no portable equivalent. **Do not discard them.** They are the input the
-`liberty-server-config` pack consumes to produce `server.xml`, so extract every value rather than
-resolving it here. Map what maps and flag the rest with its original value:
+`tomcat-context-config` pack consumes to produce `META-INF/context.xml`, so extract every value
+rather than resolving it here. Map what maps and flag the rest with its original value:
 - context root → the WAR's final name, or the container's deployment descriptor
 - session timeout → `<session-config>` in `web.xml`
 - security-role mapping to directory groups → the Spring Security authority mapping
 - resource-ref binding → the JNDI name the container exposes
-- classloader policy (`prefer-web-inf-classes`, `parent-last`) → on Liberty this maps directly to
-  `<classloader delegation="parentLast"/>`; carry the value through for `liberty-server-config`.
-  It matters: the policy often existed to resolve a jar conflict that the dependency upgrade may
-  have just removed — or may have just created.
+- classloader policy (`prefer-web-inf-classes`, `parent-last`) → Tomcat's web-application
+  classloader is already parent-last for the WAR's own jars, so usually nothing to configure —
+  but carry the value through in `manual_flags`. It matters: the policy often existed to resolve
+  a jar conflict that the dependency upgrade may have just removed — or may have just created.
 
-Rule 4 — JNDI and container-provided resources. On the platform default
-(`container: liberty`, a full Jakarta EE 10 profile) the container still provides JNDI, JTA,
-managed connection pools and security registries, so **the application code does not change**:
+Rule 4 — JNDI and container-provided resources. On the platform default (`container: tomcat`,
+Apache Tomcat 10.1) **the application code does not change**:
 - Keep every `<resource-ref>`, `<resource-env-ref>` and `<env-entry>` in `web.xml`.
 - Keep `JndiDataSourceLookup` / `JndiObjectFactoryBean` and the JNDI names they resolve. Do not
   replace a container DataSource with an application-managed pool — that moves pool sizing,
   failover and monitoring out of the platform for no benefit.
-- `<resource-ref>` JNDI names must match the `jndiName` the Liberty `server.xml` declares. The
-  `liberty-server-config` pack produces that file; list every name you rely on so the two agree.
-- The same holds for `container: wildfly`.
-- On `tomcat` the code still does not change: keep every `<resource-ref>` and every JNDI lookup.
-  Tomcat provides JNDI and a pool per `<Resource>` in the WAR's `META-INF/context.xml`, which the
-  `tomcat-context-config` pack generates with the same names — list every name you rely on so
-  the two agree. Tomcat has no JTA manager: a JTA or `UserTransaction` use must be flagged.
-  A comment that says a resource is configured in the Liberty `server.xml` now names
-  `META-INF/context.xml`.
+- Tomcat provides JNDI and a pool per `<Resource>` in the WAR's `META-INF/context.xml`, which the
+  `tomcat-context-config` pack generates with the same names — `<resource-ref>` names must match
+  its `<Resource name="...">` exactly, so list every name you rely on so the two agree. Tomcat has
+  no JTA manager: a JTA or `UserTransaction` use must be flagged. A comment that says a resource
+  is configured in the old application server's configuration now names `META-INF/context.xml`.
+- On `wildfly` (a full Jakarta EE 10 profile) the container still provides JNDI, JTA, managed
+  connection pools and security registries; the code does not change either, and the
+  `<resource-ref>` JNDI names must match the server's datasource subsystem.
 - Only on `jetty` does this change: there is no JTA manager and no managed pool, so every
   `<resource-ref>` must be flagged with what will now supply it. Never silently substitute a
   pool — pool sizing is an operational decision and guessing it wrong takes production down

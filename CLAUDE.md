@@ -78,7 +78,7 @@ terraform apply
 Original spec in `forge-mvp/PHASE0-SPEC.md`. Key design points:
 
 - **LangGraph graph**: `guardrails_pre → java_upgrade → syntax_check → java_reviewer → guardrails_post → write_file → verify_build → update_state`
-- **Syntax check before review** (`syntax_check: true`; off when the key is absent): javac parses each Java output stopped at the PARSE stage (no classpath), XML is checked for well-formedness. A failure retries with javac's errors as the feedback and costs no review call; no javac is SKIPPED, never FAIL. `forge/verify/syntax.py`.
+- **Syntax check before review** (`syntax_check: true`; off when the key is absent): javac parses each Java output stopped at the PARSE stage (no classpath), XML is checked for well-formedness, and a `pom.xml` is checked for `${properties}` nobody defines — judged against its own `<properties>`, its parents on disk via `<relativePath>`, and any parent this run already rewrote into the output dir (`syntax.pom_inherited_properties`; a parent not on disk makes the check skip rather than guess). A failure retries with the errors as the feedback and costs no review call; no javac is SKIPPED, never FAIL. `forge/verify/syntax.py`. The property check exists because on AMS the build pack imported `junit-bom` and pinned `junit-jupiter` at `${junit-bom.version}`, which it never defined: well-formed, reviewed PASS, and Maven refused the reactor at POM parsing.
 - **Parallel files**: `max_parallel_files` (8 in the generated agents.yaml, 1 when absent) runs that many files of a pack at once; results stay in scan order, cancel starts nothing new, Maven build verification stays sequential. See ARCHITECTURE §8.
 - **Packs select by content**: javax-to-jakarta, struts2, spring6 and java21 take only Java files matching what they change (`content_match`), not `**/*.java`. A `content_match` hit is HIGH risk only when the entry says `risk: high`.
 - **Unit tests by default**: with `test_generation.after_plan: true` (the generated config), the chat writes tests when the last pack of the plan finishes, before the build — through the same spend gate as `generate_tests` (over `confirm_above_usd` it builds first and parks a confirm card; confirming writes the tests and rebuilds). `forge/leader/tools.py` `_finish_plan`.
@@ -192,9 +192,10 @@ configuration and skip the classes it refers to, which is worse than not running
 `context: <name>`; the extractor runs once per module, cached in-process, never stored in
 `ForgeState` (DynamoDB item cap). `web_bootstrap` parses `web.xml` under every Servlet namespace,
 the JBoss/WebLogic/WebSphere vendor descriptors (`.xml` and `.xmi`), EAR, datasource sources and
-an existing Liberty `server.xml`, in declaration order and dropping nothing — unknown elements go
-to `raw_unmapped`. It resolves `servlet_components` (real files) and `server_config` (one
-**generated** `server.xml` per module; an existing one is an edit, not a generate).
+an existing app-server `server.xml` (a legacy *input*: its pool sizes and JNDI names feed the Tomcat
+pack), in declaration order and dropping nothing — unknown elements go to `raw_unmapped`. It
+resolves `servlet_components` (real files) and `tomcat_context` (one **generated**
+`META-INF/context.xml` per module; an existing one is an edit, not a generate).
 
 **Context reaches the prompts through `forge/context/`.** `render_context` produces a
 deterministic block bounded by `context.max_chars` — a hard guarantee, with section priority
@@ -206,18 +207,20 @@ the extractor name and a sha256 of the block. The full context is written to
 **Decisions reach the prompts through `decisions_block`** (`forge/context/inject.py`): the
 decisions a pack declares, with their values (agents.yaml over `DEFAULT_DECISIONS`), are appended
 to its transform and its review. Before it, "per the `container` decision" was a branch no model
-could resolve — `container: tomcat` switched the Liberty pack off and changed nothing written.
+could resolve — `container: wildfly` switched the Tomcat pack off and changed nothing written.
 **Coordinates reach the build pack through `coordinates_block`** (same module): the `eliminates`
 and `upgrades` every runnable pack of the plan declares — the chat's `plan_packs` (from
 `selected_packs`), else the `packs:` of `forge-profile.yaml` in the output dir — are appended to a
 `tier: build` pack's transform and review, "none" when empty. They used to be parsed and never
 sent, so the build pack guessed: on AMS it dropped `junit:junit` with no JUnit 5 in its place and
 left Struts at 6.8.0 under code already moved to 7.3.0.
-`tomcat-context-config` is the Tomcat 10.1 counterpart of `liberty-server-config`: gated on
-`container: tomcat`, it generates one `META-INF/context.xml` per web module (`tomcat_context`
-selector) and retires the module's `src/main/liberty/config/*` through `deleted_files`. A retired
-path leaves the manifest's writes (`run_manifest.record`, latest pack wins), so landing removes
-it rather than copying an earlier pack's copy back in.
+`tomcat-context-config` is the platform pack for the Tomcat 10.1 target: gated on
+`container: tomcat` (the default), it generates one `META-INF/context.xml` per web module
+(`tomcat_context` selector) and retires the module's legacy `src/main/liberty/config/*` through
+`deleted_files`. Liberty support as a *target* was removed on 2026-09-27 — the `container` options
+are `tomcat | wildfly | jetty` and no pack writes a `server.xml`; an existing one is still parsed
+as input. A retired path leaves the manifest's writes (`run_manifest.record`, latest pack wins), so
+landing removes it rather than copying an earlier pack's copy back in.
 
 Two idioms that have already bitten: never `a or b` on `ElementTree` elements (an element with no
 children is falsy — use `is not None`), and never write a regex in a double-quoted YAML scalar
@@ -366,9 +369,15 @@ declaration, its annotations and its public signatures — an interface, an abst
 with no public members and a class that **already has a test** are skipped, each with a reason in
 the report, because a silent skip is indistinguishable from an oversight. An existing test is a
 human's work and the one artifact this pipeline must not overwrite (`overwrite: false`). The
-destination is rebuilt from the generated file's own `package` and type name under
-`src/test/java`, so unlike `write_output` the model's path key is **discarded**, not merely
-guarded: there is one right place for `com.corp.UserServiceTest`.
+destination is rebuilt from the generated file's own `package` and type name under the
+`src/test/java` **of the module that holds the class under test** (`targets.module_root_of`:
+everything before the source's `src/main/java`), so unlike `write_output` the model's path key is
+**discarded**, not merely guarded: there is one right place for `com.corp.UserServiceTest`. The
+module matters — a reactor has one test tree per module, and on AMS all 39 generated tests once
+landed at the repository root, where Maven never compiles them. What is written is recorded in the
+run manifest under the `generate-tests` owner (`writer.record_written`; a test taken back out after
+failing is forgotten again), because landing and the branch sync copy only recorded files — the
+same 39 tests were left behind as strays while the sync reported nothing changed.
 
 The mechanical invariants are checked in code and **before** the review, so a JUnit 4 import costs
 zero review calls — `forge/testgen/checks.py` covers JUnit 4 (`org.junit.Test`, `@RunWith`,

@@ -112,12 +112,12 @@ def test_generated_unit_emits_snapshot_and_is_held_by_default(tmp_path):
     events = []
     with mocked_aws(), patch("forge.state_store.dynamodb.DynamoDBStateManager.put_file_status"), \
          patch("forge.state_store.dynamodb.DynamoDBStateManager.mark_pending"):
-        result = service.run_migration(str(tmp_path / "proj"), "liberty-server-config", str(tmp_path / "out"), cfg,
+        result = service.run_migration(str(tmp_path / "proj"), "tomcat-context-config", str(tmp_path / "out"), cfg,
                                        on_event=events.append)
     assert events[0]["generated"] == 1
     assert any(e["type"] == "snapshot" for e in events)
     file_event = next(e for e in events if e["type"] == "file")
-    assert file_event["label"] == "server.xml (generated)" and file_event["status"] == "HELD"
+    assert file_event["label"] == "context.xml (generated)" and file_event["status"] == "HELD"
     assert result.totals["held"] == 1 and result.paths["snapshot"].endswith("migration-context.json")
 
 

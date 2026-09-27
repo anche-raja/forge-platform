@@ -50,7 +50,7 @@ class JavaReviewer(BaseReviewer):
         if block:
             human += "\n\nThe descriptors the transform was given (check nothing was dropped):\n" + block
         # Graded against the same decisions the transform was told, or a
-        # Tomcat-correct answer is scored as a Liberty-incomplete one.
+        # Tomcat-correct answer is scored by a full-server rubric and fails.
         decisions = decisions_block(state, self.config)
         if decisions:
             human += "\n\n" + decisions

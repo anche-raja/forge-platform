@@ -42,7 +42,7 @@ DETECT_KINDS: Mapping[str, type] = {
     "property_lt": dict,        # {name: "maven.compiler.source", value: "21"}
     "gradle_property_lt": dict,
     "xml_element": str,         # "namespace:element"
-    "decision_equals": dict,    # {key: "container", value: "liberty"}
+    "decision_equals": dict,    # {key: "container", value: "tomcat"}
 }
 
 # A pack declares the coordinate changes its technology requires, and the build

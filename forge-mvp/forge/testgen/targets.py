@@ -193,15 +193,42 @@ def classify(surface: JavaSurface) -> str:
     return "plain"
 
 
-def java_rel_path(package: str, type_name: str, root: str = "src/test/java") -> str:
+TEST_ROOT = "src/test/java"
+_MAIN_JAVA = "src/main/java"
+
+
+def java_rel_path(package: str, type_name: str, root: str = TEST_ROOT) -> str:
     """``root/<package as directories>/<TypeName>.java`` — the destination rule."""
     parts = [root] + (package.split(".") if package else []) + [f"{type_name}.java"]
     return "/".join(p for p in parts if p)
 
 
-def test_rel_path_for(package: str, type_name: str) -> str:
-    """Where the test for ``type_name`` belongs. ``type_name`` is the class under test."""
-    return java_rel_path(package, f"{type_name}Test")
+def module_root_of(source_rel_path: str) -> str:
+    """The module a source file belongs to: everything before its ``src/main/java``.
+
+    ``""`` for a single-module project, whose source tree sits at the root. A
+    multi-module reactor has one ``src/test/java`` per module, and a test that
+    lands at the repository root belongs to no module — Maven never compiles
+    it. On AMS all 39 generated tests landed there.
+    """
+    rel = (source_rel_path or "").replace("\\", "/")
+    idx = rel.find(f"/{_MAIN_JAVA}/")
+    return rel[:idx] if idx > 0 else ""
+
+
+def test_root_for(source_rel_path: str) -> str:
+    """``<module>/src/test/java`` for the module that owns ``source_rel_path``."""
+    module = module_root_of(source_rel_path)
+    return f"{module}/{TEST_ROOT}" if module else TEST_ROOT
+
+
+def test_rel_path_for(package: str, type_name: str, source_rel_path: str = "") -> str:
+    """Where the test for ``type_name`` belongs: the test tree of the module that holds it.
+
+    ``type_name`` is the class under test; ``source_rel_path`` is where that
+    class sits relative to the output tree, which is what names the module.
+    """
+    return java_rel_path(package, f"{type_name}Test", test_root_for(source_rel_path))
 
 
 # ─── the scan ─────────────────────────────────────────────────────────────────
@@ -306,7 +333,7 @@ def scan_test_targets(output_dir: str, source_dir: str, *, only: Optional[Sequen
             package=surface.package,
             type_name=surface.type_name,
             kind=kind,
-            test_rel_path=test_rel_path_for(surface.package, surface.type_name),
+            test_rel_path=test_rel_path_for(surface.package, surface.type_name, rel),
         ))
 
     _log.info("Test targets: %d to generate, %d skipped", len(targets), len(skipped))

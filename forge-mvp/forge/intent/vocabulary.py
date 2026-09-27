@@ -18,9 +18,7 @@ DECISION_OPTIONS: Dict[str, List[str]] = {
     # which is the silent no-op this vocabulary exists to prevent.
     "web_framework": ["modernize-in-place"],
     "runtime": ["war-xml-bootstrap", "war-programmatic-bootstrap"],
-    "container": ["liberty", "wildfly", "tomcat", "jetty"],
-    "liberty_edition": ["open", "websphere"],
-    "liberty_features": ["jakartaee-10.0", "webProfile-10.0", "granular"],
+    "container": ["tomcat", "wildfly", "jetty"],
     "views": ["in-place", "thymeleaf", "defer"],
     "url_compat": ["preserve-with-redirect", "preserve-exact", "clean-only"],
     "persistence": ["keep-orm", "to-spring-data"],
@@ -35,9 +33,7 @@ DECISION_HELP: Mapping[str, str] = {
                      "(Struts 2 -> Struts 7 on Jakarta EE 10). It is the only supported route — "
                      "this platform does not replace the web framework.",
     "runtime": "How the WAR bootstraps: keep web.xml, or move to a programmatic initializer.",
-    "container": "Target servlet container. liberty is the platform standard.",
-    "liberty_edition": "Open Liberty or WebSphere Liberty.",
-    "liberty_features": "Whole-platform feature set, web profile, or a granular feature list.",
+    "container": "Target servlet container. tomcat (Apache Tomcat 10.1) is the platform standard.",
     "views": "in-place keeps JSP as JSP; thymeleaf converts them; defer leaves the view tier alone.",
     "url_compat": "Whether existing URLs must keep working, exactly or via redirects, or may change.",
     "persistence": "Keep the existing ORM mapping, or move repositories to Spring Data.",

@@ -16,6 +16,9 @@ acceptance:
   - build: "mvn -q -DskipTests package"
   - no_match: 'org\.springframework\.boot'
     scope: "**/pom.xml"
+  # Liberty is not a target (removed 2026-09-27). It is named here only as the
+  # previous application server whose Maven plugin and runtime Rule 7 retires
+  # from the pom; this check is that the retirement happened.
   - no_match: 'liberty-maven-plugin|io\.openliberty|openliberty-runtime'
     scope: "**/pom.xml"
     when: {container: "tomcat"}
@@ -65,9 +68,12 @@ replaces the imported BOM's entry for that artifact outright — its version too
 in the list, so a versionless one leaves the artifact with no version at all and Maven refuses the
 pom ("'dependencies.dependency.version' ... is missing"). For each explicit entry of an artifact a
 BOM now manages: delete the whole entry when it carries nothing but coordinates, or, when it carries
-a `<scope>`, `<exclusions>` or a `<classifier>` worth keeping, set its version to the BOM's own
-property (`<version>${junit-bom.version}</version>`) — the same number the BOM would give, so no
-skew. In `<dependencies>` a versionless dependency is correct; the rule is about the managed list.
+a `<scope>`, `<exclusions>` or a `<classifier>` worth keeping, give it the version the BOM pins —
+as a literal, or through a property this pom's own `<properties>` block defines for that BOM
+import — the same number the BOM would give, so no skew. In `<dependencies>` a versionless
+dependency is correct; the rule is about the managed list.
+
+A dependency a BOM manages carries no `<version>` at all — not a literal, not a property. Never reference a `${property}` this pom does not define in its own `<properties>` (or, for a child module, that the parent's property block you were given does not define): an undefined property fails Maven's model build before anything compiles. Do not invent property names such as `${junit-bom.version}`; if you import a BOM, the artifacts it manages get no version element.
 
 Rule 3 — Remove every coordinate in the `eliminates` list supplied to you. Do not remove a
 dependency that is not on that list, even if it looks obsolete — another pack may still be
@@ -77,12 +83,12 @@ migrating code that uses it, and removing it breaks the build gate before that p
 test to JUnit 5 and Mockito 5, so wherever this pom declares one of these — in
 `<dependencyManagement>` and in `<dependencies>` alike — put the replacement in the same place,
 at `test` scope:
-- `junit:junit` → `org.junit.jupiter:junit-jupiter` (version `${junit-bom.version}`). Importing
-  `junit-bom` supplies a version, not a dependency: without this entry no module has JUnit 5 on
-  its test classpath and every test fails to compile.
+- `junit:junit` → `org.junit.jupiter:junit-jupiter`, with no `<version>` — the imported
+  `junit-bom` manages it. Importing `junit-bom` supplies a version, not a dependency: without this
+  entry no module has JUnit 5 on its test classpath and every test fails to compile.
 - `org.mockito:mockito-all`, or `org.mockito:mockito-core` below 5 → `org.mockito:mockito-core`
   **and** `org.mockito:mockito-junit-jupiter` (which carries `MockitoExtension`), both at Mockito
-  5.x through the `mockito.version` property.
+  5.x through a `mockito.version` property this pom (or the parent) defines — Mockito has no BOM.
 
 Rule 4 — Apply every coordinate in the `upgrades` list supplied to you, as
 `group:artifact:version`. Set that exact version — in `<dependencyManagement>` if the artifact is
@@ -109,54 +115,47 @@ Rule 6 — Plugins that must move for Java 21 to build at all:
 
 Rule 7 — Packaging. **Packaging does not change.** A `war` module stays `war`; an `ear` module
 stays `ear`; the module list is preserved. What changes is the container the WAR targets, per the
-`container` decision. The platform default is `liberty`:
+`container` decision. The platform default is `tomcat`:
 
-- **`liberty`** — replace any previous app-server plugin (`wildfly-maven-plugin`,
-  `weblogic-maven-plugin`, `was-maven-plugin`) with:
-  ```xml
-  <plugin>
-    <groupId>io.openliberty.tools</groupId>
-    <artifactId>liberty-maven-plugin</artifactId>
-    <version>3.11.x</version>
-    <configuration>
-      <serverName>defaultServer</serverName>
-      <!-- liberty_edition: open -> io.openliberty:openliberty-runtime -->
-      <!-- liberty_edition: websphere -> com.ibm.websphere.appserver.runtime:wlp-* -->
-    </configuration>
-  </plugin>
-  ```
-  The runtime artifact differs by `liberty_edition`; do not hardcode one without reading the
-  decision. Liberty's `pages-3.1` feature supplies **both JSP and JSTL 3.0**, so the JSTL
-  implementation must not be bundled.
-- **`wildfly`** — uplift `wildfly-maven-plugin` to an EE 10 capable version; keep the deployment
-  configuration as-is.
 - **`tomcat`** — Apache Tomcat **10.1**, the Servlet 6 / Jakarta EE 10 line (Tomcat 9 and earlier
   are `javax.*` and cannot run this WAR). A servlet container only, so:
-  - **Remove everything that exists only to run Liberty or WebSphere:** `liberty-maven-plugin`
-    (plugins and `pluginManagement`), `io.openliberty` / `com.ibm.websphere.appserver.runtime`
-    runtime artifacts, `liberty.*` / `openliberty.*` properties, and any profile whose only job
-    is running Liberty. A profile that also carries other settings keeps them; only its Liberty
-    parts go. This overrides Rule 8's "preserve profiles" for those parts, and every removal is
-    named in `manual_flags`. Do not add a Tomcat Maven plugin in their place.
-  - **Tomcat does not ship JSTL.** In the WAR module, bundle
-    `jakarta.servlet.jsp.jstl:jakarta.servlet.jsp.jstl-api` and
-    `org.glassfish.web:jakarta.servlet.jsp.jstl` (3.0.x) at compile scope. Servlet, JSP and EL
-    APIs stay `provided`: Tomcat supplies those.
-  - **The JNDI DataSource comes from the WAR's `META-INF/context.xml`** (the
-    `tomcat-context-config` pack writes it), and Tomcat loads the JDBC driver from
-    `$CATALINA_BASE/lib`, so the driver stays `provided` — flag that it must be installed there.
+  - **Remove everything that exists only to run the previous application server:** its Maven
+    plugin — `liberty-maven-plugin`, `was-maven-plugin`, `weblogic-maven-plugin`,
+    `wildfly-maven-plugin`, in `plugins` and in `pluginManagement` — its runtime artifacts
+    (`io.openliberty:*`, `com.ibm.websphere.appserver.runtime:*`), the properties only they read
+    (`liberty.*`, `openliberty.*`), and any profile whose only job is running that server. A
+    profile that also carries other settings keeps them; only its server-runtime parts go. This
+    overrides Rule 8's "preserve profiles" for those parts, and every removal is named in
+    `manual_flags`. Do not add a Tomcat Maven plugin in their place.
+  - Servlet, JSP and EL APIs stay `provided`: Tomcat supplies those.
+  - **Tomcat does not ship JSTL.** In the WAR module, bundle both
+    `jakarta.servlet.jsp.jstl:jakarta.servlet.jsp.jstl-api` 3.0.0 and the
+    `org.glassfish.web:jakarta.servlet.jsp.jstl` 3.0.1 implementation at compile scope — the API
+    alone does not render, and a `provided` JSTL fails at the first JSP.
+  - **The JDBC driver is `provided` only when the container owns the DataSource** — a JNDI
+    `<Resource>` in the WAR's `META-INF/context.xml` (the `tomcat-context-config` pack writes it),
+    in which case Tomcat loads the driver from `$CATALINA_BASE/lib` and you flag that it must be
+    installed there. When the application builds its own pool, the driver stays at compile scope.
   - Tomcat has no JTA manager and no CDI container: if the build carries either, flag it.
-  - A comment that says the application deploys to Liberty or WebSphere now says Tomcat 10.1.
-- **`jetty`** — servlet container only. Anything the old app server provided (JNDI DataSource,
-  JTA manager, connection pool, mail session) becomes the application's responsibility. Flag
-  each `resource-ref`; do not invent a replacement in the pom.
+  - A comment that says the application deploys to the previous application server now says
+    Tomcat 10.1.
+- **`jetty`** — servlet container only; the same scopes as `tomcat`: servlet, JSP and EL
+  `provided`, JSTL API and implementation bundled, the JDBC driver `provided` only when the
+  container owns the DataSource. Anything the old app server provided (JNDI DataSource, JTA
+  manager, connection pool, mail session) becomes the application's responsibility. Flag each
+  `resource-ref`; do not invent a replacement in the pom.
+- **`wildfly`** — uplift `wildfly-maven-plugin` to an EE 10 capable version; keep the deployment
+  configuration as-is.
 
-Scope discipline, which decides whether the WAR starts at all: servlet, JSP, JSTL, annotation,
-CDI, persistence and transaction APIs stay `<scope>provided</scope>`, and the **JDBC driver
-becomes `provided` too** when the container owns the DataSource — on Liberty it is declared as a
-`<library>` in `server.xml`. Bundling any of these into `WEB-INF/lib` produces a classloader
-conflict that surfaces as `LinkageError` or `ClassCastException` at deploy time, not at build
-time.
+Scope discipline, which decides whether the WAR starts at all: every API the container supplies
+stays `<scope>provided</scope>` — servlet, JSP, EL and annotation on `tomcat` and `jetty`; those
+plus JSTL, CDI, persistence and transaction on `wildfly`, a full Jakarta EE 10 server — and the
+**JDBC driver becomes `provided` too** when the container owns the DataSource (a JNDI resource in
+`META-INF/context.xml` on Tomcat, a datasource subsystem entry on WildFly). Bundling any of these
+into `WEB-INF/lib` produces a classloader conflict that surfaces as `LinkageError` or
+`ClassCastException` at deploy time, not at build time. The converse holds as well: what the
+container does not supply — JSTL on Tomcat and Jetty — must be bundled, or the JSPs fail at first
+render.
 
 Rule 8 — Preserve, exactly: `groupId`, `artifactId`, `version`, `<modules>` order, `<profiles>`,
 `<repositories>`, `<distributionManagement>`, every existing explanatory comment, and the version
@@ -176,6 +175,7 @@ Spring Security, Jackson and JUnit BOMs are imported, and **no hand-pinned versi
 anything they manage**. A surviving pinned Spring or Jackson version scores 0 — it silently
 overrides the BOM and reintroduces version skew. **A `<dependencyManagement>` entry with no
 `<version>` scores 0** — it shadows the BOM's version with none and Maven will not read the pom.
+A `<version>` that references a property this pom does not define (and that is not a Maven built-in like `${project.version}`) scores 0 for this check — the model build fails before compilation.
 **Any `org.springframework.boot` coordinate or
 `spring-boot-maven-plugin` scores 0 for this check** — Boot is not part of this target.
 
@@ -198,13 +198,15 @@ migrated tests cannot compile.
 
 Check 5 — Packaging and scopes preserved (15 pts):
 Packaging type is unchanged (`war` stays `war`, `ear` stays `ear`), the module list and its order
-are intact, and every container-supplied API — servlet, JSP, JSTL, annotation, CDI, persistence,
-transaction, plus the JDBC driver where the container owns the DataSource — remains `provided`.
-A bundled container API scores 0: it deploys and then fails with `LinkageError`. "Container-supplied"
-follows the `container` decision: Tomcat does not supply JSTL, so on `tomcat` a bundled JSTL is
-correct and a `provided` one is the error. Coordinates, profiles, repositories, unrelated dependency
-versions and existing comments preserved — except the Liberty-only parts Rule 7 removes on `tomcat`,
-whose removal is correct when each is named in `manual_flags`.
+are intact, and every container-supplied API remains `provided`. "Container-supplied" follows the
+`container` decision: on `tomcat` and `jetty` it is servlet, JSP, EL and annotation, plus the JDBC
+driver when a JNDI resource in `META-INF/context.xml` owns the DataSource — and JSTL is **not**
+supplied there, so a bundled JSTL API + implementation is correct and a `provided` one is the
+error; on `wildfly` JSTL, CDI, persistence, transaction and the driver are container-supplied too.
+A bundled container API scores 0: it deploys and then fails with `LinkageError`. Coordinates,
+profiles, repositories, unrelated dependency versions and existing comments preserved — except the
+previous application server's runtime parts Rule 7 removes on `tomcat`, whose removal is correct
+when each is named in `manual_flags`.
 
 Checks that do not apply: a check that does not apply to this file earns its full points. A check
 applies when the file contains what it is about, or when this file is where the transform had to

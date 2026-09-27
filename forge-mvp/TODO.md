@@ -8,8 +8,9 @@ Actionable backlog for the next development cycle. Context for each item lives i
 - [x] Build / compile gate — `verify_build` node, `javac`/`maven`/`command` modes, compiler
       errors fed back through the retry loop (`forge/verify/build_verifier.py`).
 - [x] Pack library and loader — `prompts/packs/`, `forge/packs/`, `--list-packs`.
-- [x] `web_bootstrap` context extractor — `web.xml`, vendor descriptors, Liberty `server.xml`
-      with full context in the transform and review prompts; generated units.
+- [x] `web_bootstrap` context extractor — `web.xml`, vendor descriptors, an existing app-server
+      `server.xml` (legacy input) with full context in the transform and review prompts;
+      generated units (the Tomcat `META-INF/context.xml`).
 - [x] Acceptance runner — `--acceptance` / `--acceptance-only`; `no_match`, `count_unchanged`,
       `test_parity`, `authz_parity`, `build`; verdict INCOMPLETE while anything is skipped.
 - [x] Discovery — `--discover`; stack profile, BOM-aware version resolution, pack activation

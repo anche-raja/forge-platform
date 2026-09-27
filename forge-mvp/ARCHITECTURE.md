@@ -25,7 +25,7 @@ The single transformation it performs (Java 8 → 21):
 - Flags `sun.misc.Unsafe` / reflective access for manual review (does not change them)
 
 That is the built-in `java21` phase. Every other transition — Jakarta namespace, Spring 5 → 6,
-Spring Security, Struts 2 → 7, JSP/JSTL, JUnit 5, the WAR bootstrap, the Liberty `server.xml` —
+Spring Security, Struts 2 → 7, JSP/JSTL, JUnit 5, the WAR bootstrap, the Tomcat `context.xml` —
 is a **pack** loaded from `prompts/packs/` and selected with `--phase <pack-id>` (§12).
 
 After a migration, **test generation** (§14) writes the JUnit 5 tests the legacy code never had
@@ -419,7 +419,7 @@ The engine above is unchanged. What Phase 1 adds is *what it runs* and *what it 
 | Pack library | `../prompts/packs/*.pack.md` | One technology transition each: detection rules, transform rules, a rubric totalling 100, mechanical acceptance checks. Loaded by `forge/packs/loader.py`; ordered by `depends_on` then tier. |
 | Registry | `forge/phases.py` | `get_phase()` resolves a built-in phase or a pack; `PHASE_NAMES` feeds `--phase`. A broken library degrades to the built-ins with a warning. |
 | Scanner | `forge/utils/file_scanner.py` | Matches `file_glob` and `content_match` selectors itself; resolves `selector:` entries through the pack's extractor, or refuses the pack if that extractor is not registered. Reports `generated` targets a pack creates. |
-| Extractors | `forge/extract/` | Deterministic parsers named by a pack's `context:`. `web_bootstrap` covers `web.xml` (all namespaces), JBoss/WebLogic/WebSphere descriptors (`.xml`/`.xmi`), EAR, datasources, Liberty `server.xml`; declaration order kept, nothing dropped, literal secrets masked. Cached per module, never in state. |
+| Extractors | `forge/extract/` | Deterministic parsers named by a pack's `context:`. `web_bootstrap` covers `web.xml` (all namespaces), JBoss/WebLogic/WebSphere descriptors (`.xml`/`.xmi`), EAR, datasources, and an existing app-server `server.xml` as legacy input; declaration order kept, nothing dropped, literal secrets masked. Cached per module, never in state. |
 | Context | `forge/context/` | `render_context` → a deterministic block under `context.max_chars`; `context_block_for` appends it to the transform, review and (for generated units) pre-flight prompts; `snapshot` writes `migration-context.json`. |
 | Discovery | `forge/discover/` | `--discover`: one walk builds a stack profile (build system, Java level, BOM-aware dependency versions, imports, descriptors); every pack's `detect` rules are evaluated against it with evidence. Writes `forge-profile.yaml` + `stack-profile.json`. |
 | Human loop | `forge/risk/`, `forge/review_queue.py`, `forge/decisions.py`, `forge/feedback_report.py` | Risk score → `risk_ceiling` hold gate → review page → `--apply-decisions` (approve / reject / retry-with-note) → `--feedback-report`. The note is its own prompt block and outranks automated feedback. |
@@ -427,7 +427,7 @@ The engine above is unchanged. What Phase 1 adds is *what it runs* and *what it 
 
 **Runnable today** (`runnable_phases()`): `java21`, `build-maven-modernize`, `java8-to-java21`,
 `javax-to-jakarta`, `spring-to-spring6`, `springsec-to-springsec6`, `struts2-modernize`,
-`jsp-jstl-modernize`, `junit4-to-junit5`, `webapp-bootstrap-jakarta10`, `liberty-server-config`.
+`jsp-jstl-modernize`, `junit4-to-junit5`, `webapp-bootstrap-jakarta10`, `tomcat-context-config`.
 
 Four of those run **without the context they declare**, because runnability turns on selectors
 rather than context availability: `build-maven-modernize` (`reactor`), `spring-to-spring6`
@@ -436,7 +436,8 @@ rather than context availability: `build-maven-modernize` (`reactor`), `spring-t
 unit carries `context_missing: true`.
 
 **Two decisions fixed at platform level** (see the requirements spec): the target is a **WAR on
-WebSphere/Open Liberty at Jakarta EE 10, Spring Framework 6.2, no Spring Boot**; and
+Apache Tomcat 10.1 at Jakarta EE 10, Spring Framework 6.2, no Spring Boot** (Liberty support as a
+target was removed on 2026-09-27); and
 `web_framework: modernize-in-place` (Struts → Struts 7) is the **only** route. The Struts → Spring
 MVC packs and the `struts-spring6` built-in phase were removed, and `migrate-to-spring` with them —
 a decision value no pack implements resolves to a plan that selects nothing.
@@ -646,8 +647,8 @@ decision — are ordinary unit tests with no AWS. A response that will not parse
 `reconcile(None, …)` returns the plan discovery would have produced: a guess is worse than a
 default, so there is no retry.
 
-**A decision can re-gate discovery.** `liberty-server-config` is gated on `container: liberty`, so
-asking for Tomcat must stop it firing. `service.discover` re-runs `resolve_packs` with the resolved
+**A decision can re-gate discovery.** `tomcat-context-config` is gated on `container: tomcat`, so
+asking for WildFly must stop it firing. `service.discover` re-runs `resolve_packs` with the resolved
 decisions and re-reconciles the same proposal — pure, deterministic, no second call.
 
 **Scope.** `scope.exclude_globs` and `scope.package_prefix` were in the generated profile and read by

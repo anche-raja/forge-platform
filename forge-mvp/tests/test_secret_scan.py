@@ -106,8 +106,9 @@ def test_placeholders_and_references_are_not_secrets(snippet):
 # Issue #14: two real files were BLOCKED with no secret in them.
 
 def test_placeholder_in_a_multiline_xml_element_is_not_a_secret():
-    """Liberty's <properties> puts one attribute per line, so the property-line
-    reading sees the quotes and the closing ``/>`` around the placeholder."""
+    """An app-server <properties> element puts one attribute per line, so the
+    property-line reading sees the quotes and the closing ``/>`` around the
+    placeholder."""
     src = (
         '<dataSource id="appDS" jndiName="jdbc/appDS">\n'
         '    <properties URL="${app.datasource.url}"\n'

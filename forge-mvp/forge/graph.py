@@ -52,7 +52,15 @@ def build_graph(config: ForgeConfig):
         if str(file_status.get("error") or "").startswith(_SYNTAX_ERROR):
             file_status["error"] = None
         files = (file_status.get("transform_output") or {}).get("files") or {}
-        verdict, errors = syntax.check_files(files, config)
+        # A pom is also checked for ${properties} nobody defines, judged against
+        # what its parents on disk (and this run's rewrite of them) define. The
+        # keyword is passed only for a pom, so a checker stub that takes
+        # (files, config) still fits.
+        extra = {}
+        if any(syntax.is_pom(name) for name in files):
+            extra["inherited_properties"] = syntax.pom_inherited_properties(
+                file_status["file_path"], state.get("source_dir"), state.get("output_dir"))
+        verdict, errors = syntax.check_files(files, config, **extra)
         file_status["syntax_verdict"] = verdict
         file_status["syntax_errors"] = errors
         findings = list(file_status.get("guardrail_findings") or [])
@@ -61,8 +69,8 @@ def build_graph(config: ForgeConfig):
                       (file_status.get("retry_count") or 0) + 1)
             file_status["error"] = f"{_SYNTAX_ERROR}: {errors[0]}"
             file_status["review_feedback"] = (
-                "Your output does not parse. Return the whole file again with exactly these errors "
-                "fixed, and change nothing else:\n" + "\n".join(errors)
+                "Your output does not parse, or is not a valid Maven model. Return the whole file "
+                "again with exactly these errors fixed, and change nothing else:\n" + "\n".join(errors)
             )
             findings += [f"syntax: {e}" for e in errors[:3]]
         elif verdict == syntax.SKIPPED and _SYNTAX_SKIPPED not in findings:

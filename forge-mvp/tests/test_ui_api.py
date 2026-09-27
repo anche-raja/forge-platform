@@ -227,13 +227,13 @@ def test_risk_ceiling_in_the_body_reaches_the_hold_gate(client, tmp_path, aws):
 
     make_module(tmp_path / "proj", java=("LoggingFilter.java",))
     body = {"source_dir": str(tmp_path / "proj"), "output_dir": str(tmp_path / "out"), "config": client.cfg,
-            "phase": "liberty-server-config"}
+            "phase": "tomcat-context-config"}
     held = _finish(client, client.post("/api/runs", json=body).json()["job_id"])
     assert held["result"]["files"][0]["status"] == "HELD", "default review-high holds a generated unit"
     auto = _finish(client, client.post("/api/runs", json={**body, "output_dir": str(tmp_path / "out2"),
                                                            "decisions": {"risk_ceiling": "auto"}}).json()["job_id"])
     assert auto["result"]["files"][0]["status"] == "DONE"
-    assert list((tmp_path / "out2").rglob("server.xml")), "auto writes the generated server.xml"
+    assert list((tmp_path / "out2").rglob("context.xml")), "auto writes the generated context.xml"
 
 
 # ─── review ───────────────────────────────────────────────────────────────────

@@ -137,7 +137,7 @@ test → platform`.
 
 **`resolve.py` — a decision is a gate, never evidence.** Every `decision_equals` rule must hold
 **and** at least one non-decision rule must fire. Without that, an empty directory would "need" the
-Liberty pack because the config names Liberty.
+Tomcat pack because the config names Tomcat.
 
 **`intent/` — the model proposes, `reconcile()` disposes.** `agent.py` makes one model call; every
 safety property lives in `resolve.py:reconcile()`, which is pure Python. A pack the evidence did not
