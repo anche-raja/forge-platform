@@ -54,7 +54,10 @@ Rule 2 — Behavioural changes that compile fine and fail at runtime. These are 
   `/api/users/`. Any mapping that relied on it needs an explicit variant. Flag every mapping —
   this is the single most common Spring 6 upgrade regression.
 - **`PathPattern` replaces `AntPathMatcher`** for MVC mapping. `**` is only legal at the end of a
-  pattern now. A mid-pattern `**` is a startup failure.
+  pattern now. A mid-pattern `**` is a startup failure. When you explain a pattern in a comment,
+  never put `*/` inside a block or Javadoc comment — `/foo/*/bar` closes the comment and the file
+  no longer parses (on AMS the same file failed to parse on every retry for exactly this). Write
+  `/foo/{segment}/bar`, or use a `//` line comment.
 - `@RequestMapping` without an explicit method matches all methods — unchanged, but combined with
   the loss of Struts filtering it may now expose verbs that were previously unreachable. Flag.
 - Bean definition overriding is still **permitted** in plain Spring Framework (only Boot disables
