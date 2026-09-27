@@ -180,6 +180,9 @@ def _shared_max_tokens(config) -> int:
 # DEFAULT_MODEL_MAX_TOKENS reply with room to spare.
 DEFAULT_BEDROCK_READ_TIMEOUT = 600
 MIN_BEDROCK_READ_TIMEOUT = 60
+# Attempts per Bedrock call (adaptive backoff between them). Two ended a run
+# on a ServiceUnavailableException; a refusal or a throttle is not billed.
+BEDROCK_MAX_ATTEMPTS = 5
 
 
 # ─── Files in flight at once ──────────────────────────────────────────────────
@@ -207,8 +210,11 @@ def bedrock_client_config(config):
 
     ``bedrock_read_timeout`` (seconds) overrides the read timeout; a value below
     botocore's own default is treated as a mistake, like a crippling max_tokens.
-    Retries stay few: a timed-out call is re-billed in full, and a slow reply
-    retried is just as slow.
+    Retries stay modest: a timed-out call is re-billed in full, and a slow reply
+    retried is just as slow. But two attempts were too few -- on AMS a
+    ``ServiceUnavailableException`` on the eighth pom of a run, twice, ended
+    the run after seven paid units -- and a refusal or a throttle is not
+    billed, so adaptive mode gets a few more tries with backoff.
     """
     from botocore.config import Config
 
@@ -222,7 +228,7 @@ def bedrock_client_config(config):
     return Config(
         read_timeout=timeout,
         connect_timeout=10,
-        retries={"max_attempts": 2, "mode": "adaptive"},
+        retries={"max_attempts": BEDROCK_MAX_ATTEMPTS, "mode": "adaptive"},
         # One client is shared by every file in flight; botocore's default pool
         # of 10 would queue the 11th call behind the others.
         max_pool_connections=max(10, 2 * parallel_files(config)),

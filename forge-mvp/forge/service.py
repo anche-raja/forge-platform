@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from forge.config import ForgeConfig
 from forge.state import FileStatus, make_file_status
 from forge.utils import run_manifest
@@ -203,7 +205,21 @@ def run_file(app, config, state_manager, metrics, file_path: str, index: int, to
                                    generate=generate, file_status_overrides=file_status_overrides)
     cfg = {"configurable": {"thread_id": thread_id or file_path}}
 
-    final = app.invoke(initial, config=cfg)
+    try:
+        final = app.invoke(initial, config=cfg)
+    except (BotoCoreError, ClientError) as e:
+        # Bedrock said no -- ServiceUnavailable, a throttle, a dropped
+        # connection -- after the client's own retries. That is one unit a
+        # human must look at, with the reason; it is not a reason to end a
+        # run seven paid units in, which is what it did on AMS, twice.
+        from forge.utils.telemetry import get_logger
+
+        get_logger(__name__).warning("Bedrock call failed for %s; sent to manual review: %s", file_path, e)
+        fs = dict(initial["current_file"])
+        fs["status"] = "MANUAL_REVIEW"
+        fs["error"] = f"Bedrock call failed after retries: {e}"
+        fs["review_feedback"] = "The model could not be reached for this file; run the pack again for it."
+        final = {**initial, "current_file": fs}
     fs = final["current_file"]
     label = f"{Path(file_path).name} (generated)" if generate else Path(file_path).name
     emit(on_event, {"type": "file", "index": index, "total": total, "file": file_path, "label": label,
