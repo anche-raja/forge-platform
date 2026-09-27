@@ -9,6 +9,14 @@ review_model: "us.amazon.nova-pro-v1:0"
 # The chat's "Trial run" box swaps transform_model for this one, for that turn
 # only. About 40% of Opus 4.8 per file; keep it priced in model_pricing below.
 trial_transform_model: "us.anthropic.claude-sonnet-5"
+# One reviewer does not fit every file. A pack tier may name its own reviewer
+# here; every other tier keeps review_model. Nova Pro reads Java well and a pom
+# badly (on AMS it scored an EAR pom 5 while asserting it declared no
+# dependencies and no plugins, both false), so the build tier names a model
+# that follows a rubric on XML. Whatever is named must be priced in
+# model_pricing below.
+review_models:
+  build: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 # Converse maxTokens for every pipeline call (the leader has its own, below).
 # Left unset, ChatBedrockConverse omits maxTokens and Bedrock applies a much

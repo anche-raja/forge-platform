@@ -73,6 +73,21 @@ class ForgeConfig:
     def get(self, name: str, default=None):
         return self._cfg.get(name, default)
 
+    def review_model_for(self, tier: str = "") -> str:
+        """The reviewer for a pack of ``tier``: ``review_models.<tier>`` when set, else ``review_model``.
+
+        One reviewer does not fit every file. Nova Pro reads Java well and a pom
+        badly -- on AMS it scored an EAR pom 5 while asserting it declared no
+        dependencies and no plugins, both false, and a sound web pom 55 with no
+        reason -- so a tier can name a model that follows a rubric on XML while
+        the default keeps the cross-model review for everything else. Whatever
+        is named here must also appear in ``model_pricing`` or its cost accrues
+        as $0.00.
+        """
+        by_tier = self._cfg.get("review_models") or {}
+        chosen = by_tier.get(tier) if isinstance(by_tier, Mapping) and tier else None
+        return str(chosen or self._cfg.get("review_model") or "")
+
     def with_overrides(self, overrides: Mapping) -> "ForgeConfig":
         """A copy with ``overrides`` applied; the original is untouched.
 

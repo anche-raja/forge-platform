@@ -221,7 +221,10 @@ applies when the file contains what it is about, or when this file is where the 
 introduce it; it does not apply when there is nothing here for it to judge (a check about Java
 code, on a descriptor that holds none). Name the checks that did not apply in `feedback`. Never
 score a check 0 for having nothing to examine: 0 is for a subject that is present and wrong, or
-missing where this file had to supply it.
+missing where this file had to supply it. **Report a check that does not apply as the string
+`"n/a"` in `checks`** — not 0, not a guessed number; it is scored at its full points for you, and
+`score` is recomputed from `checks`. A pom that declares no dependency of a kind, no plugin, or
+nothing on the `eliminates`/`upgrades` lists has nothing for that check to examine.
 
 Parent and child modules: score only what this pom itself declares — the parent's values may not
 be in view. A child module that inherits `maven.compiler.release`, the BOM imports or plugin
