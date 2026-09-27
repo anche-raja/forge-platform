@@ -7,7 +7,7 @@ from forge.context.inject import context_block_for, coordinates_block, decisions
 from forge.phases import get_phase
 from forge.state import ForgeState
 from forge.utils.cost import accrue
-from forge.utils.llm_json import TransformShapeError, extract_json, normalize_files
+from forge.utils.llm_json import TransformShapeError, extract_json, normalize_files, salvage_file_reply
 from forge.utils.telemetry import get_logger
 
 _log = get_logger(__name__)
@@ -109,9 +109,20 @@ class JavaUpgradeAgent(BaseAgent):
         try:
             result = extract_json(response.content)
         except Exception as e:
-            _log.warning("Transform output for %s was not valid JSON: %s", file_path, e)
-            return self._malformed(state, file_status, f"Failed to parse transform output as JSON: {e}",
-                                   bedrock_calls, cost)
+            # The file alone in a fenced block is accepted too: an escape slip
+            # deep in a Java string is not a reason to send the file to a human.
+            result = salvage_file_reply(response.content, file_path)
+            if result is None:
+                _log.warning("Transform output for %s was not valid JSON: %s", file_path, e)
+                return self._malformed(state, file_status, f"Failed to parse transform output as JSON: {e}",
+                                       bedrock_calls, cost)
+            _log.info("Transform output for %s was not JSON; took the fenced file instead", file_path)
+        if not (isinstance(result, dict) and "files" in result):
+            # A `{}` dug out of the Java text parses, and is no envelope either.
+            salvaged = salvage_file_reply(response.content, file_path)
+            if salvaged is not None:
+                _log.info("Transform output for %s had no envelope; took the fenced file instead", file_path)
+                result = salvaged
 
         # An empty `files` map is the model saying "nothing here needs changing"
         # (issue #17): the unit is DONE, nothing is written and no reviewer is
@@ -177,6 +188,8 @@ class JavaUpgradeAgent(BaseAgent):
             f"Your previous reply could not be used. {error}\n"
             "Reply with exactly one valid JSON object in the shape the instructions give: no markdown "
             "fences and no text before or after it. Each file's content is a single JSON string, so "
-            "escape every double quote, backslash and newline inside it."
+            "escape every double quote, backslash and newline inside it. If you cannot produce that "
+            "JSON, reply instead with ONLY the whole migrated file inside one fenced code block "
+            "(```java or ```xml) and nothing else: it is accepted as the file's content."
         )
         return {**state, "current_file": file_status, "bedrock_calls": bedrock_calls, "estimated_cost_usd": cost}

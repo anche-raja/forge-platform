@@ -51,19 +51,28 @@ def build_graph(config: ForgeConfig):
         # parses does not carry the previous failure's error forward.
         if str(file_status.get("error") or "").startswith(_SYNTAX_ERROR):
             file_status["error"] = None
-        files = (file_status.get("transform_output") or {}).get("files") or {}
+        transform_output = dict(file_status.get("transform_output") or {})
+        files = dict(transform_output.get("files") or {})
+        findings = list(file_status.get("guardrail_findings") or [])
         # A pom is also checked for ${properties} nobody defines, judged against
         # what its parents on disk (and this run's rewrite of them) define. The
         # keyword is passed only for a pom, so a checker stub that takes
-        # (files, config) still fits.
+        # (files, config) still fits. First, the one repair a rubric already
+        # prescribes is made here rather than asked for again (syntax.repair_pom).
         extra = {}
         if any(syntax.is_pom(name) for name in files):
+            for name in [n for n in files if syntax.is_pom(n) and isinstance(files[n], str)]:
+                files[name], repaired = syntax.repair_pom(files[name])
+                if repaired:
+                    _log.info("%s: %s", file_status["file_path"], "; ".join(repaired))
+                    findings += [f"repaired: {r}" for r in repaired]
+            transform_output["files"] = files
+            file_status["transform_output"] = transform_output
             extra["inherited_properties"] = syntax.pom_inherited_properties(
                 file_status["file_path"], state.get("source_dir"), state.get("output_dir"))
         verdict, errors = syntax.check_files(files, config, **extra)
         file_status["syntax_verdict"] = verdict
         file_status["syntax_errors"] = errors
-        findings = list(file_status.get("guardrail_findings") or [])
         if verdict == syntax.FAIL:
             _log.info("%s does not parse (attempt %d)", file_status["file_path"],
                       (file_status.get("retry_count") or 0) + 1)

@@ -39,16 +39,48 @@ def extract_json(content: Any) -> dict:
                 return json.loads(block.strip())
             except json.JSONDecodeError:
                 continue
-        # Unfenced: the first '{' that decodes to a whole object.
+        # Unfenced: the first '{' that decodes to a whole, non-empty object. An
+        # empty `{}` is what a Java method body looks like, and taking it as
+        # the answer sent a fenced-file reply down the wrong-shape path.
         decoder = json.JSONDecoder()
         for match in re.finditer(r"\{", content):
             try:
                 value, _ = decoder.raw_decode(content, match.start())
             except json.JSONDecodeError:
                 continue
-            if isinstance(value, dict):
+            if isinstance(value, dict) and value:
                 return value
         raise first_error
+
+
+_ANY_FENCE_RE = re.compile(r"```[A-Za-z0-9_+-]*[ \t]*\n(.*?)\n?```", re.DOTALL)
+# What the start of a Java or XML file looks like; prose does not.
+_FILE_START_RE = re.compile(r"^\s*(package\s|import\s|<\?xml|<[A-Za-z]|//|/\*|@[A-Za-z]|public\s|final\s|class\s)")
+
+
+def salvage_file_reply(content: Any, file_path: str) -> Any:
+    """The transform envelope rebuilt from a reply that gave the file as a fenced block instead.
+
+    A Java file with regexes and string literals is hard to JSON-escape, and a
+    model that fails at it once tends to fail again: on AMS a class reached a
+    human as "Expecting ',' delimiter: char 2291" after every retry. The
+    retry now offers the model an easier answer -- the whole file, alone, in
+    one fenced block -- and this reads it. The last fenced block whose text
+    starts like a file is the file. ``None`` when there is no such block, so
+    the caller's retry loop is unchanged.
+    """
+    if isinstance(content, list):
+        content = "".join(block.get("text", "") if isinstance(block, dict) else str(block) for block in content)
+    if not isinstance(content, str):
+        return None
+    for block in reversed(_ANY_FENCE_RE.findall(content)):
+        text = block.strip("\n")
+        if text.lstrip().startswith("{"):
+            continue                     # a JSON envelope the caller already failed to parse
+        if _FILE_START_RE.match(text) and text.count("\n") >= 2:
+            return {"files": {file_path: text + ("\n" if not text.endswith("\n") else "")},
+                    "deleted_files": [], "manual_flags": [], "salvaged": "fenced file"}
+    return None
 
 
 # Keys a model uses when it wraps a file's text in an object instead of giving

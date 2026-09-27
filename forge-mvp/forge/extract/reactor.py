@@ -277,7 +277,7 @@ def run(source_dir: str, module_dir: Optional[str], output_dir: Optional[str] = 
             break
         p_boms, p_managed = _dependency_management(parent_root)
         props = _properties(parent_root)
-        parents.append({
+        entry = {
             "path": _rel(parent_pom, source_dir),
             "rewritten": rewritten,
             "coordinates": _coordinates(parent_root),
@@ -288,7 +288,19 @@ def run(source_dir: str, module_dir: Optional[str], output_dir: Optional[str] = 
             "managed_versions": p_managed,
             "plugin_versions": _plugin_versions(parent_root),
             "modules": _modules(parent_root),
-        })
+        }
+        if not rewritten and output_dir:
+            # A parent this run has not rewritten yet (held, or still to come)
+            # is shown by NAME only: what it defines, never its pre-migration
+            # values. A reviewer given "maven.compiler.source: 1.8" deducted
+            # for it twice, whatever the note beside it said; a name a child
+            # may reference is all the child's transform needs.
+            entry["properties"] = {k: "(pre-migration; the parent's own unit sets this)" for k in props}
+            entry["profile_properties"] = {pid: sorted(pp) for pid, pp in entry["profile_properties"].items()}
+            entry["bom_imports"] = [b.rsplit(":", 1)[0] + ":(pre-migration)" for b in p_boms]
+            entry["managed_versions"] = {k: "(pre-migration)" for k in p_managed}
+            entry["plugin_versions"] = {k: "(pre-migration)" for k in entry["plugin_versions"]}
+        parents.append(entry)
         # The nearest parent wins, as it does for Maven.
         for key, value in props.items():
             inherited.setdefault(key, value)

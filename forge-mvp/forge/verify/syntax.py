@@ -128,6 +128,42 @@ def pom_property_errors(name: str, content: str, inherited: Iterable[str] = ()) 
     ]
 
 
+def repair_pom(content: str) -> Tuple[str, List[str]]:
+    """``(content, what was repaired)``: the mechanical fixes a rubric already prescribes.
+
+    A ``<dependencyManagement>`` entry with no ``<version>`` is removed -- the
+    pack's own instruction for it ("delete the entry; the imported BOM
+    manages it") -- unless it carries ``<exclusions>``, which a deletion would
+    lose. On AMS the transform produced that entry on attempt after attempt
+    and the parent BOM ended held, which held every child judged against the
+    unrewritten parent. Doing the deletion here costs no retry, and the
+    repair is named in the findings and the report.
+    """
+    if not content.lstrip().startswith("<"):
+        return content, []
+    # Text-level so the rest of the file (comments, formatting) is untouched.
+    pattern = re.compile(r"[ \t]*<dependency>(?:(?!</dependency>).)*?</dependency>[ \t]*\n?", re.S)
+    repaired: List[str] = []
+
+    def in_management(pos: int) -> bool:
+        opened = content.rfind("<dependencyManagement>", 0, pos)
+        closed = content.rfind("</dependencyManagement>", 0, pos)
+        return opened != -1 and opened > closed
+
+    def replace(match: "re.Match[str]") -> str:
+        block = match.group(0)
+        if not in_management(match.start()) or "<version>" in block or "<exclusions>" in block:
+            return block
+        group = re.search(r"<groupId>\s*([^<]+?)\s*</groupId>", block)
+        artifact = re.search(r"<artifactId>\s*([^<]+?)\s*</artifactId>", block)
+        repaired.append(f"removed the versionless <dependencyManagement> entry "
+                        f"{group.group(1) if group else '?'}:{artifact.group(1) if artifact else '?'}")
+        return ""
+
+    fixed = pattern.sub(replace, content)
+    return (fixed, repaired) if repaired else (content, [])
+
+
 def pom_structure_errors(name: str, content: str) -> List[str]:
     """Shapes Maven's model builder refuses, checked without any parent in view.
 
