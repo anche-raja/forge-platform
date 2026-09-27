@@ -98,6 +98,7 @@ def clear_context_cache() -> None:
 # Registration — import for side effect. Keep at the bottom so ``Selection`` and
 # ``register`` exist before the extractor modules import them.
 from forge.extract import web_bootstrap as _web_bootstrap  # noqa: E402,F401
+from forge.extract import reactor as _reactor  # noqa: E402,F401
 
 __all__ = [
     "Context",

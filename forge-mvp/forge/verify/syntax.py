@@ -154,12 +154,34 @@ def pom_inherited_properties(pom_path: str, source_dir: Optional[str] = None,
         candidate = path.parent / (rel.strip() if rel else "../pom.xml")
         if candidate.is_dir():
             candidate = candidate / "pom.xml"
-        if not candidate.is_file():
+        if not candidate.is_file() or not _is_declared_parent(candidate, parent):
             return None
         for text in _pom_texts(candidate, source_dir, output_dir):
             known |= pom_defined_properties(text)
         path = candidate
     return None
+
+
+def _is_declared_parent(candidate: Path, parent: ET.Element) -> bool:
+    """Maven takes the pom at relativePath only when its coordinates are the declared ones.
+
+    Otherwise the parent comes from a repository: a sibling project's pom one
+    directory up is not this pom's parent, and its properties prove nothing.
+    """
+    try:
+        root = ET.fromstring(candidate.read_bytes())
+    except (OSError, ET.ParseError):
+        return False
+
+    def text(el, name):
+        found = next((c for c in el if _local(c.tag) == name), None) if el is not None else None
+        return (found.text or "").strip() if found is not None and found.text else ""
+
+    own_parent = next((c for c in root if _local(c.tag) == "parent"), None)
+    group = text(root, "groupId") or text(own_parent, "groupId")
+    version = text(root, "version") or text(own_parent, "version")
+    return (group, text(root, "artifactId"), version) == (text(parent, "groupId"), text(parent, "artifactId"),
+                                                            text(parent, "version"))
 
 
 def _pom_texts(pom: Path, source_dir: Optional[str], output_dir: Optional[str]) -> List[str]:

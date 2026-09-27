@@ -29,13 +29,22 @@ _PRIORITY_GENERATE = (
     "datasources", "existing_server_xml", "vendors", "web_xml",
     "filter_chain", "ear", "servlet_components", "unresolved_classes",
 )
+# Migrating a pom (the `reactor` context): what this module declares, then the
+# parent chain it inherits from, then the merged properties and the module
+# graph -- so the budget cuts the graph before it cuts a parent's BOM imports.
+_PRIORITY_POM = ("module", "parents", "inherited_properties", "reactor")
 # Internal or duplicated: `authz` restates web_xml sections, `ids` only serves
 # .xmi href resolution. Never worth prompt space.
 _NEVER_RENDER = frozenset({"authz", "ids", "extractor", "version", "module_dir", "module_rel", "summary"})
 
 
 def section_priority(for_target: str) -> Tuple[str, ...]:
-    return _PRIORITY_GENERATE if Path(for_target).name == "context.xml" else _PRIORITY_EDIT
+    name = Path(for_target).name
+    if name == "context.xml":
+        return _PRIORITY_GENERATE
+    if name == "pom.xml":
+        return _PRIORITY_POM
+    return _PRIORITY_EDIT
 
 
 def _dump(value) -> str:

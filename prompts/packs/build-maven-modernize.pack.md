@@ -226,8 +226,12 @@ missing where this file had to supply it. **Report a check that does not apply a
 `score` is recomputed from `checks`. A pom that declares no dependency of a kind, no plugin, or
 nothing on the `eliminates`/`upgrades` lists has nothing for that check to examine.
 
-Parent and child modules: score only what this pom itself declares — the parent's values may not
-be in view. A child module that inherits `maven.compiler.release`, the BOM imports or plugin
+Parent and child modules: score only what this pom itself declares. A `=== CONTEXT: reactor ===`
+block, when given, shows the parent chain **as it was before this pack ran** — each parent pom is
+migrated by its own unit in the same run — with its properties, BOM imports and managed versions.
+Read it for what this pom inherits (a property it references, a version a parent BOM manages, a
+plugin the parent pins) and never deduct for a parent's pre-migration values: those are the
+parent's unit to fix, not this file's. A child module that inherits `maven.compiler.release`, the BOM imports or plugin
 versions from its `<parent>` satisfies Checks 1 and 3 for those settings: award the points and say
 they are inherited, because the transform puts them in the parent on purpose. What the child does
 declare is still judged — its own leftover `maven.compiler.source`/`target`, a version it pins for

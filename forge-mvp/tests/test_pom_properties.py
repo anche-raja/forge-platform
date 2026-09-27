@@ -148,7 +148,9 @@ def test_a_grandparent_counts_too(tmp_path):
                                    "<artifactId>mid</artifactId><packaging>pom</packaging>"), encoding="utf-8")
     leaf = tmp_path / "mid" / "leaf" / "pom.xml"
     leaf.parent.mkdir()
-    leaf.write_text(child("<relativePath>../pom.xml</relativePath>"), encoding="utf-8")
+    # The leaf's parent is `mid`, and the pom at its relativePath must say so.
+    leaf.write_text(child("<relativePath>../pom.xml</relativePath>").replace(
+        "<artifactId>parent</artifactId>", "<artifactId>mid</artifactId>"), encoding="utf-8")
     assert "lib.version" in syntax.pom_inherited_properties(str(leaf))
 
 
@@ -161,6 +163,16 @@ def test_this_runs_rewritten_parent_counts_with_its_new_properties(tmp_path):
     (src / "child" / "pom.xml").write_text(child(), encoding="utf-8")
     inherited = syntax.pom_inherited_properties(str(src / "child" / "pom.xml"), str(src), str(out))
     assert {"old.version", "lib.version"} <= inherited
+
+
+def test_a_pom_one_directory_up_with_other_coordinates_is_not_the_parent(tmp_path):
+    other = parent("<lib.version>2</lib.version>").replace("<artifactId>parent</artifactId>",
+                                                          "<artifactId>sibling</artifactId>")
+    (tmp_path / "pom.xml").write_text(other, encoding="utf-8")
+    leaf = tmp_path / "child" / "pom.xml"
+    leaf.parent.mkdir()
+    leaf.write_text(child(), encoding="utf-8")
+    assert syntax.pom_inherited_properties(str(leaf)) is None, "com.corp:parent is not on disk; sibling is"
 
 
 def test_a_parent_not_on_disk_is_unknowable_so_nothing_is_judged(tmp_path):

@@ -195,7 +195,14 @@ the JBoss/WebLogic/WebSphere vendor descriptors (`.xml` and `.xmi`), EAR, dataso
 an existing app-server `server.xml` (a legacy *input*: its pool sizes and JNDI names feed the Tomcat
 pack), in declaration order and dropping nothing — unknown elements go to `raw_unmapped`. It
 resolves `servlet_components` (real files) and `tomcat_context` (one **generated**
-`META-INF/context.xml` per module; an existing one is an edit, not a generate).
+`META-INF/context.xml` per module; an existing one is an edit, not a generate). `reactor`
+(`forge/extract/reactor.py`, the build pack's context) reads a pom's parent chain from the source
+tree — each parent's coordinates, `<properties>`, BOM imports, managed dependency and plugin
+versions — plus the merged inherited properties (nearest parent wins) and the module graph, and its
+summary says the chain is the reactor *before* the pack ran, since each parent is migrated by its
+own unit in the same run. It exists because a child pom judged alone was held at 45 on AMS with
+every deduction reading "parent not provided, cannot verify". Sections for a `pom.xml` target
+render module, parents, inherited properties, then the graph (`render._PRIORITY_POM`).
 
 **Context reaches the prompts through `forge/context/`.** `render_context` produces a
 deterministic block bounded by `context.max_chars` — a hard guarantee, with section priority
