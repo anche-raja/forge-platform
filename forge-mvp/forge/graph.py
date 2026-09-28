@@ -79,6 +79,9 @@ def build_graph(config: ForgeConfig):
         spec = get_phase(state.get("phase") or file_status.get("phase") or "java21")
         decisions = {**DEFAULT_DECISIONS, **(config.get("decisions") or {})}
         leftovers = syntax.leftover_errors(files, getattr(spec, "acceptance", ()), decisions)
+        # And what the unit may not take away from the units around it: the
+        # no-arg constructor a subclass elsewhere in the tree still calls.
+        leftovers += syntax.subclass_break_errors(files, state.get("source_dir"))
         if leftovers:
             verdict, errors = syntax.FAIL, (leftovers + errors)[:syntax.MAX_ERROR_LINES]
         file_status["syntax_verdict"] = verdict
@@ -88,9 +91,9 @@ def build_graph(config: ForgeConfig):
                       (file_status.get("retry_count") or 0) + 1)
             file_status["error"] = f"{_SYNTAX_ERROR}: {errors[0]}"
             file_status["review_feedback"] = (
-                "Your output does not parse, is not a valid Maven model, or still contains what this pack "
-                "must remove. Return the whole file again with exactly these errors fixed, and change "
-                "nothing else:\n" + "\n".join(errors)
+                "Your output does not parse, is not a valid Maven model, still contains what this pack "
+                "must remove, or breaks a file outside this unit. Return the whole file again with "
+                "exactly these errors fixed, and change nothing else:\n" + "\n".join(errors)
             )
             findings += [f"syntax: {e}" for e in errors[:3]]
         elif verdict == syntax.SKIPPED and _SYNTAX_SKIPPED not in findings:

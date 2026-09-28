@@ -247,7 +247,14 @@ unit** (`syntax.leftover_errors` in the `syntax_check` node, scoped by the rule'
 its `when` decisions): a transformed file that still matches one fails before the review and comes
 back with the line named. Acceptance runs over the tree only when asked, and the chat never asks —
 on AMS the Struts pack left `com.opensymphony.xwork2` imports in an interceptor and its test, both
-reviewed PASS, and the build failed to compile them. The model is only asked the qualitative questions. The allowlist there
+reviewed PASS, and the build failed to compile them. **A unit may not break the units around it**
+(`syntax.subclass_break_errors`, same node): if the output stops accepting `super()` — a class
+whose no-arg constructor is gone — while the source tree still holds a subclass that calls the
+implicit one, the transform comes back with the subclass named. On AMS `spring-to-spring6` rewrote
+the abstract `InstallOrderBaseAction` to constructor injection and wrote *"subclasses must forward
+their own injected CustomerService"* in its javadoc; the three actions that extend it are their own
+units, so nothing in any prompt could act on that, and the reactor did not compile. A prompt sees
+one unit — the tree is what knows, so the tree is what is read. The model is only asked the qualitative questions. The allowlist there
 distinguishes JDK `javax.*` (`javax.crypto`, `javax.sql`, `javax.xml.parsers`) from Jakarta EE
 (`javax.xml.bind` **is** Jakarta) — a blanket `javax.xml` carve-out would silently pass
 unmigrated JAXB imports, and rewriting `javax.crypto` would break the build.

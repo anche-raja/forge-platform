@@ -126,6 +126,119 @@ def leftover_errors(files: Mapping[str, str], checks: Iterable, decisions: Optio
     return errors
 
 
+# ─── A unit may not take away the constructor its subclasses call ────────────
+#
+# On AMS spring-to-spring6 rewrote the abstract InstallOrderBaseAction to
+# constructor injection -- `protected InstallOrderBaseAction(CustomerService)`,
+# no no-arg constructor left -- while the three actions that extend it are
+# their own units, each still relying on the implicit `super()`. Its own
+# javadoc said "subclasses must forward their own injected CustomerService":
+# the model knew, and a unit cannot edit the files around it. Every file
+# reviewed PASS and the reactor did not compile.
+#
+# A prompt cannot see the other units. The tree can, and is read here: if the
+# output stops accepting `super()` while the tree still extends the class, the
+# transform is sent back to keep the no-arg constructor (field or setter
+# injection), which is a change it can make inside its own unit.
+
+_CLASS_DECL = re.compile(r"\b(?:class|interface|enum|record)\s+([A-Z]\w*)")
+_EXTENDS = re.compile(r"\bclass\s+([A-Z]\w*)[^{]*?\bextends\s+(?:[\w.]+\.)?([A-Z]\w*)", re.S)
+_SUPER_CALL = re.compile(r"\bsuper\s*\(([^)]*)\)")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+_LINE_COMMENT = re.compile(r"//[^\n]*")
+_STRING_LITERAL = re.compile(r'"(?:\\.|[^"\\])*"')
+
+
+def _java_code(content: str) -> str:
+    """The file with comments and string literals blanked, so neither can spell Java."""
+    for pattern in (_BLOCK_COMMENT, _LINE_COMMENT, _STRING_LITERAL):
+        content = pattern.sub(lambda m: " " * len(m.group(0)), content)
+    return content
+
+
+_ANNOTATION_TAIL = re.compile(r"@\w+(?:\s*\([^)]*\))?\s*$")
+
+
+def _is_constructor_position(before: str) -> bool:
+    """Whether what precedes the name can precede a constructor: not ``new X(``, not a method."""
+    before = _ANNOTATION_TAIL.sub("", before.rstrip()).rstrip()
+    return not before or before[-1] in "{};"
+
+
+def _accepts_no_arg_super(code: str, type_name: str) -> bool:
+    """Whether a subclass of ``type_name`` can still write ``super()``.
+
+    True when the class declares no constructor at all (it keeps the implicit
+    default one) or declares one taking nothing that is not private.
+    """
+    declared, no_arg = False, False
+    pattern = re.compile(r"(?:(public|protected|private)\s+)?" + re.escape(type_name)
+                         + r"\s*\(([^)]*)\)\s*(?:throws\s[^{;]+)?\{")
+    for match in pattern.finditer(code):
+        if not match.group(1) and not _is_constructor_position(code[:match.start()]):
+            continue
+        declared = True
+        if not match.group(2).strip() and match.group(1) != "private":
+            no_arg = True
+    return no_arg if declared else True
+
+
+def _subclass_index(source_dir: str) -> Dict[str, List[str]]:
+    """``{superclass name: [paths of the files that extend it]}`` for one source tree."""
+    cached = _SUBCLASSES.get(source_dir)
+    if cached is not None:
+        return cached
+    index: Dict[str, List[str]] = {}
+    root = Path(source_dir)
+    for path in root.rglob("*.java") if root.is_dir() else ():
+        if any(part in (".git", "target", "build", "node_modules") for part in path.parts):
+            continue
+        try:
+            code = _java_code(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        for _, parent in _EXTENDS.findall(code):
+            index.setdefault(parent, []).append(str(path))
+    _SUBCLASSES[source_dir] = index
+    return index
+
+
+_SUBCLASSES: Dict[str, Dict[str, List[str]]] = {}
+
+
+def forget_subclasses(source_dir: Optional[str] = None) -> None:
+    """Drop the cached index (one tree, or all of them)."""
+    _SUBCLASSES.pop(source_dir, None) if source_dir else _SUBCLASSES.clear()
+
+
+def subclass_break_errors(files: Mapping[str, str], source_dir: Optional[str] = None) -> List[str]:
+    """One error per class this unit stops accepting ``super()`` from while the tree extends it."""
+    if not source_dir or not Path(source_dir).is_dir():
+        return []
+    errors, index = [], _subclass_index(source_dir)
+    own = {Path(name).name for name in files}
+    for name, content in files.items():
+        if not isinstance(content, str) or not str(name).endswith(".java"):
+            continue
+        code = _java_code(content)
+        for type_name in dict.fromkeys(_CLASS_DECL.findall(code)):
+            if not index.get(type_name) or _accepts_no_arg_super(code, type_name):
+                continue
+            for path in index[type_name]:
+                if Path(path).name in own:   # the same unit rewrote the subclass too
+                    continue
+                subclass = _java_code(Path(path).read_text(encoding="utf-8", errors="replace"))
+                if any(args.strip() for args in _SUPER_CALL.findall(subclass)):
+                    continue                  # it already forwards arguments
+                errors.append(
+                    f"{Path(name).name}: {type_name} no longer accepts `super()`, but "
+                    f"{Path(path).name} extends it and calls the implicit no-arg constructor. "
+                    f"This unit cannot change {Path(path).name}, so keep a no-arg constructor "
+                    f"(inject on the field or through a setter instead).")
+                break
+    return errors
+
+
 # ─── Maven POMs: an undefined ${property} fails the model build before javac runs ──
 #
 # On AMS the build pack imported org.junit:junit-bom and pinned junit-jupiter at

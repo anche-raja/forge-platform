@@ -83,6 +83,11 @@ Rule 3 — Configuration style:
 Rule 4 — Injection: field `@Autowired` → constructor injection, fields `final`. Where a circular
 dependency prevents this (Spring 6 no longer resolves some cycles it used to), do not force it —
 flag the cycle, because it is a design problem the migration has now surfaced.
+**A class other classes extend keeps a constructor they can still call.** You are given one file:
+the subclasses are other units, and nothing you write here can add an argument to their `super()`.
+If this class is extended anywhere — it is `abstract`, or named `*BaseAction` / `Abstract*` / `*Base`
+— leave a no-arg constructor and inject on the field or through a setter. Writing "subclasses must
+now forward this dependency" in a comment does not make it happen; it breaks the build.
 
 Rule 5 — HTTP client, messaging and scheduling APIs that changed shape are rewritten only when the
 mapping is exact. Otherwise `TODO(migration)` with the original left in place.
