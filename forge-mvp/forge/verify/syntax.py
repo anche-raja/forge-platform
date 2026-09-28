@@ -239,6 +239,64 @@ def subclass_break_errors(files: Mapping[str, str], source_dir: Optional[str] = 
     return errors
 
 
+# ─── And what the unit cannot fix, it reports ────────────────────────────────
+#
+# Struts 7 renames ServletRequestAware.setServletRequest to withServletRequest,
+# so the pack was right to rename it on AMS's BaseAction. CustomerSwitchSessionTest
+# declares a subclass of BaseAction and calls the old name; it names no Struts
+# type anywhere, so the pack's content match never selected it, and it did not
+# compile. Unlike the constructor above there is no remedy inside the unit --
+# refusing the transform would send back a correct answer and loop it into
+# manual review -- so this is a finding on the run, for the human who reads the
+# report, not a gate.
+
+_METHOD_DECL = re.compile(r"\b(?:public|protected)\s+(?:[\w.<>\[\], ]+?\s+)?(\w+)\s*\([^)]*\)\s*"
+                          r"(?:throws[^{;]+)?[{;]")
+
+
+def _method_names(code: str, exclude: Iterable[str] = ()) -> Set[str]:
+    """Names of the ``public``/``protected`` methods declared here, constructors excluded."""
+    return {m.group(1) for m in _METHOD_DECL.finditer(code)} - set(exclude)
+
+
+def removed_method_warnings(files: Mapping[str, str], source_path: Optional[str] = None,
+                            source_dir: Optional[str] = None) -> List[str]:
+    """One finding per method this unit drops that a subclass elsewhere in the tree still calls."""
+    if not source_path or not source_dir or not Path(source_dir).is_dir():
+        return []
+    try:
+        original = _java_code(Path(source_path).read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return []
+    output = next((c for name, c in files.items()
+                   if isinstance(c, str) and Path(name).name == Path(source_path).name), None)
+    if output is None:
+        return []
+    output = _java_code(output)
+    types = dict.fromkeys(_CLASS_DECL.findall(original))
+    removed = _method_names(original, exclude=types) - _method_names(output, exclude=types)
+    if not removed:
+        return []
+    index, warnings = _subclass_index(source_dir), []
+    own = {Path(name).name for name in files}
+    for type_name in types:
+        for path in index.get(type_name, ()):
+            if Path(path).name in own:
+                continue
+            try:
+                caller = _java_code(Path(path).read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+            for name in sorted(removed):
+                # A call or an override: preceded by `.` or nothing, never by another name.
+                if re.search(r"(?<![\w$])" + re.escape(name) + r"\s*\(", caller):
+                    warnings.append(
+                        f"{type_name}.{name}() is gone from this file, and {Path(path).name} "
+                        f"(which declares a subclass of {type_name}) still calls it. That file is "
+                        f"not in this pack's file set, so it will not compile until someone updates it.")
+    return warnings
+
+
 # ─── Maven POMs: an undefined ${property} fails the model build before javac runs ──
 #
 # On AMS the build pack imported org.junit:junit-bom and pinned junit-jupiter at

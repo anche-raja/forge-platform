@@ -9,6 +9,7 @@ Every file reviewed PASS and the reactor did not compile.
 """
 
 import contextlib
+from pathlib import Path
 
 from forge.verify import syntax
 from tests.conftest import make_state, write_config
@@ -109,3 +110,55 @@ def test_the_graph_sends_it_back_with_the_subclass_named_and_never_reviews_it(tm
     assert rev.return_value.invoke.call_count == 1, "the broken base class cost no review"
     retry_prompt = up.return_value.invoke.call_args_list[1][0][0][1].content
     assert "no longer accepts `super()`" in retry_prompt and "DeviceAction.java" in retry_prompt
+
+
+# ─── And what the unit cannot fix, it reports ────────────────────────────────
+
+BASE_OLD_NAME = ("package org.example.web;\npublic class BaseAction {\n"
+                 "    public void setServletRequest(HttpServletRequest r) { }\n}\n")
+BASE_RENAMED = ("package org.example.web;\npublic class BaseAction {\n"
+                "    public void withServletRequest(HttpServletRequest r) { }\n}\n")
+CALLER = ("package org.example.web;\npublic class SwitchTest {\n"
+          "    static final class TestAction extends BaseAction { }\n"
+          "    void setUp() {\n        TestAction action = new TestAction();\n"
+          "        action.setServletRequest(request);\n    }\n}\n")
+
+
+def test_a_rename_a_caller_outside_the_pack_still_uses_is_a_finding(tmp_path):
+    source = _tree(tmp_path, **{"BaseAction.java": BASE_OLD_NAME, "SwitchTest.java": CALLER})
+    src_file = str(tmp_path / "src" / "org" / "example" / "web" / "BaseAction.java")
+    warnings = syntax.removed_method_warnings({"BaseAction.java": BASE_RENAMED}, src_file, source)
+    assert len(warnings) == 1
+    assert "BaseAction.setServletRequest() is gone" in warnings[0]
+    assert "SwitchTest.java" in warnings[0] and "not in this pack's file set" in warnings[0]
+
+
+def test_keeping_the_method_or_having_no_caller_says_nothing(tmp_path):
+    source = _tree(tmp_path, **{"BaseAction.java": BASE_OLD_NAME, "SwitchTest.java": CALLER})
+    src_file = str(tmp_path / "src" / "org" / "example" / "web" / "BaseAction.java")
+    assert syntax.removed_method_warnings({"BaseAction.java": BASE_OLD_NAME}, src_file, source) == []
+
+    alone = _tree(tmp_path / "c", **{"BaseAction.java": BASE_OLD_NAME})
+    lone_file = str(tmp_path / "c" / "src" / "org" / "example" / "web" / "BaseAction.java")
+    assert syntax.removed_method_warnings({"BaseAction.java": BASE_RENAMED}, lone_file, alone) == []
+
+
+def test_it_is_a_finding_and_never_a_retry(tmp_path, java_file):
+    """A correct transform must not be sent back: Struts 7 really does rename the method."""
+    from forge.graph import build_graph
+
+    source = _tree(tmp_path, **{"SwitchTest.java": CALLER.replace("BaseAction", Path(java_file).stem)})
+    # The original is read from the unit's own path, which is where the graph looks.
+    Path(java_file).write_text(BASE_OLD_NAME.replace("BaseAction", Path(java_file).stem), encoding="utf-8")
+    renamed = BASE_RENAMED.replace("BaseAction", Path(java_file).stem)
+    cfg = write_config(tmp_path, syntax_check=True)
+    with contextlib.ExitStack() as stack:
+        _graph(stack, java_file, [renamed])
+        state = make_state(java_file, tmp_path)
+        state["source_dir"] = source
+        result = build_graph(cfg).invoke(state, config={"configurable": {"thread_id": java_file}})
+
+    fs = result["current_file"]
+    assert fs["status"] == "DONE" and fs["retry_count"] == 0, "a correct rename is not retried"
+    assert fs["syntax_verdict"] == syntax.PASS
+    assert any(f.startswith("cross-unit:") and "SwitchTest.java" in f for f in fs["guardrail_findings"])

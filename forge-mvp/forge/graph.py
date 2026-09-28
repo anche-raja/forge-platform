@@ -82,6 +82,12 @@ def build_graph(config: ForgeConfig):
         # And what the unit may not take away from the units around it: the
         # no-arg constructor a subclass elsewhere in the tree still calls.
         leftovers += syntax.subclass_break_errors(files, state.get("source_dir"))
+        # And what it cannot fix, it reports: a method this unit dropped that a
+        # subclass outside the pack's file set still calls. Correct transforms
+        # do this (Struts 7 renames setServletRequest), so it is a finding for
+        # the report, never a retry.
+        findings += [f"cross-unit: {w}" for w in
+                     syntax.removed_method_warnings(files, file_status.get("file_path"), state.get("source_dir"))]
         if leftovers:
             verdict, errors = syntax.FAIL, (leftovers + errors)[:syntax.MAX_ERROR_LINES]
         file_status["syntax_verdict"] = verdict

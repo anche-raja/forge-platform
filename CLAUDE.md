@@ -254,7 +254,7 @@ implicit one, the transform comes back with the subclass named. On AMS `spring-t
 the abstract `InstallOrderBaseAction` to constructor injection and wrote *"subclasses must forward
 their own injected CustomerService"* in its javadoc; the three actions that extend it are their own
 units, so nothing in any prompt could act on that, and the reactor did not compile. A prompt sees
-one unit — the tree is what knows, so the tree is what is read. The model is only asked the qualitative questions. The allowlist there
+one unit — the tree is what knows, so the tree is what is read. What the unit *cannot* fix it reports instead of refusing (`syntax.removed_method_warnings`, a `cross-unit:` finding): Struts 7 really does rename `ServletRequestAware.setServletRequest`, so sending that transform back would loop a correct answer into manual review — but `CustomerSwitchSessionTest` declares a subclass of `BaseAction`, calls the old name, names no Struts type anywhere so the pack's content match never selected it, and does not compile. Refuse what the unit can fix; report what it cannot. The model is only asked the qualitative questions. The allowlist there
 distinguishes JDK `javax.*` (`javax.crypto`, `javax.sql`, `javax.xml.parsers`) from Jakarta EE
 (`javax.xml.bind` **is** Jakarta) — a blanket `javax.xml` carve-out would silently pass
 unmigrated JAXB imports, and rewriting `javax.crypto` would break the build.
