@@ -242,7 +242,12 @@ children is falsy — use `is not None`), and never write a regex in a double-qu
 
 **Rule 1 is enforced in code, not by a model.** "Zero `javax.*` in output" is a mechanical
 invariant, so `forge/utils/java_checks.py` checks it with a regex and `guardrails_post`
-escalates on a hit. The model is only asked the qualitative questions. The allowlist there
+escalates on a hit. **Every pack's `no_match` acceptance rules are enforced the same way, per
+unit** (`syntax.leftover_errors` in the `syntax_check` node, scoped by the rule's glob and gated by
+its `when` decisions): a transformed file that still matches one fails before the review and comes
+back with the line named. Acceptance runs over the tree only when asked, and the chat never asks —
+on AMS the Struts pack left `com.opensymphony.xwork2` imports in an interceptor and its test, both
+reviewed PASS, and the build failed to compile them. The model is only asked the qualitative questions. The allowlist there
 distinguishes JDK `javax.*` (`javax.crypto`, `javax.sql`, `javax.xml.parsers`) from Jakarta EE
 (`javax.xml.bind` **is** Jakarta) — a blanket `javax.xml` carve-out would silently pass
 unmigrated JAXB imports, and rewriting `javax.crypto` would break the build.

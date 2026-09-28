@@ -71,6 +71,16 @@ def build_graph(config: ForgeConfig):
             extra["inheritance"] = syntax.pom_inheritance(
                 file_status["file_path"], state.get("source_dir"), state.get("output_dir"))
         verdict, errors = syntax.check_files(files, config, **extra)
+        # What the pack must remove must be gone: its own `no_match` rules,
+        # checked here on the transformed file rather than only at acceptance.
+        from forge.discover.emit import DEFAULT_DECISIONS
+        from forge.phases import get_phase
+
+        spec = get_phase(state.get("phase") or file_status.get("phase") or "java21")
+        decisions = {**DEFAULT_DECISIONS, **(config.get("decisions") or {})}
+        leftovers = syntax.leftover_errors(files, getattr(spec, "acceptance", ()), decisions)
+        if leftovers:
+            verdict, errors = syntax.FAIL, (leftovers + errors)[:syntax.MAX_ERROR_LINES]
         file_status["syntax_verdict"] = verdict
         file_status["syntax_errors"] = errors
         if verdict == syntax.FAIL:
@@ -78,8 +88,9 @@ def build_graph(config: ForgeConfig):
                       (file_status.get("retry_count") or 0) + 1)
             file_status["error"] = f"{_SYNTAX_ERROR}: {errors[0]}"
             file_status["review_feedback"] = (
-                "Your output does not parse, or is not a valid Maven model. Return the whole file "
-                "again with exactly these errors fixed, and change nothing else:\n" + "\n".join(errors)
+                "Your output does not parse, is not a valid Maven model, or still contains what this pack "
+                "must remove. Return the whole file again with exactly these errors fixed, and change "
+                "nothing else:\n" + "\n".join(errors)
             )
             findings += [f"syntax: {e}" for e in errors[:3]]
         elif verdict == syntax.SKIPPED and _SYNTAX_SKIPPED not in findings:

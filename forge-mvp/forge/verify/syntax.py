@@ -74,6 +74,58 @@ def _xml(name: str, content: str) -> List[str]:
         return [f"{Path(name).name}: {e}"]
 
 
+# ─── What a pack must remove must be gone: its `no_match` rules, per unit ─────
+#
+# A pack's acceptance `no_match` rules say what may not survive it (the Struts
+# pack: `com\.opensymphony` in any Java file). Acceptance runs over the whole
+# tree, after the run, and only when asked; the chat never asks. On AMS the
+# Struts pack rewrote an interceptor and its test and left their
+# `com.opensymphony.xwork2` imports in place, reviewed PASS, and the build
+# failed to compile them. The javax rule is checked in code for the same
+# reason; every pack's leftover rule is now checked the same way, on each
+# transformed file, before the review.
+
+def _in_scope(name: str, scope: str) -> bool:
+    """Whether a transformed file's path fits an acceptance rule's scope glob.
+
+    The model's key may be absolute, or relative to anything; the rule's globs
+    are tails (``**/*.java``, ``**/struts*.xml``), so the tail is what is
+    matched.
+    """
+    if not scope:
+        return True
+    from fnmatch import fnmatch
+
+    path = name.replace("\\", "/")
+    tail = scope[3:] if scope.startswith("**/") else scope
+    if "/" not in tail:
+        return fnmatch(Path(path).name, tail)
+    return fnmatch(path, "*/" + tail) or fnmatch(path, tail)
+
+
+def leftover_errors(files: Mapping[str, str], checks: Iterable, decisions: Optional[Mapping[str, str]] = None) -> List[str]:
+    """One error per ``no_match`` acceptance rule a transformed file still matches, first line named."""
+    errors: List[str] = []
+    for check in checks or ():
+        if getattr(check, "kind", "") != "no_match":
+            continue
+        if decisions is not None and hasattr(check, "applies") and not check.applies(decisions):
+            continue
+        try:
+            pattern = re.compile(str(check.value))
+        except re.error:
+            continue
+        for name, content in files.items():
+            if not isinstance(content, str) or not _in_scope(name, getattr(check, "scope", "") or ""):
+                continue
+            for number, line in enumerate(content.splitlines(), 1):
+                if pattern.search(line):
+                    errors.append(f"{Path(name).name}:{number}: still contains `{check.value}`, which this pack "
+                                  f"must remove (its acceptance forbids it): {line.strip()[:120]}")
+                    break
+    return errors
+
+
 # ─── Maven POMs: an undefined ${property} fails the model build before javac runs ──
 #
 # On AMS the build pack imported org.junit:junit-bom and pinned junit-jupiter at
